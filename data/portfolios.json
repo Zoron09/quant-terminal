@@ -1,0 +1,63 @@
+{
+  "portfolios": {
+    "default": {
+      "name": "My Portfolio",
+      "holdings": []
+    },
+    "tfsa quest": {
+      "name": "TFSA Quest",
+      "holdings": [
+        {
+          "ticker": "AMD",
+          "shares": 5.0,
+          "avg_cost": 202.1
+        },
+        {
+          "ticker": "AMZN",
+          "shares": 5.0,
+          "avg_cost": 201.8
+        },
+        {
+          "ticker": "IREN",
+          "shares": 25.0,
+          "avg_cost": 45.2045
+        },
+        {
+          "ticker": "MELI",
+          "shares": 0.5397,
+          "avg_cost": 1667.5
+        },
+        {
+          "ticker": "MSFT",
+          "shares": 2.0,
+          "avg_cost": 400.6574
+        },
+        {
+          "ticker": "NFLX",
+          "shares": 30.0,
+          "avg_cost": 97.3278
+        },
+        {
+          "ticker": "NVDA",
+          "shares": 8.0,
+          "avg_cost": 176.7587
+        },
+        {
+          "ticker": "QQQ",
+          "shares": 3.0,
+          "avg_cost": 612.859
+        },
+        {
+          "ticker": "SOFI",
+          "shares": 100.0,
+          "avg_cost": 18.3259
+        },
+        {
+          "ticker": "VISA",
+          "shares": 40.0,
+          "avg_cost": 27.7
+        }
+      ]
+    }
+  }
+}

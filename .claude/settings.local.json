@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python:*)",
+      "Bash(streamlit run:*)",
+      "Bash(python3:*)",
+      "Bash(wc -l \"/c/Users/Meet Singh/quant-terminal/pages\"/*.py)",
+      "Bash(pkill -f \"streamlit run\")",
+      "Bash(echo \"PID: $!\")"
+    ]
+  }
+}
