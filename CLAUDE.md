@@ -236,3 +236,4 @@ Brokers: Questrade, Moomoo, Wealthsimple
 4. Select "Yes, and always allow" for pip and python
 5. Sonnet for routine work. Opus only for complex features.
 6. After every session: git add . && git commit -m "description" && git push
+7. Always end every prompt with: git add . && git commit -m "describe what changed" && git push
