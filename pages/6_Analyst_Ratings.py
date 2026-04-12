@@ -119,7 +119,7 @@ target_mean = safe_get(info, 'targetMeanPrice')
 target_med  = safe_get(info, 'targetMedianPrice')
 
 # Try analyst_price_targets df first
-if pt is not None and not pt.empty:
+if pt is not None and isinstance(pt, pd.DataFrame) and len(pt) > 0:
     try:
         if 'low' in pt.columns:
             target_low  = float(pt['low'].iloc[0])

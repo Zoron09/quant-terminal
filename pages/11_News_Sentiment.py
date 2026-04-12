@@ -84,7 +84,7 @@ def _time_ago(ts) -> str:
         return ''
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_finnhub_news(ticker: str) -> list[dict]:
     """
     Finnhub /company-news — real-time, published within minutes.
@@ -125,7 +125,7 @@ def fetch_finnhub_news(ticker: str) -> list[dict]:
     return items[:40]
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_alpaca_news(ticker: str) -> list[dict]:
     """
     Alpaca News API — real-time, requires Alpaca credentials.
