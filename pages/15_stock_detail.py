@@ -138,13 +138,14 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
     """Returns {end_date: float} sorted ascending (oldest first)."""
     if not facts: return {}
     usgaap = facts.get('facts', {}).get('us-gaap', {})
-    if balance and quarterly:   pat = re.compile(r'^CY\d{4}Q\dI$')
-    elif balance:               pat = re.compile(r'^CY\d{4}I$')
-    elif quarterly:             pat = re.compile(r'^CY\d{4}Q\d$')
-    else:                       pat = re.compile(r'^CY\d{4}$')
     for concept in concepts:
         entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
-        filtered = [e for e in entries if pat.match(e.get('frame', ''))]
+        if not entries: continue
+        # Filter by form type — consistent across all companies (no frame label dependency)
+        if quarterly:
+            filtered = [e for e in entries if e.get('form') == '10-Q']
+        else:
+            filtered = [e for e in entries if e.get('form') == '10-K']
         if len(filtered) < 3: continue
         by_end: dict = {}
         for e in filtered:
