@@ -228,6 +228,9 @@ def get_code33_data(ticker: str) -> dict:
 
             dedup_by_end = {}
             for e in entries:
+                if str(e.get('form', '')).strip().upper() != '10-Q':
+                    continue
+
                 end_str = str(e.get('end', '')).strip()
                 start_str = str(e.get('start', '')).strip()
                 filed_str = str(e.get('filed', '')).strip()
@@ -287,11 +290,16 @@ def get_code33_data(ticker: str) -> dict:
     ni_keys_yf     = ['Net Income Common Stockholders', 'Net Income',
                       'Net Income From Continuing Operation Net Minority Interest']
     eps_keys_edgar = ['EarningsPerShareDiluted', 'EarningsPerShareBasic']
-    rev_keys_edgar = ['Revenues',
-                      'RevenueFromContractWithCustomerExcludingAssessedTax',
+    rev_keys_edgar = ['RevenueFromContractWithCustomerExcludingAssessedTax',
+                      'RevenueFromContractWithCustomerIncludingAssessedTax',
+                      'Revenues',
                       'SalesRevenueNet',
-                      'RevenueFromContractWithCustomerIncludingAssessedTax']
-    ni_keys_edgar  = ['NetIncomeLoss']
+                      'SalesRevenueGoodsNet',
+                      'RevenueFromContractWithCustomer']
+    ni_keys_edgar  = ['NetIncomeLoss',
+                      'NetIncome',
+                      'ProfitLoss',
+                      'NetIncomeLossAvailableToCommonStockholdersBasic']
 
     if is_us:
         # US: try EDGAR first, fallback to yfinance if <6 quarters
