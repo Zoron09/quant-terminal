@@ -163,7 +163,7 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_code33_data(ticker: str) -> dict:
-    """Fetch Code 33 data using yfinance quarter dates + EDGAR values fallback."""
+    """Fetch Code 33 data from yfinance only for all company types."""
     import yfinance as yf
     try:
         t = yf.Ticker(ticker)
@@ -175,137 +175,43 @@ def get_code33_data(ticker: str) -> dict:
     currency = str(info.get('currency', '')).upper()
     is_foreign = bool(currency) and currency != 'USD'
 
-    try:
-        qis = t.quarterly_income_stmt if t else pd.DataFrame()
-    except Exception:
-        qis = pd.DataFrame()
-    try:
-        qfin = t.quarterly_financials if t else pd.DataFrame()
-    except Exception:
-        qfin = pd.DataFrame()
+    def _yf_metric(df: pd.DataFrame, keys: list):
+        """Return (values_list, labels_list, end_dates_list), oldest->newest, capped to 8Q."""
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return [], [], []
+        for key in keys:
+            if key in df.index:
+                cols = sorted(df.columns, reverse=True)  # newest first
+                vals, lbls, ends = [], [], []
+                for c in cols:
+                    v = _sf(df.loc[key, c])
+                    if v is None:
+                        continue
+                    dt = pd.Timestamp(c).date()
+                    qnum = (dt.month + 2) // 3
+                    vals.append(float(v))
+                    lbls.append(f"Q{qnum} {dt.year}")
+                    ends.append(dt.isoformat())
+                vals = vals[:8]; lbls = lbls[:8]; ends = ends[:8]
+                vals.reverse(); lbls.reverse(); ends.reverse()  # oldest->newest
+                return vals, lbls, ends
+        return [], [], []
 
-    frames = []
-    for df in (qis, qfin):
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            dfx = df.copy()
-            dfx.columns = [pd.Timestamp(c).normalize() for c in dfx.columns]
-            # Deduplicate same-date columns inside each source first.
-            dfx = dfx.T.groupby(level=0).first().T
-            frames.append(dfx)
-
-    if frames:
-        # Merge by row+date so we keep the union of both datasets.
-        qdf = frames[0]
-        for dfx in frames[1:]:
-            qdf = qdf.combine_first(dfx)
-        qdf = qdf.reindex(sorted(qdf.columns, reverse=True), axis=1).iloc[:, :8]
-    else:
+    try:
+        qdf = t.quarterly_income_stmt if t else pd.DataFrame()
+    except Exception:
         qdf = pd.DataFrame()
 
-    if qdf is None or not isinstance(qdf, pd.DataFrame) or qdf.empty:
-        return {
-            'eps': [], 'rev': [], 'ni': [],
-            'eps_labels': [], 'rev_labels': [], 'ni_labels': [],
-            'eps_end_dates': [], 'rev_end_dates': [], 'ni_end_dates': [],
-            'sources': {'eps': 'hybrid', 'rev': 'hybrid', 'ni': 'hybrid'},
-            'is_foreign': is_foreign, 'currency': currency,
-        }
+    rev, rev_labels, rev_ends = _yf_metric(qdf, ['Total Revenue', 'Revenue'])
+    ni, ni_labels, ni_ends = _yf_metric(qdf, ['Net Income', 'Net Income Common Stockholders'])
+    eps, eps_labels, eps_ends = _yf_metric(qdf, ['Diluted EPS', 'Basic EPS', 'Diluted Eps', 'Basic Eps'])
 
-    # Correct fiscal quarter timeline from yfinance for all company types.
-    yf_dates_desc = sorted([pd.Timestamp(c).date() for c in qdf.columns], reverse=True)[:8]
-    yf_dates_asc = list(reversed(yf_dates_desc))
-    labels_asc = [f"Q{(d.month + 2) // 3} {d.year}" for d in yf_dates_asc]
-    ends_asc = [d.isoformat() for d in yf_dates_asc]
-
-    def _yf_value_map(keys: list) -> dict:
-        out = {}
-        if qdf is None or qdf.empty:
-            return out
-        row_key = next((k for k in keys if k in qdf.index), None)
-        if row_key is None:
-            return out
-        for c in qdf.columns:
-            v = _sf(qdf.loc[row_key, c])
-            if v is not None:
-                out[pd.Timestamp(c).date()] = float(v)
-        return out
-
-    edgar_facts = get_edgar_facts(ticker)
-
-    def _edgar_entries_for_tags(tags: list, unit: str) -> dict:
-        """Map end_date -> entry dict using first tag with usable data."""
-        if not edgar_facts:
-            return {}
-        usgaap = edgar_facts.get('facts', {}).get('us-gaap', {})
-        for tag in tags:
-            entries = usgaap.get(tag, {}).get('units', {}).get(unit, [])
-            if not entries:
-                continue
-            by_end = {}
-            for e in entries:
-                end_str = str(e.get('end', '')).strip()
-                val = _sf(e.get('val'))
-                if not end_str or val is None:
-                    continue
-                try:
-                    end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
-                except Exception:
-                    continue
-                filed_str = str(e.get('filed', '')).strip()
-                try:
-                    filed_dt = datetime.strptime(filed_str, '%Y-%m-%d').date() if filed_str else None
-                except Exception:
-                    filed_dt = None
-                cur = by_end.get(end_dt)
-                if cur is None or (filed_dt is not None and (cur.get('_filed_dt') is None or filed_dt > cur.get('_filed_dt'))):
-                    by_end[end_dt] = {'_val': float(val), '_filed_dt': filed_dt}
-            if by_end:
-                return by_end
-        return {}
-
-    def _hybrid_metric(yf_keys: list, edgar_tags: list, unit: str) -> list:
-        yf_map = _yf_value_map(yf_keys)
-        edgar_map = _edgar_entries_for_tags(edgar_tags, unit)
-        vals = []
-        for d in yf_dates_asc:
-            matched_val = None
-            best_gap = 10**9
-            for end_dt, entry in edgar_map.items():
-                gap = abs((end_dt - d).days)
-                if gap <= 45 and gap < best_gap:
-                    best_gap = gap
-                    matched_val = entry['_val']
-            if matched_val is None:
-                matched_val = yf_map.get(d)
-            vals.append(matched_val if matched_val is not None else None)
-        return vals
-
-    rev = _hybrid_metric(
-        ['Total Revenue', 'Revenue'],
-        ['RevenueFromContractWithCustomerExcludingAssessedTax',
-         'RevenueFromContractWithCustomerIncludingAssessedTax',
-         'Revenues', 'SalesRevenueNet', 'SalesRevenueGoodsNet',
-         'RevenueFromContractWithCustomer'],
-        unit='USD'
-    )
-    ni = _hybrid_metric(
-        ['Net Income', 'Net Income Common Stockholders'],
-        ['NetIncomeLoss', 'NetIncome', 'ProfitLoss',
-         'NetIncomeLossAvailableToCommonStockholdersBasic'],
-        unit='USD'
-    )
-    eps = _hybrid_metric(
-        ['Diluted EPS', 'Basic EPS', 'Diluted Eps', 'Basic Eps'],
-        ['EarningsPerShareDiluted', 'EarningsPerShareBasic'],
-        unit='USD/shares'
-    )
-
-    sources = {'eps': 'hybrid', 'rev': 'hybrid', 'ni': 'hybrid'}
+    sources = {'eps': 'yfinance', 'rev': 'yfinance', 'ni': 'yfinance'}
 
     return {
         'eps': eps, 'rev': rev, 'ni': ni,
-        'eps_labels': labels_asc, 'rev_labels': labels_asc, 'ni_labels': labels_asc,
-        'eps_end_dates': ends_asc, 'rev_end_dates': ends_asc, 'ni_end_dates': ends_asc,
+        'eps_labels': eps_labels, 'rev_labels': rev_labels, 'ni_labels': ni_labels,
+        'eps_end_dates': eps_ends, 'rev_end_dates': rev_ends, 'ni_end_dates': ni_ends,
         'sources': sources, 'is_foreign': is_foreign, 'currency': currency,
     }
 
