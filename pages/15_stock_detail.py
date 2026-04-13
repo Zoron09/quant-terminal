@@ -192,9 +192,9 @@ def get_code33_data(ticker: str) -> dict:
         yf_q = None
 
     # EPS: EarningsPerShareDiluted → EarningsPerShareBasic → yfinance
-    eps = _edgar_vals(['EarningsPerShareDiluted'])
+    eps = _edgar_vals(['EarningsPerShareDiluted'], unit='USD/shares')
     if len(eps) < 5:
-        eps = _edgar_vals(['EarningsPerShareBasic'])
+        eps = _edgar_vals(['EarningsPerShareBasic'], unit='USD/shares')
         if len(eps) >= 5: sources['eps'] = 'EDGAR EarningsPerShareBasic'
     else:
         sources['eps'] = 'EDGAR EarningsPerShareDiluted'
