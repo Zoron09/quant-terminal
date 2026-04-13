@@ -165,144 +165,135 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_code33_data(ticker: str) -> dict:
     facts = get_edgar_facts(ticker)
-    sources = {}
+    
+    eps_keys = ['Diluted EPS', 'Basic EPS', 'Earnings Per Share']
+    rev_keys = ['Total Revenue', 'Revenue', 'Operating Revenue']
+    ni_keys  = ['Net Income Common Stockholders', 'Net Income', 'Net Income From Continuing Operation Net Minority Interest']
+    
+    def _get_row(keys, df):
+        for k in keys:
+            if k in df.index: return k
+        return None
 
-    def _edgar_vals(concepts, quarterly=True, unit='USD'):
-        if not facts: return [], []
+    def _get_yfinance_unified():
+        try:
+            import yfinance as yf
+            import pandas as pd
+            t = yf.Ticker(ticker)
+            df = t.quarterly_income_stmt
+            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+                return []
+            
+            e_row = _get_row(eps_keys, df)
+            r_row = _get_row(rev_keys, df)
+            n_row = _get_row(ni_keys, df)
+            
+            if not e_row or not r_row or not n_row:
+                return []
+                
+            cols = sorted(list(df.columns), reverse=True)
+            aligned = []
+            for c in cols:
+                e = _sf(df.loc[e_row, c])
+                r = _sf(df.loc[r_row, c])
+                n = _sf(df.loc[n_row, c])
+                if e is not None and r is not None and n is not None:
+                    if -50 <= e <= 500: # sanity bounds
+                        aligned.append((c, e, r, n, None))
+                        
+            aligned = aligned[:8]
+            aligned.reverse()
+            return aligned
+        except Exception:
+            pass
+        return []
+
+    def _get_edgar_unified():
+        if not facts: return []
         usgaap = facts.get('facts', {}).get('us-gaap', {})
-        for concept in concepts:
-            entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
-            if not entries: continue
+        
+        def _get_entries(concepts, unit='USD'):
+            for concept in concepts:
+                entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
+                filtered = [e for e in entries if e.get('form') == '10-Q']
+                if len(filtered) >= 3: return filtered
+            return []
             
-            filtered = [e for e in entries if e.get('form') == '10-Q']
-            if len(filtered) < 3: continue
+        eps_entries = _get_entries(['EarningsPerShareDiluted', 'EarningsPerShareBasic'], unit='USD/shares')
+        rev_entries = _get_entries(['Revenues', 'RevenueFromContractWithCustomerExcludingAssessedTax', 'SalesRevenueNet', 'RevenueFromContractWithCustomerIncludingAssessedTax'])
+        ni_entries  = _get_entries(['NetIncomeLoss'])
+        
+        if not eps_entries or not rev_entries or not ni_entries: return []
             
+        def _build_dict(entries):
             by_end = {}
-            for e in filtered:
+            for e in entries:
                 end = e.get('end', '')
                 if not end: continue
-                
-                # Prevent YTD (9-month/6-month) values mixing by enforcing ~quarterly duration
                 if 'start' in e:
                     try:
                         from datetime import datetime
-                        st_dt = datetime.strptime(e['start'], '%Y-%m-%d')
-                        en_dt = datetime.strptime(end, '%Y-%m-%d')
-                        if (en_dt - st_dt).days > 105:
+                        if (datetime.strptime(end, '%Y-%m-%d') - datetime.strptime(e['start'], '%Y-%m-%d')).days > 105:
                             continue
-                    except Exception:
-                        pass
-
+                    except Exception: pass
                 if end not in by_end or e.get('filed', '') > by_end[end].get('filed', ''):
                     by_end[end] = e
+            return by_end
             
-            if len(by_end) >= 3:
-                # Sort by end date descending and take 8 most recent
-                sorted_items = sorted(by_end.items(), key=lambda x: x[0], reverse=True)[:8]
-                sorted_items.reverse()
-                recent = [float(v['val']) for _, v in sorted_items]
+        eps_dict = _build_dict(eps_entries)
+        rev_dict = _build_dict(rev_entries)
+        ni_dict  = _build_dict(ni_entries)
+        
+        common_ends = set(eps_dict.keys()) & set(rev_dict.keys()) & set(ni_dict.keys())
+        sorted_ends = sorted(list(common_ends), reverse=True)[:8]
+        sorted_ends.reverse()
+        
+        import statistics
+        recent_e = [float(eps_dict[end]['val']) for end in sorted_ends]
+        valid_e = [abs(v) for v in recent_e if v is not None and v != 0]
+        med_e = statistics.median(valid_e) if valid_e else 1e-9
+        if med_e == 0: med_e = 1e-9
+        
+        aligned = []
+        for end in sorted_ends:
+            e = float(eps_dict[end]['val'])
+            r = float(rev_dict[end]['val'])
+            n = float(ni_dict[end]['val'])
+            
+            if abs(e) > 15 * med_e or abs(e) < med_e / 15:
+                continue # Skip anomalous quarter completely
+            if -50 <= e <= 500:
+                aligned.append((end, e, r, n, eps_dict[end]))
                 
-                import statistics
-                valid = [abs(v) for v in recent if v is not None and v != 0]
-                if not valid:
-                    continue
-                med = statistics.median(valid)
-                if med == 0: med = 1e-9
-                
-                out = []
-                none_count = 0
-                for v in recent:
-                    if v is None:
-                        out.append(None)
-                        none_count += 1
-                    elif abs(v) > 15 * med or abs(v) < med / 15:
-                        out.append(None)
-                        none_count += 1
-                    else:
-                        out.append(v)
-                
-                if none_count > 2:
-                    continue
-                    
-                if len(out) >= 5:
-                    labels = []
-                    for _, v in sorted_items:
-                        fp, fy = v.get('fp'), v.get('fy')
-                        if fp and fy: labels.append(f"{fp} {fy}")
-                        else: labels.append(str(v.get('end', ''))[:7])
-                    return out, labels
-        return [], []
+        return aligned
 
-    def _yf_vals_extended(keys):
-        """Fetch maximum available quarterly history from yfinance."""
-        try:
-            import yfinance as yf
-            t = yf.Ticker(ticker)
-            df = t.quarterly_income_stmt
-            if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
-                cols = sorted(df.columns)
-                for k in keys:
-                    if k in df.index:
-                        labels = [f"Q{(c.month-1)//3+1} {c.year}" for c in cols]
-                        return [_sf(df.loc[k, c]) for c in cols], labels
-        except Exception:
-            pass
-        try:
-            df2 = get_financials(ticker).get('income_quarterly')
-            if df2 is not None and isinstance(df2, pd.DataFrame) and not df2.empty:
-                cols = sorted(df2.columns)
-                for k in keys:
-                    if k in df2.index:
-                        labels = [str(c)[:7] for c in cols]
-                        return [_sf(df2.loc[k, c]) for c in cols], labels
-        except Exception:
-            pass
-        return [], []
-
-    # EPS — EDGAR first with correct unit, then yfinance
-    def _eps_sanity(vals):
-        if not vals: return False
-        return all(v is None or -50 <= v <= 500 for v in vals)
-
-    eps, eps_labels = _edgar_vals(['EarningsPerShareDiluted'], unit='USD/shares')
-    if not _eps_sanity(eps):
-        eps, eps_labels = [], []
-    if len(eps) < 5:
-        eps, eps_labels = _edgar_vals(['EarningsPerShareBasic'], unit='USD/shares')
-        if not _eps_sanity(eps):
-            eps, eps_labels = [], []
-        if len(eps) >= 5:
-            sources['eps'] = 'EDGAR EarningsPerShareBasic'
+    # MAIN LOGIC
+    source = 'yfinance'
+    aligned = _get_yfinance_unified()
+    
+    if len(aligned) < 5:
+        source = 'EDGAR'
+        aligned = _get_edgar_unified()
+        
+    if len(aligned) < 5:
+        return {'insufficient_count': len(aligned)}
+        
+    eps = [x[1] for x in aligned]
+    rev = [x[2] for x in aligned]
+    ni  = [x[3] for x in aligned]
+    
+    labels = []
+    if source == 'yfinance':
+        labels = [f"Q{(x[0].month-1)//3+1} {x[0].year}" for x in aligned]
     else:
-        sources['eps'] = 'EDGAR EarningsPerShareDiluted'
-    if len(eps) < 5:
-        eps, eps_labels = _yf_vals_extended(['Diluted EPS', 'Basic EPS', 'Earnings Per Share'])
-        sources['eps'] = f'yfinance ({len(eps)}Q)'
-
-    # Revenue — EDGAR first, then yfinance
-    rev, _ = _edgar_vals(['Revenues'])
-    if len(rev) >= 5:
-        sources['rev'] = 'EDGAR Revenues'
-    else:
-        rev, _ = _edgar_vals(['RevenueFromContractWithCustomerExcludingAssessedTax',
-                           'SalesRevenueNet',
-                           'RevenueFromContractWithCustomerIncludingAssessedTax'])
-        if len(rev) >= 5:
-            sources['rev'] = 'EDGAR RevenueFromContract'
-        else:
-            rev, _ = _yf_vals_extended(['Total Revenue', 'Revenue', 'Operating Revenue'])
-            sources['rev'] = f'yfinance ({len(rev)}Q)'
-
-    # Net Income — EDGAR first, then yfinance
-    ni, _ = _edgar_vals(['NetIncomeLoss'])
-    if len(ni) >= 5:
-        sources['ni'] = 'EDGAR NetIncomeLoss'
-    else:
-        ni, _ = _yf_vals_extended(['Net Income', 'Net Income Common Stockholders',
-                                 'Net Income From Continuing Operation Net Minority Interest'])
-        sources['ni'] = f'yfinance ({len(ni)}Q)'
-
-    return {'eps': eps, 'rev': rev, 'ni': ni, 'sources': sources, 'labels': eps_labels}
+        for x in aligned:
+            v = x[4]
+            fp, fy = v.get('fp'), v.get('fy')
+            if fp and fy: labels.append(f"{fp} {fy}")
+            else: labels.append(str(x[0])[:7])
+            
+    sources = {'eps': source, 'rev': source, 'ni': source}
+    return {'eps': eps, 'rev': rev, 'ni': ni, 'sources': sources, 'labels': labels}
 
 # ── Financial statements (EDGAR primary, yfinance fallback) ───────────────────
 
@@ -671,13 +662,13 @@ def _render_fin_table(df: pd.DataFrame, rows_spec: list, title: str,
 
 def _compute_yoy(vals: list) -> list:
     """YoY[i] = (vals[i] - vals[i-4]) / |vals[i-4]| * 100 for i >= 4.
-    Rates beyond ±2000% are treated as data anomalies and returned as None."""
-    rates = []
+    Rate capped at ±500% to prevent outlier distortion."""
+    rates = [None] * min(4, len(vals))
     for i in range(4, len(vals)):
         c, p = vals[i], vals[i - 4]
         if c is not None and p is not None and p != 0 and not _nan(c) and not _nan(p):
             rate = (float(c) - float(p)) / abs(float(p)) * 100
-            rates.append(rate if abs(rate) <= 2000 else None)  # sanity clamp
+            rates.append(max(min(rate, 500.0), -500.0))
         else:
             rates.append(None)
     return rates
@@ -1207,6 +1198,8 @@ with tab4:
         'insufficient': (GRAY,   'INSUFFICIENT',  'Need ≥5 quarters of raw data to evaluate'),
     }
     bc, bl, bn = badge_map[overall]
+    if overall == 'insufficient' and c33.get('insufficient_count') is not None:
+        bn = f"Need 5+ quarters with complete EPS + Revenue + Net Income data. Only {c33['insufficient_count']} found."
 
     st.markdown(f"""
 <div style="background:{BG};border:2px solid {bc};border-radius:8px;
