@@ -7,7 +7,13 @@
       "Bash(python3:*)",
       "Bash(wc -l \"/c/Users/Meet Singh/quant-terminal/pages\"/*.py)",
       "Bash(pkill -f \"streamlit run\")",
-      "Bash(echo \"PID: $!\")"
+      "Bash(echo \"PID: $!\")",
+      "Bash(taskkill /F /IM \"streamlit.exe\")",
+      "Bash(taskkill /F /IM \"python.exe\" /FI \"WINDOWTITLE eq streamlit*\")",
+      "Bash(curl -s http://localhost:8501)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }
