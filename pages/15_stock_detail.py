@@ -213,43 +213,72 @@ def get_code33_data(ticker: str) -> dict:
 
     # ── EDGAR fetcher (independent per metric) ────────────────────────────────
     def _edgar_metric(concepts, unit='USD'):
-        """Return (values_list, labels_list) from SEC EDGAR 10-Q filings."""
+        """Return (values_list, labels_list) from SEC EDGAR filings using strict quarterly filters."""
         facts = get_edgar_facts(ticker)
-        if not facts: return [], []
+        if not facts:
+            return [], []
+
         usgaap = facts.get('facts', {}).get('us-gaap', {})
+        cutoff_date = (datetime.utcnow() - timedelta(days=365 * 5)).date()
+
         for concept in concepts:
             entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
-            filtered = [e for e in entries if e.get('form') == '10-Q']
-            if len(filtered) < 3: continue
+            if not entries:
+                continue
 
-            by_end = {}
-            for e in filtered:
-                end = e.get('end', '')
-                if not end: continue
-                # Duration check: ≤105 days to prevent YTD mixing
-                if 'start' in e:
-                    try:
-                        from datetime import datetime as _dt
-                        if (_dt.strptime(end, '%Y-%m-%d') - _dt.strptime(e['start'], '%Y-%m-%d')).days > 105:
-                            continue
-                    except Exception:
-                        pass
-                if end not in by_end or e.get('filed', '') > by_end[end].get('filed', ''):
-                    by_end[end] = e
+            dedup_by_end = {}
+            for e in entries:
+                end_str = str(e.get('end', '')).strip()
+                start_str = str(e.get('start', '')).strip()
+                filed_str = str(e.get('filed', '')).strip()
+                val = _sf(e.get('val'))
 
-            if len(by_end) >= 3:
-                # Sort by end date descending, take 8 most recent
-                sorted_items = sorted(by_end.items(), key=lambda x: x[0], reverse=True)[:8]
-                sorted_items.reverse()  # back to chronological ascending
-                vals = [float(v['val']) for _, v in sorted_items]
-                lbls = []
-                for _, v in sorted_items:
-                    fp, fy = v.get('fp'), v.get('fy')
-                    if fp and fy:
-                        lbls.append(f"{fp} {fy}")
-                    else:
-                        lbls.append(str(v.get('end', ''))[:7])
-                return vals, lbls
+                if not end_str or not start_str or val is None:
+                    continue
+
+                try:
+                    end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
+                    start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
+                except Exception:
+                    continue
+
+                if end_dt < cutoff_date:
+                    continue
+
+                duration_days = (end_dt - start_dt).days
+                if duration_days < 80 or duration_days > 105:
+                    continue
+
+                try:
+                    filed_dt = datetime.strptime(filed_str, '%Y-%m-%d').date() if filed_str else None
+                except Exception:
+                    filed_dt = None
+
+                current = dedup_by_end.get(end_dt)
+                if current is None or (filed_dt is not None and (current.get('_filed_dt') is None or filed_dt > current.get('_filed_dt'))):
+                    cloned = dict(e)
+                    cloned['_end_dt'] = end_dt
+                    cloned['_filed_dt'] = filed_dt
+                    cloned['_val'] = float(val)
+                    dedup_by_end[end_dt] = cloned
+
+            filtered_entries = sorted(dedup_by_end.values(), key=lambda x: x['_end_dt'], reverse=True)
+            filtered_entries = filtered_entries[:8]
+
+            if len(filtered_entries) < 6:
+                continue
+
+            filtered_entries.reverse()  # chronological ascending
+            vals = [item['_val'] for item in filtered_entries]
+            lbls = []
+            for item in filtered_entries:
+                fp, fy = item.get('fp'), item.get('fy')
+                if fp and fy:
+                    lbls.append(f"{fp} {fy}")
+                else:
+                    lbls.append(str(item.get('end', ''))[:7])
+            return vals, lbls
+
         return [], []
 
     # ── Fetch each metric independently ───────────────────────────────────────
