@@ -175,6 +175,8 @@ def get_code33_data(ticker: str) -> dict:
         import yfinance as yf
         t = yf.Ticker(ticker)
         q = t.quarterly_financials
+        st.write("DEBUG columns:", list(q.columns) if q is not None and not q.empty else "EMPTY")
+        st.write("DEBUG index:", list(q.index) if q is not None and not q.empty else "EMPTY")
         if q is None or q.empty:
             return {'eps': [], 'rev': [], 'ni': [], 'sources': sources}
         q = q.sort_index(axis=1)  # oldest first
