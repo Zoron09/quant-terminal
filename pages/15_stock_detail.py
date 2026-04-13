@@ -168,8 +168,63 @@ def get_code33_data(ticker: str) -> dict:
     sources = {}
 
     def _edgar_vals(concepts, quarterly=True, unit='USD'):
-        s = _edgar_series(facts, concepts, unit=unit, quarterly=quarterly)
-        return list(s.values()) if len(s) >= 5 else []
+        if not facts: return []
+        usgaap = facts.get('facts', {}).get('us-gaap', {})
+        for concept in concepts:
+            entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
+            if not entries: continue
+            
+            filtered = [e for e in entries if e.get('form') == '10-Q']
+            if len(filtered) < 3: continue
+            
+            by_end = {}
+            for e in filtered:
+                end = e.get('end', '')
+                if not end: continue
+                
+                # Prevent YTD (9-month/6-month) values mixing by enforcing ~quarterly duration
+                if 'start' in e:
+                    try:
+                        from datetime import datetime
+                        st_dt = datetime.strptime(e['start'], '%Y-%m-%d')
+                        en_dt = datetime.strptime(end, '%Y-%m-%d')
+                        if (en_dt - st_dt).days > 105:
+                            continue
+                    except Exception:
+                        pass
+
+                if end not in by_end or e.get('filed', '') > by_end[end].get('filed', ''):
+                    by_end[end] = e
+            
+            if len(by_end) >= 3:
+                sorted_items = sorted(by_end.items())
+                recent = [float(v['val']) for _, v in sorted_items[-8:]]
+                
+                import statistics
+                valid = [abs(v) for v in recent if v is not None and v != 0]
+                if not valid:
+                    continue
+                med = statistics.median(valid)
+                if med == 0: med = 1e-9
+                
+                out = []
+                none_count = 0
+                for v in recent:
+                    if v is None:
+                        out.append(None)
+                        none_count += 1
+                    elif abs(v) > 15 * med or abs(v) < med / 15:
+                        out.append(None)
+                        none_count += 1
+                    else:
+                        out.append(v)
+                
+                if none_count > 2:
+                    continue
+                    
+                if len(out) >= 5:
+                    return out
+        return []
 
     def _yf_vals_extended(keys):
         """Fetch maximum available quarterly history from yfinance."""
