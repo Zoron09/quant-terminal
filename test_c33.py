@@ -46,5 +46,5 @@ def test_ticker(t):
     print(f"  EPS status: {eps_status} (d1={eps_d1}, d2={eps_d2})")
     print(f"  REV status: {rev_status} (d1={rev_d1}, d2={rev_d2})")
 
-for t in ['UCTT', 'WULF', 'TBBB', 'AAPL']:
+for t in ['GTE', 'WULF', 'UCTT', 'TBBB']:
     test_ticker(t)

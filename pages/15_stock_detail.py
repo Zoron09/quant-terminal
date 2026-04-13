@@ -168,15 +168,16 @@ def get_code33_data(ticker: str) -> dict:
     US companies: EDGAR first (10-Q, ≤105 day duration), yfinance fallback.
     Non-US companies: yfinance only.
     Each metric fetched independently — no intersection required.
-    Need minimum 7 raw quarters per metric to compute 3 YoY growth rates."""
+    Need minimum 6 raw quarters per metric to compute YoY growth rates."""
     import yfinance as yf
 
-    # ── Detect if US company ──────────────────────────────────────────────────
+    # ── Detect if US-listed company (exchange-based) ───────────────────────────
+    US_EXCHANGES = {'NYQ', 'NMS', 'NGM', 'NCM', 'BTS', 'NYSE', 'NASDAQ', 'ASE', 'PCX'}
     is_us = False
     if '.' not in ticker:
         try:
             info = yf.Ticker(ticker).info
-            is_us = info.get('country', '') == 'United States'
+            is_us = info.get('exchange', '') in US_EXCHANGES
         except Exception:
             is_us = True  # assume US if no dot and info fails
 
@@ -260,23 +261,23 @@ def get_code33_data(ticker: str) -> dict:
     ni_keys_edgar  = ['NetIncomeLoss']
 
     if is_us:
-        # US: try EDGAR first, fallback to yfinance if <7 quarters
+        # US: try EDGAR first, fallback to yfinance if <6 quarters
         eps, eps_labels = _edgar_metric(eps_keys_edgar, unit='USD/shares')
-        if len(eps) >= 7:
+        if len(eps) >= 6:
             sources['eps'] = 'EDGAR'
         else:
             eps, eps_labels = _yf_metric(eps_keys_yf)
             sources['eps'] = 'yfinance'
 
         rev, rev_labels = _edgar_metric(rev_keys_edgar)
-        if len(rev) >= 7:
+        if len(rev) >= 6:
             sources['rev'] = 'EDGAR'
         else:
             rev, rev_labels = _yf_metric(rev_keys_yf)
             sources['rev'] = 'yfinance'
 
         ni, ni_labels = _edgar_metric(ni_keys_edgar)
-        if len(ni) >= 7:
+        if len(ni) >= 6:
             sources['ni'] = 'EDGAR'
         else:
             ni, ni_labels = _yf_metric(ni_keys_yf)
