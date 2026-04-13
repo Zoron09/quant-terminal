@@ -196,9 +196,17 @@ def get_code33_data(ticker: str) -> dict:
         return []
 
     # EPS — EDGAR first with correct unit, then yfinance
+    def _eps_sanity(vals):
+        if not vals: return False
+        return all(v is None or -50 <= v <= 500 for v in vals)
+
     eps = _edgar_vals(['EarningsPerShareDiluted'], unit='USD/shares')
+    if not _eps_sanity(eps):
+        eps = []
     if len(eps) < 5:
         eps = _edgar_vals(['EarningsPerShareBasic'], unit='USD/shares')
+        if not _eps_sanity(eps):
+            eps = []
         if len(eps) >= 5:
             sources['eps'] = 'EDGAR EarningsPerShareBasic'
     else:
