@@ -176,8 +176,26 @@ def get_code33_data(ticker: str) -> dict:
     is_foreign = bool(currency) and currency != 'USD'
 
     try:
-        qdf = t.quarterly_income_stmt if t else pd.DataFrame()
+        qis = t.quarterly_income_stmt if t else pd.DataFrame()
     except Exception:
+        qis = pd.DataFrame()
+    try:
+        qfin = t.quarterly_financials if t else pd.DataFrame()
+    except Exception:
+        qfin = pd.DataFrame()
+
+    frames = []
+    for df in (qis, qfin):
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            dfx = df.copy()
+            dfx.columns = [pd.Timestamp(c).normalize() for c in dfx.columns]
+            frames.append(dfx)
+
+    if frames:
+        qdf = pd.concat(frames, axis=1)
+        # Keep all unique quarter dates across both sources.
+        qdf = qdf.T.groupby(level=0).first().T
+    else:
         qdf = pd.DataFrame()
 
     if qdf is None or not isinstance(qdf, pd.DataFrame) or qdf.empty:
