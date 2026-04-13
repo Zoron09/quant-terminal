@@ -172,13 +172,16 @@ def get_code33_data(ticker: str) -> dict:
     import yfinance as yf
 
     # ── Detect if US-listed company (exchange-based) ───────────────────────────
-    US_EXCHANGES = {'NYQ', 'NMS', 'NGM', 'NCM', 'BTS'}
+    US_EXCHANGES = {'NYQ', 'NMS', 'NGM', 'NCM', 'BTS', 'ASE'}
     is_us = False
     if '.' not in ticker:
         try:
             info = yf.Ticker(ticker.upper()).info or {}
             exchange = str(info.get('exchange', '')).upper()
+            currency = str(info.get('currency', '')).upper()
             is_us = exchange in US_EXCHANGES
+            if currency and currency != 'USD':
+                is_us = False
         except Exception:
             is_us = False
 
