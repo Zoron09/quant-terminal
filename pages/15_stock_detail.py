@@ -135,14 +135,15 @@ def get_edgar_facts(ticker: str) -> dict | None:
 
 def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
                   quarterly: bool = True, balance: bool = False) -> dict:
-    """Returns {end_date: float} sorted ascending (oldest first)."""
+    """Returns {end_date: float} sorted ascending (oldest first), max 8 most recent entries."""
     if not facts: return {}
     usgaap = facts.get('facts', {}).get('us-gaap', {})
     for concept in concepts:
         entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
         if not entries: continue
         # Filter by form type — consistent across all companies (no frame label dependency)
-        if quarterly:
+        # Balance sheet quarterly uses 10-Q same as income statement
+        if quarterly or balance:
             filtered = [e for e in entries if e.get('form') == '10-Q']
         else:
             filtered = [e for e in entries if e.get('form') == '10-K']
@@ -154,74 +155,54 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
             if end not in by_end or e.get('filed', '') > by_end[end].get('filed', ''):
                 by_end[end] = e
         if len(by_end) >= 3:
-            return {end: float(v['val']) for end, v in sorted(by_end.items())}
+            sorted_items = sorted(by_end.items())
+            recent_8 = sorted_items[-8:]   # cap at 8 most recent to avoid 2008-era data
+            return {end: float(v['val']) for end, v in recent_8}
     return {}
 
-# ── Code 33 EDGAR raw-series fetcher (separate from financial tables) ─────────
+# ── Code 33 data fetcher (yfinance only) ─────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_code33_data(ticker: str) -> dict:
     """
-    Fetch ≥5 quarters of EPS, Revenue, Net Income for Code 33.
-    EDGAR primary with specific concept priority; yfinance fallback.
+    Fetch raw quarterly data for Code 33 using yfinance ONLY.
+    Needs ≥9 raw quarters to compute 5 YoY rates (index i vs i-4, for i=4..8).
     Returns {'eps': [...], 'rev': [...], 'ni': [...], 'sources': {...}}
-    Values are floats oldest→newest; None where missing.
+    Values are floats oldest→newest (ascending). Empty list = insufficient data.
     """
-    facts = get_edgar_facts(ticker)
     sources = {}
-
-    def _edgar_vals(concepts, quarterly=True, unit='USD'):
-        s = _edgar_series(facts, concepts, unit=unit, quarterly=quarterly)
-        return list(s.values()) if len(s) >= 5 else []
-
-    def _yf_vals(df, keys):
-        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-            return []
-        try:
-            for k in keys:
-                if k in df.index:
-                    cols = sorted(df.columns)
-                    return [_sf(df.loc[k, c]) for c in cols]
-        except Exception:
-            pass
-        return []
-
     try:
-        yf_q = get_financials(ticker).get('income_quarterly')
-    except Exception:
-        yf_q = None
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        q = t.quarterly_financials
+        if q is None or not isinstance(q, pd.DataFrame) or q.empty:
+            return {'eps': [], 'rev': [], 'ni': [], 'sources': sources}
 
-    # EPS: EarningsPerShareDiluted → EarningsPerShareBasic → yfinance
-    eps = _edgar_vals(['EarningsPerShareDiluted'], unit='USD/shares')
-    if len(eps) < 5:
-        eps = _edgar_vals(['EarningsPerShareBasic'], unit='USD/shares')
-        if len(eps) >= 5: sources['eps'] = 'EDGAR EarningsPerShareBasic'
-    else:
-        sources['eps'] = 'EDGAR EarningsPerShareDiluted'
-    if len(eps) < 5:
-        eps = _yf_vals(yf_q, ['Diluted EPS', 'Basic EPS', 'Earnings Per Share'])
+        # Sort columns ascending: oldest leftmost
+        q = q[sorted(q.columns)]
+
+        def _extract(keys):
+            for k in keys:
+                if k in q.index:
+                    return [_sf(q.loc[k, c]) for c in q.columns]
+            return []
+
+        eps = _extract(['Diluted EPS', 'Basic EPS', 'Earnings Per Share'])
+        rev = _extract(['Total Revenue', 'Revenue'])
+        ni  = _extract(['Net Income', 'Net Income Common Stockholders'])
+
         sources['eps'] = 'yfinance'
+        sources['rev'] = 'yfinance'
+        sources['ni']  = 'yfinance'
 
-    # Revenue: Revenues → RevenueFromContract → yfinance
-    rev = _edgar_vals(['Revenues'])
-    if len(rev) >= 5:
-        sources['rev'] = 'EDGAR Revenues'
-    else:
-        rev = _edgar_vals(['RevenueFromContractWithCustomerExcludingAssessedTax',
-                           'SalesRevenueNet', 'RevenueFromContractWithCustomerIncludingAssessedTax'])
-        if len(rev) >= 5:
-            sources['rev'] = 'EDGAR RevenueFromContract'
-        else:
-            rev = _yf_vals(yf_q, ['Total Revenue', 'Revenue'])
-            sources['rev'] = 'yfinance'
+        # Need ≥9 raw quarters to produce ≥5 YoY rates (i=4..8)
+        if len(eps) < 9: eps = []
+        if len(rev) < 9: rev = []
+        if len(ni)  < 9: ni  = []
 
-    # Net Income: NetIncomeLoss → yfinance
-    ni = _edgar_vals(['NetIncomeLoss'])
-    if len(ni) >= 5:
-        sources['ni'] = 'EDGAR NetIncomeLoss'
-    else:
-        ni = _yf_vals(yf_q, ['Net Income', 'Net Income Common Stockholders'])
-        sources['ni'] = 'yfinance'
+    except Exception:
+        eps = rev = ni = []
+        sources = {}
 
     return {'eps': eps, 'rev': rev, 'ni': ni, 'sources': sources}
 
@@ -591,12 +572,14 @@ def _render_fin_table(df: pd.DataFrame, rows_spec: list, title: str,
 # ── Code 33 computation ───────────────────────────────────────────────────────
 
 def _compute_yoy(vals: list) -> list:
-    """YoY[i] = (vals[i] - vals[i-4]) / |vals[i-4]| * 100 for i >= 4."""
+    """YoY[i] = (vals[i] - vals[i-4]) / |vals[i-4]| * 100 for i >= 4.
+    Rates beyond ±2000% are treated as data anomalies and returned as None."""
     rates = []
     for i in range(4, len(vals)):
         c, p = vals[i], vals[i - 4]
         if c is not None and p is not None and p != 0 and not _nan(c) and not _nan(p):
-            rates.append((float(c) - float(p)) / abs(float(p)) * 100)
+            rate = (float(c) - float(p)) / abs(float(p)) * 100
+            rates.append(rate if abs(rate) <= 2000 else None)  # sanity clamp
         else:
             rates.append(None)
     return rates
