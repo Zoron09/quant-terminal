@@ -1,12 +1,12 @@
 # CLAUDE.md — Quant Terminal Master Specification
 > Read this file at the start of EVERY session before touching any code.
-> Last updated: April 12, 2026
+> Last updated: April 13, 2026
 
 ---
 
 ## 1. Who is the user
 
-- **Name:** Meet Singh, Delhi, India
+- **Name:** Meet Singh, Delhi, India (relocating to NSW Australia June 2026)
 - **Technical level:** Zero coding experience. Cannot read or write code.
 - **Communication:** Short, direct. One step at a time. No long explanations unless asked.
 - **Trading:** Studies Mark Minervini's SEPA methodology (books: "Trade Like a Stock Market Wizard", "Think & Trade Like a Champion")
@@ -15,18 +15,12 @@
 
 ## 2. What is this project
 
-A Streamlit web app for stock research and portfolio management built around Minervini's SEPA methodology. Runs locally on Windows PC.
+A Bloomberg-style Streamlit stock research terminal built around Minervini's SEPA methodology. Runs locally on Windows PC at localhost:8501.
 
 **Start the app:**
 ```bash
 cd "C:\Users\Meet Singh\quant-terminal"
 streamlit run app.py
-```
-
-**Open Claude Code:**
-```bash
-cd "C:\Users\Meet Singh\quant-terminal"
-claude
 ```
 
 ---
@@ -36,16 +30,42 @@ claude
 ```
 C:\Users\Meet Singh\quant-terminal\
 ├── CLAUDE.md              ← This file. Always read first.
-├── app.py                 ← Main entry point
+├── app.py                 ← Main entry point (Overview page)
 ├── .env                   ← API keys (NEVER commit to Git)
 ├── requirements.txt
-├── pages/                 ← Streamlit pages (13 files)
-├── utils/                 ← Core logic (11 files)
+├── pages/
+│   ├── 2_Financials.py
+│   ├── 3_Growth_and_Margins.py
+│   ├── 4_Valuation.py
+│   ├── 5_Earnings.py
+│   ├── 6_Analyst_Ratings.py
+│   ├── 7_Ownership.py
+│   ├── 8_Peer_Comparison.py
+│   ├── 9_SEPA_Analysis.py
+│   ├── 10_Screener.py
+│   ├── 11_News_Sentiment.py
+│   ├── 12_Portfolio.py
+│   ├── 13_Market_Dashboard.py
+│   └── 15_stock_detail.py
+├── utils/
+│   ├── alpaca_client.py   ← Alpaca data + WebSocket streaming
+│   ├── data_fetcher.py    ← Routing: Alpaca primary, yfinance fallback
+│   ├── sepa_engine.py     ← All SEPA calculations
+│   ├── screener_db.py     ← SQLite cache for screener
+│   ├── finnhub_client.py  ← News, analyst, earnings data
+│   ├── sec_edgar.py       ← SEC filings
+│   ├── portfolio_engine.py
+│   ├── dcf_model.py
+│   ├── piotroski.py
+│   ├── formatters.py
+│   └── sidebar.py
 ├── data/
-│   ├── portfolios.json    ← Meet's actual holdings (sensitive)
+│   ├── portfolios.json    ← Meet's actual holdings
+│   ├── sp500_tickers.json
+│   ├── nifty500_tickers.json
 │   ├── price_alerts.json
-│   └── screener_cache.db  ← SQLite cache
-└── styles/custom.css      ← Dark theme
+│   └── screener_cache.db  ← SQLite SEPA cache
+└── styles/custom.css      ← Bloomberg dark theme
 ```
 
 ---
@@ -58,182 +78,154 @@ ALPACA_API_SECRET=<secret>
 FINNHUB_API_KEY=<key>
 ```
 
-Never commit .env to Git.
+NEVER commit .env to Git. It is in .gitignore.
 
 ---
 
-## 5. Data architecture (finalized)
+## 5. Data architecture
 
-| Data | Primary Source | Fallback |
-|------|---------------|----------|
-| Financial statements (IS, BS, CF) | SEC EDGAR data.sec.gov | yfinance |
-| Real-time price + OHLC | Alpaca | yfinance |
-| EPS estimates + surprises | Finnhub | yfinance |
+| Data | Primary | Fallback |
+|------|---------|----------|
+| US price history + real-time | Alpaca IEX | yfinance |
+| Financial statements | yfinance | SEC EDGAR |
 | News | Finnhub + Alpaca | — |
-| Indian stocks (.NS) | yfinance only | — |
+| Analyst ratings + earnings surprises | Finnhub | yfinance |
+| Insider transactions | Finnhub | yfinance |
+| Indian stocks (.NS/.BO) | yfinance only | — |
 | Canadian stocks (.TO) | yfinance only | — |
-
-### SEC EDGAR API
-- Base URL: https://data.sec.gov/
-- No API key required. No rate limits.
-- Company facts: https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json
-- MUST set header: User-Agent: Meet Singh singhgaganmeet09@gmail.com
-- Returns XBRL financial data direct from official SEC filings
+| Indices (^GSPC, ^NSEI) | yfinance only | — |
 
 ---
 
-## 6. What is already built
+## 6. Design rules (NEVER change these)
 
-### Phase 1 — Stock Research (13 features)
-Company snapshot, key stats, financial statements, revenue/earnings charts, margin trends, ratio dashboard, DCF model, Piotroski F-Score, earnings calendar, analyst ratings, insider transactions, institutional holders, peer comparison.
-
-### Phase 2 — SEPA Engine (11 features)
-Trend Template (8 criteria), Weinstein Stage, RS Ranking, RS Line chart, VCP detection, earnings acceleration, Code 33 detector, volume dry-up, buy trigger zone, composite SEPA score (0-100).
-
-### Phase 3 — News & Sentiment (5 features)
-Real-time news (Finnhub + Alpaca), SEC filings feed, price alerts, Finnhub sentiment, Stocktwits.
-
-### Phase 4 — Portfolio (9 features)
-Holdings input, real-time P&L via Alpaca, portfolio optimizer, risk metrics, position sizing, backtesting, sector exposure, Canadian stock support.
-
-### Phase 5 — Market Dashboard (6 features)
-Index cards (SPX, NASDAQ, DOW, NIFTY, SENSEX, RUT), sector heatmap, market breadth, VIX, currencies/commodities, economic calendar.
+- Background: #0E1117 (black)
+- Accent: #00FF41 (neon green)
+- Positive values: #00FF41
+- Negative values: #FF4444
+- Warnings: #FFD700
+- Font: Courier New monospace for all numbers
+- Every number right-aligned, every label left-aligned
+- Dark theme only — never light mode
 
 ---
 
-## 7. CURRENT PRIORITY — New stock detail page
+## 7. What is already built
 
-Build: pages/15_stock_detail.py
+### Phase 1 — Stock Research (app.py + pages 2-8)
+- app.py: Overview — top bar, company snapshot, key statistics, dividends
+- Page 2: Financial statements (IS, BS, CF) — annual/quarterly toggle
+- Page 3: Growth & margins charts — revenue, EPS, margin trends
+- Page 4: Valuation — ratio dashboard, DCF model, Piotroski F-Score
+- Page 5: Earnings — calendar, history table, surprise chart, estimates
+- Page 6: Analyst ratings — consensus, price targets, upgrades/downgrades
+- Page 7: Ownership — insider transactions (Finnhub+yfinance), institutional holders
+- Page 8: Peer comparison — sector peers, color-coded metrics table
 
-Do NOT modify existing pages. Build this as a new standalone page.
+### Phase 2 — SEPA Engine (pages 9-10)
+- Page 9: SEPA Analysis — full trend template, price chart with MAs, Weinstein stage, RS ranking, VCP detection, earnings acceleration, Code 33 detector, volume dry-up, buy trigger zone
+- Page 10: Screener — full US market scan via Alpaca (~6000-11000 stocks), SQLite cache, instant results, 6 quick scan presets, live WebSocket feed
 
-### Header
-- Ticker, exchange, sector
-- Company name
-- Current price (large)
-- Dollar change + % change (green if up, red if down)
-- After hours price if available
+### Phase 3 — News & Sentiment (page 11)
+- Finnhub + Alpaca news feed, SEC filings, price alerts
 
-### OHLC bar
-Single row: Open | High | Low | Prev Close | Volume | Avg Volume | 52W High | 52W Low
+### Phase 4 — Portfolio (page 12)
+- Holdings: AMD, AMZN, IREN, MELI, MSFT, NFLX, NVDA, QQQ, SOFI, V, XDIV.TO
+- Real-time P&L via Alpaca, optimizer, risk metrics, backtesting, position sizing
 
-### Price chart
-- Line chart from Alpaca historical data
-- Time range toggle: 1D / 1W / 1M / 3M / 6M / 1Y
-- Green line if up from start of range, red if down
-
-### Tab 1: Overview
-12 metric cards (4 columns x 3 rows):
-Market Cap, P/E TTM, P/E Forward, EPS TTM, Revenue TTM, Gross Margin, Net Margin, Beta, ROE, Debt/Equity, Dividend Yield, Float Shares
-Plus collapsible company description.
-
-### Tab 2: Financials
-- Period toggle: Quarterly / Annual
-- Chart type toggle: Bar / Line
-- Mini chart above each table
-
-Income Statement rows (ALL required — no shortcuts):
-Revenue, Revenue Growth YoY%, Gross Profit, Gross Margin%, Operating Income, Operating Margin%, EBITDA, Interest Expense, Net Income, Net Margin%, EPS Diluted, EPS Growth YoY%
-
-Balance Sheet rows:
-Cash & Equivalents, Total Current Assets, Total Assets, Total Current Liabilities, Long-term Debt, Total Liabilities, Total Equity
-
-Cash Flow rows:
-Operating Cash Flow, Capital Expenditure, Free Cash Flow, Share Buybacks, Dividends Paid
-
-Data source: SEC EDGAR primary, yfinance fallback.
-Color code: green for positive growth, red for negative.
-
-### Tab 3: Earnings
-4 insight cards: Last Reported Date, Next Earnings Estimate, EPS Beat Rate (last 8Q), Revenue Beat Rate (last 8Q)
-
-Surprise table columns:
-Quarter | EPS Est | EPS Actual | EPS Surprise% | Rev Est | Rev Actual | Rev Surprise%
-
-Beats = green, misses = red.
-Data source: Finnhub.
-
-### Tab 4: Code 33
-THIS IS THE MOST IMPORTANT TAB. Build with extreme accuracy.
-
-Status badge: Active (green) / At Risk (yellow) / Broken (red)
-
-STRICT MINERVINI CODE 33 RULES:
-- Requires YoY EPS growth RATE accelerating quarter over quarter (delta > 0)
-- Same for Revenue growth rate (YoY)
-- Same for Net Profit Margin (expanding each quarter)
-- ALL THREE must accelerate simultaneously
-- Must hold for 3 consecutive quarters
-
-Delta display:
-- Show growth rate for each of last 3 quarters
-- Show delta (pp change) between quarters
-- Green delta = accelerating
-- Yellow delta = positive but shrinking
-- Red delta = negative
-
-Status rules:
-- GREEN = all 3 metrics have positive AND increasing deltas
-- YELLOW = all 3 still positive but at least one delta is shrinking
-- RED = any delta turns negative (even if growth rate is still high number)
-
-CRITICAL: High growth but decelerating = RED not yellow.
-Example: EPS growth 80% -> 65% -> 28% = RED (Code 33 broken).
-This is the Dell Computer trap Minervini explicitly warns about.
-
-Show note: "Per Minervini, a shrinking delta signals institutional selling even at high growth rates. Dell peaked when EPS growth decelerated from 80% to 28%."
-
-### Tab 5: News
-Finnhub + Alpaca news. Show source, time ago, headline. Auto-refresh every 5 minutes.
+### Phase 5 — Market Dashboard (page 13)
+- Index cards, sector heatmap, market breadth, VIX, currencies/commodities
 
 ---
 
-## 8. SEPA rules (exact implementation)
+## 8. SEPA engine — exact rules
 
-### Trend Template (7-8 of 8 to qualify)
+### Trend Template (7+ of 8 = SEPA Qualified)
 1. Price > 150-day MA
 2. Price > 200-day MA
 3. 150-day MA > 200-day MA
 4. 200-day MA trending up >= 1 month
 5. 50-day MA > 150-day MA AND 200-day MA
 6. Price > 50-day MA
-7. Price >= 30% above 52-week low (NOT 25%)
+7. Price >= 30% above 52-week low (Minervini's rule — NOT 25%)
 8. Price within 25% of 52-week high
 
-### SEPA score caps
-- Earnings not fetched: max 80
+### SEPA composite score weights
+- Trend Template: 30%
+- RS Rank: 20%
+- Earnings Acceleration: 20%
+- VCP: 15%
+- Volume/Stage: 15%
+
+### Score caps
+- Earnings not fetched (fast scan): max 80 naturally
 - Earnings fetched + accelerating: up to 100
-- Earnings fetched + NOT accelerating: capped at 55
+- Earnings fetched + NOT accelerating: hard cap at 55
+
+### Weinstein Stage
+- Stage 2 (Advancing): price above rising MA150 → ideal
+- Stage 1 (Basing): price around flat MA150
+- Stage 3 (Topping): price above falling MA150 → caution
+- Stage 4 (Declining): price below falling MA150 → avoid
+
+### VCP (Volatility Contraction Pattern)
+- Valid VCP: ALL contractions strictly decreasing left to right
+- Invalid VCP: has 3+ contractions but not all progressive
+- Uses 10-day rolling windows over 60-day lookback
+
+### Code 33 (most important signal)
+Requires ALL THREE simultaneously for 3 consecutive quarters:
+- EPS YoY growth RATE accelerating (delta > 0)
+- Revenue YoY growth RATE accelerating (delta > 0)
+- Net Profit Margin expanding (delta > 0)
+
+Status rules:
+- GREEN = all 3 metrics have positive AND increasing deltas
+- YELLOW = all 3 still positive but at least one delta shrinking
+- RED = any delta turns negative
+
+CRITICAL: High growth but decelerating = RED (the Dell Computer trap).
+Example: EPS growth 80% → 65% → 28% = RED even though growth is positive.
 
 ---
 
-## 9. Known bugs fixed (do not reintroduce)
+## 9. Screener architecture
 
-| Bug | Fix |
-|-----|-----|
+- Phase 0: Load ~6000-11000 US symbols from Alpaca Trading API
+- Phase 1: Bulk real-time snapshots (1000 symbols/call, ~1s each)
+- Phase 2+3: Batch OHLCV bars (500/batch) + SEPA compute
+- Auto-enrich top 200 by SEPA score with yfinance earnings data
+- All results stored in SQLite (screener_cache.db)
+- Subsequent loads instant from SQLite (<3 sec)
+- India fallback: yfinance, Nifty 500 universe
+
+---
+
+## 10. Known bugs — DO NOT reintroduce
+
+| Bug | Fix applied |
+|-----|-------------|
 | BRK-B crash | Use BRK.B format, binary-split retry on 400 errors |
 | SEPA score too high | Cap at 55 when earnings not accelerating |
 | VCP false positives | Strict left-to-right decreasing validation |
-| Insider missing buy/sell | Map P=Purchase, S=Sale, A=Award, M=Exercise |
-| VISA showing N/A | Ticker map: VISA->V, FACEBOOK->META |
-| NaN screener crash | NaN-safe helpers on all numeric columns |
-| Screener only 50 stocks | Full Alpaca asset list (11,000+) |
+| Insider missing buy/sell | Map P=Purchase S=Sale A=Award M=Exercise F=Tax |
+| NaN screener crash | NaN-safe helpers (_safe_float, _safe_int, _safe_bool) on all numeric columns |
+| RS timezone mismatch | Strip tz from both Alpaca and yfinance before index intersection |
+| Screener only 50 stocks | Full Alpaca asset list via TradingClient |
 
 ---
 
-## 10. Portfolio positions
+## 11. Session rules for AI agent
 
-AMD, AMZN, IREN, MELI, MSFT, NFLX, NVDA, QQQ, SOFI, V, XDIV.TO
-Brokers: Questrade, Moomoo, Wealthsimple
-
----
-
-## 11. Session rules
-
-1. Always start: Read CLAUDE.md
-2. Batch all changes into one prompt
-3. End every prompt: Compile check all files. Restart streamlit.
-4. Select "Yes, and always allow" for pip and python
-5. Sonnet for routine work. Opus only for complex features.
-6. After every session: git add . && git commit -m "description" && git push
-7. Always end every prompt with: git add . && git commit -m "describe what changed" && git push
+1. Always read CLAUDE.md first before any code changes
+2. Batch all related changes into single operations
+3. After every change: verify no syntax errors
+4. NEVER modify .env
+5. NEVER break existing working pages
+6. Always end every session with:
+```
+   git add .
+   git commit -m "describe what changed"
+   git push
+```
+7. Use PowerShell `;` instead of `&&` for chaining commands on Windows
