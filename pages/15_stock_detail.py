@@ -160,49 +160,75 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
             return {end: float(v['val']) for end, v in recent_8}
     return {}
 
-# ── Code 33 data fetcher (yfinance only) ─────────────────────────────────────
+# ── Code 33 data fetcher (EDGAR primary, yfinance extended fallback) ──────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_code33_data(ticker: str) -> dict:
-    """
-    Fetch raw quarterly data for Code 33 using yfinance ONLY.
-    Needs ≥9 raw quarters to compute 5 YoY rates (index i vs i-4, for i=4..8).
-    Returns {'eps': [...], 'rev': [...], 'ni': [...], 'sources': {...}}
-    Values are floats oldest→newest (ascending). Empty list = insufficient data.
-    """
+    facts = get_edgar_facts(ticker)
     sources = {}
-    try:
-        import yfinance as yf
-        t = yf.Ticker(ticker)
-        q = t.quarterly_financials
-        st.write("DEBUG columns:", list(q.columns) if q is not None and not q.empty else "EMPTY")
-        st.write("DEBUG index:", list(q.index) if q is not None and not q.empty else "EMPTY")
-        if q is None or q.empty:
-            return {'eps': [], 'rev': [], 'ni': [], 'sources': sources}
-        q = q.sort_index(axis=1)  # oldest first
 
-        def _get_row(df, keys):
-            for k in keys:
-                if k in df.index:
-                    return [None if pd.isna(v) else float(v) for v in df.loc[k]]
-            return []
+    def _edgar_vals(concepts, quarterly=True, unit='USD'):
+        s = _edgar_series(facts, concepts, unit=unit, quarterly=quarterly)
+        return list(s.values()) if len(s) >= 5 else []
 
-        eps = _get_row(q, ['Diluted EPS', 'Basic EPS', 'Earnings Per Share'])
-        rev = _get_row(q, ['Total Revenue', 'Revenue'])
-        ni  = _get_row(q, ['Net Income', 'Net Income Common Stockholders'])
+    def _yf_vals_extended(keys):
+        """Fetch maximum available quarterly history from yfinance."""
+        try:
+            import yfinance as yf
+            t = yf.Ticker(ticker)
+            df = t.quarterly_income_stmt
+            if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
+                cols = sorted(df.columns)
+                for k in keys:
+                    if k in df.index:
+                        return [_sf(df.loc[k, c]) for c in cols]
+        except Exception:
+            pass
+        try:
+            df2 = get_financials(ticker).get('income_quarterly')
+            if df2 is not None and isinstance(df2, pd.DataFrame) and not df2.empty:
+                cols = sorted(df2.columns)
+                for k in keys:
+                    if k in df2.index:
+                        return [_sf(df2.loc[k, c]) for c in cols]
+        except Exception:
+            pass
+        return []
 
-        sources['eps'] = 'yfinance'
-        sources['rev'] = 'yfinance'
-        sources['ni']  = 'yfinance'
+    # EPS — EDGAR first with correct unit, then yfinance
+    eps = _edgar_vals(['EarningsPerShareDiluted'], unit='USD/shares')
+    if len(eps) < 5:
+        eps = _edgar_vals(['EarningsPerShareBasic'], unit='USD/shares')
+        if len(eps) >= 5:
+            sources['eps'] = 'EDGAR EarningsPerShareBasic'
+    else:
+        sources['eps'] = 'EDGAR EarningsPerShareDiluted'
+    if len(eps) < 5:
+        eps = _yf_vals_extended(['Diluted EPS', 'Basic EPS', 'Earnings Per Share'])
+        sources['eps'] = f'yfinance ({len(eps)}Q)'
 
-        # Need ≥9 raw quarters to produce ≥5 YoY rates (i=4..8)
-        if len(eps) < 9: eps = []
-        if len(rev) < 9: rev = []
-        if len(ni)  < 9: ni  = []
+    # Revenue — EDGAR first, then yfinance
+    rev = _edgar_vals(['Revenues'])
+    if len(rev) >= 5:
+        sources['rev'] = 'EDGAR Revenues'
+    else:
+        rev = _edgar_vals(['RevenueFromContractWithCustomerExcludingAssessedTax',
+                           'SalesRevenueNet',
+                           'RevenueFromContractWithCustomerIncludingAssessedTax'])
+        if len(rev) >= 5:
+            sources['rev'] = 'EDGAR RevenueFromContract'
+        else:
+            rev = _yf_vals_extended(['Total Revenue', 'Revenue', 'Operating Revenue'])
+            sources['rev'] = f'yfinance ({len(rev)}Q)'
 
-    except Exception:
-        eps = rev = ni = []
-        sources = {}
+    # Net Income — EDGAR first, then yfinance
+    ni = _edgar_vals(['NetIncomeLoss'])
+    if len(ni) >= 5:
+        sources['ni'] = 'EDGAR NetIncomeLoss'
+    else:
+        ni = _yf_vals_extended(['Net Income', 'Net Income Common Stockholders',
+                                 'Net Income From Continuing Operation Net Minority Interest'])
+        sources['ni'] = f'yfinance ({len(ni)}Q)'
 
     return {'eps': eps, 'rev': rev, 'ni': ni, 'sources': sources}
 
