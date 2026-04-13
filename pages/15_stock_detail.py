@@ -175,21 +175,19 @@ def get_code33_data(ticker: str) -> dict:
         import yfinance as yf
         t = yf.Ticker(ticker)
         q = t.quarterly_financials
-        if q is None or not isinstance(q, pd.DataFrame) or q.empty:
+        if q is None or q.empty:
             return {'eps': [], 'rev': [], 'ni': [], 'sources': sources}
+        q = q.sort_index(axis=1)  # oldest first
 
-        # Sort columns ascending: oldest leftmost
-        q = q[sorted(q.columns)]
-
-        def _extract(keys):
+        def _get_row(df, keys):
             for k in keys:
-                if k in q.index:
-                    return [_sf(q.loc[k, c]) for c in q.columns]
+                if k in df.index:
+                    return [None if pd.isna(v) else float(v) for v in df.loc[k]]
             return []
 
-        eps = _extract(['Diluted EPS', 'Basic EPS', 'Earnings Per Share'])
-        rev = _extract(['Total Revenue', 'Revenue'])
-        ni  = _extract(['Net Income', 'Net Income Common Stockholders'])
+        eps = _get_row(q, ['Diluted EPS', 'Basic EPS', 'Earnings Per Share'])
+        rev = _get_row(q, ['Total Revenue', 'Revenue'])
+        ni  = _get_row(q, ['Net Income', 'Net Income Common Stockholders'])
 
         sources['eps'] = 'yfinance'
         sources['rev'] = 'yfinance'
