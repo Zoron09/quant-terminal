@@ -1175,10 +1175,12 @@ with tab4:
     ni_labels  = c33.get('ni_labels', [])
 
     # ── Pre-profit detection ──────────────────────────────────────────────────
+    # Only flag as pre-profit if ALL of last 6 EPS quarters are negative.
+    # Companies with any positive EPS in last 6Q get evaluated normally.
     is_preprofit = False
-    if len(eps_raw) >= 3:
-        last3_eps = eps_raw[-3:]
-        if all(v is not None and v < 0 for v in last3_eps):
+    if len(eps_raw) >= 6:
+        last6_eps = eps_raw[-6:]
+        if all(v is not None and v < 0 for v in last6_eps):
             is_preprofit = True
 
     # ── Compute YoY growth rates ──────────────────────────────────────────────
