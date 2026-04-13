@@ -223,6 +223,7 @@ def get_code33_data(ticker: str) -> dict:
         usgaap = facts.get('facts', {}).get('us-gaap', {})
         cutoff_date = (datetime.utcnow() - timedelta(days=365 * 5)).date()
         recency_cutoff = (datetime.utcnow() - timedelta(days=548)).date()  # ~18 months
+        q4_rebuild_gap_days = 153  # ~5 months
 
         for concept in concepts:
             entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
@@ -267,6 +268,75 @@ def get_code33_data(ticker: str) -> dict:
                     cloned['_filed_dt'] = filed_dt
                     cloned['_val'] = float(val)
                     dedup_by_end[end_dt] = cloned
+
+            # If latest 10-Q is stale, derive missing Q4 from annual 10-K:
+            # Q4 = FY annual total - (Q1 + Q2 + Q3) for same fiscal year.
+            if dedup_by_end:
+                most_recent_q_end = max(dedup_by_end.keys())
+                if (datetime.utcnow().date() - most_recent_q_end).days > q4_rebuild_gap_days:
+                    annual_by_fy = {}
+                    for e in entries:
+                        if str(e.get('form', '')).strip().upper() != '10-K':
+                            continue
+                        end_str = str(e.get('end', '')).strip()
+                        start_str = str(e.get('start', '')).strip()
+                        filed_str = str(e.get('filed', '')).strip()
+                        fy = e.get('fy')
+                        val = _sf(e.get('val'))
+                        if not end_str or not start_str or fy is None or val is None:
+                            continue
+                        try:
+                            end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
+                            start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
+                        except Exception:
+                            continue
+                        if end_dt < cutoff_date:
+                            continue
+                        annual_days = (end_dt - start_dt).days
+                        if annual_days < 300 or annual_days > 390:
+                            continue
+                        try:
+                            filed_dt = datetime.strptime(filed_str, '%Y-%m-%d').date() if filed_str else None
+                        except Exception:
+                            filed_dt = None
+                        cur = annual_by_fy.get(fy)
+                        if cur is None or (filed_dt is not None and (cur.get('_filed_dt') is None or filed_dt > cur.get('_filed_dt'))):
+                            annual_by_fy[fy] = {
+                                '_end_dt': end_dt,
+                                '_filed_dt': filed_dt,
+                                '_val': float(val),
+                                'fy': fy,
+                            }
+
+                    q_by_fy = {}
+                    for item in dedup_by_end.values():
+                        fy = item.get('fy')
+                        fp = str(item.get('fp', '')).strip().upper()
+                        if fy is None or fp not in {'Q1', 'Q2', 'Q3', 'Q4'}:
+                            continue
+                        if fy not in q_by_fy:
+                            q_by_fy[fy] = {}
+                        q_by_fy[fy][fp] = item
+
+                    for fy, qmap in q_by_fy.items():
+                        if not all(k in qmap for k in ('Q1', 'Q2', 'Q3')) or 'Q4' in qmap:
+                            continue
+                        annual = annual_by_fy.get(fy)
+                        if not annual:
+                            continue
+                        q4_val = annual['_val'] - (qmap['Q1']['_val'] + qmap['Q2']['_val'] + qmap['Q3']['_val'])
+                        q4_end_dt = annual['_end_dt']
+                        existing = dedup_by_end.get(q4_end_dt)
+                        if existing is None or str(existing.get('fp', '')).strip().upper() != 'Q4':
+                            dedup_by_end[q4_end_dt] = {
+                                'fp': 'Q4',
+                                'fy': fy,
+                                'form': '10-K',
+                                'end': q4_end_dt.isoformat(),
+                                '_end_dt': q4_end_dt,
+                                '_filed_dt': annual.get('_filed_dt'),
+                                '_val': float(q4_val),
+                            }
 
             filtered_entries = sorted(dedup_by_end.values(), key=lambda x: x['_end_dt'], reverse=True)
             filtered_entries = filtered_entries[:8]
