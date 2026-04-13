@@ -159,257 +159,60 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
             return {end: float(v['val']) for end, v in recent_8}
     return {}
 
-# ── Code 33 data fetcher — US: EDGAR primary, Non-US: yfinance only ───────────
+# ── Code 33 data fetcher — yfinance only ──────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_code33_data(ticker: str) -> dict:
-    """Fetch EPS, Revenue, Net Income independently for Code 33 analysis.
-    US companies: EDGAR first (10-Q, ≤105 day duration), yfinance fallback.
-    Non-US companies: yfinance only.
-    Each metric fetched independently — no intersection required.
-    Need minimum 6 raw quarters per metric to compute YoY growth rates."""
+    """Fetch Code 33 data from yfinance only for all company types."""
     import yfinance as yf
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+    except Exception:
+        t = None
+        info = {}
 
-    # ── Detect if US-listed company (exchange-based) ───────────────────────────
-    US_EXCHANGES = {'NYQ', 'NMS', 'NGM', 'NCM', 'BTS', 'ASE'}
-    is_us = False
-    if '.' not in ticker:
-        try:
-            info = yf.Ticker(ticker.upper()).info or {}
-            exchange = str(info.get('exchange', '')).upper()
-            currency = str(info.get('currency', '')).upper()
-            is_us = exchange in US_EXCHANGES
-            if currency and currency != 'USD':
-                is_us = False
-        except Exception:
-            is_us = False
+    currency = str(info.get('currency', '')).upper()
+    is_foreign = bool(currency) and currency != 'USD'
 
-    sources = {}
-
-    # ── yfinance fetcher (independent per metric) ─────────────────────────────
-    def _yf_metric(keys):
-        """Return (values_list, labels_list, end_dates_list) from yfinance quarterly_income_stmt."""
-        try:
-            t = yf.Ticker(ticker)
-            df = t.quarterly_income_stmt
-            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-                return [], [], []
-            for k in keys:
-                if k in df.index:
-                    cols = sorted(df.columns, reverse=True)  # newest first
-                    vals, lbls, ends = [], [], []
-                    for c in cols:
-                        v = _sf(df.loc[k, c])
-                        if v is not None:
-                            dt = pd.Timestamp(c).date()
-                            qnum = (dt.month + 2) // 3
-                            vals.append(v)
-                            lbls.append(f"Q{qnum} {dt.year}")
-                            ends.append(dt.isoformat())
-                    # Reverse to chronological ascending (oldest first)
-                    vals.reverse(); lbls.reverse(); ends.reverse()
-                    return vals[:12], lbls[:12], ends[:12]  # cap at 12 quarters
-        except Exception:
-            pass
-        return [], [], []
-
-    # ── EDGAR fetcher (independent per metric) ────────────────────────────────
-    def _edgar_metric(concepts, unit='USD'):
-        """Return (values_list, labels_list, end_dates_list) from SEC EDGAR filings using strict quarterly filters."""
-        facts = get_edgar_facts(ticker)
-        if not facts:
+    def _yf_metric(df: pd.DataFrame, keys: list):
+        """Return (values_list, labels_list, end_dates_list), oldest->newest, capped to 8Q."""
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
             return [], [], []
-
-        usgaap = facts.get('facts', {}).get('us-gaap', {})
-        cutoff_date = (datetime.utcnow() - timedelta(days=365 * 5)).date()
-        recency_cutoff = (datetime.utcnow() - timedelta(days=548)).date()  # ~18 months
-        q4_rebuild_gap_days = 153  # ~5 months
-
-        for concept in concepts:
-            entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
-            if not entries:
-                continue
-
-            dedup_by_end = {}
-            for e in entries:
-                if str(e.get('form', '')).strip().upper() != '10-Q':
-                    continue
-
-                end_str = str(e.get('end', '')).strip()
-                start_str = str(e.get('start', '')).strip()
-                filed_str = str(e.get('filed', '')).strip()
-                val = _sf(e.get('val'))
-
-                if not end_str or not start_str or val is None:
-                    continue
-
-                try:
-                    end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
-                    start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
-                except Exception:
-                    continue
-
-                if end_dt < cutoff_date:
-                    continue
-
-                duration_days = (end_dt - start_dt).days
-                if duration_days < 80 or duration_days > 105:
-                    continue
-
-                try:
-                    filed_dt = datetime.strptime(filed_str, '%Y-%m-%d').date() if filed_str else None
-                except Exception:
-                    filed_dt = None
-
-                current = dedup_by_end.get(end_dt)
-                if current is None or (filed_dt is not None and (current.get('_filed_dt') is None or filed_dt > current.get('_filed_dt'))):
-                    cloned = dict(e)
-                    cloned['_end_dt'] = end_dt
-                    cloned['_filed_dt'] = filed_dt
-                    cloned['_val'] = float(val)
-                    dedup_by_end[end_dt] = cloned
-
-            # If latest 10-Q is stale, derive missing Q4 from annual 10-K:
-            # Q4 = FY annual total - (Q1 + Q2 + Q3) for same fiscal year.
-            if dedup_by_end:
-                most_recent_q_end = max(dedup_by_end.keys())
-                if (datetime.utcnow().date() - most_recent_q_end).days > q4_rebuild_gap_days:
-                    annual_by_fy = {}
-                    for e in entries:
-                        if str(e.get('form', '')).strip().upper() != '10-K':
-                            continue
-                        end_str = str(e.get('end', '')).strip()
-                        start_str = str(e.get('start', '')).strip()
-                        filed_str = str(e.get('filed', '')).strip()
-                        fy = e.get('fy')
-                        val = _sf(e.get('val'))
-                        if not end_str or not start_str or fy is None or val is None:
-                            continue
-                        try:
-                            end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
-                            start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
-                        except Exception:
-                            continue
-                        if end_dt < cutoff_date:
-                            continue
-                        annual_days = (end_dt - start_dt).days
-                        if annual_days < 300 or annual_days > 390:
-                            continue
-                        try:
-                            filed_dt = datetime.strptime(filed_str, '%Y-%m-%d').date() if filed_str else None
-                        except Exception:
-                            filed_dt = None
-                        cur = annual_by_fy.get(fy)
-                        if cur is None or (filed_dt is not None and (cur.get('_filed_dt') is None or filed_dt > cur.get('_filed_dt'))):
-                            annual_by_fy[fy] = {
-                                '_end_dt': end_dt,
-                                '_filed_dt': filed_dt,
-                                '_val': float(val),
-                                'fy': fy,
-                            }
-
-                    q_by_fy = {}
-                    for item in dedup_by_end.values():
-                        fy = item.get('fy')
-                        fp = str(item.get('fp', '')).strip().upper()
-                        if fy is None or fp not in {'Q1', 'Q2', 'Q3', 'Q4'}:
-                            continue
-                        if fy not in q_by_fy:
-                            q_by_fy[fy] = {}
-                        q_by_fy[fy][fp] = item
-
-                    for fy, qmap in q_by_fy.items():
-                        if not all(k in qmap for k in ('Q1', 'Q2', 'Q3')) or 'Q4' in qmap:
-                            continue
-                        annual = annual_by_fy.get(fy)
-                        if not annual:
-                            continue
-                        q4_val = annual['_val'] - (qmap['Q1']['_val'] + qmap['Q2']['_val'] + qmap['Q3']['_val'])
-                        q4_end_dt = annual['_end_dt']
-                        existing = dedup_by_end.get(q4_end_dt)
-                        if existing is None or str(existing.get('fp', '')).strip().upper() != 'Q4':
-                            dedup_by_end[q4_end_dt] = {
-                                'fp': 'Q4',
-                                'fy': fy,
-                                'form': '10-K',
-                                'end': q4_end_dt.isoformat(),
-                                '_end_dt': q4_end_dt,
-                                '_filed_dt': annual.get('_filed_dt'),
-                                '_val': float(q4_val),
-                            }
-
-            filtered_entries = sorted(dedup_by_end.values(), key=lambda x: x['_end_dt'], reverse=True)
-            filtered_entries = filtered_entries[:8]
-
-            if len(filtered_entries) < 6:
-                continue
-
-            # Reject stale concepts even if they have enough history.
-            most_recent_end = filtered_entries[0]['_end_dt']
-            if most_recent_end < recency_cutoff:
-                continue
-
-            filtered_entries.reverse()  # chronological ascending
-            vals = [item['_val'] for item in filtered_entries]
-            ends = [item['_end_dt'].isoformat() for item in filtered_entries]
-            lbls = [f"Q{(item['_end_dt'].month + 2) // 3} {item['_end_dt'].year}" for item in filtered_entries]
-            return vals, lbls, ends
-
+        for key in keys:
+            if key in df.index:
+                cols = sorted(df.columns, reverse=True)  # newest first
+                vals, lbls, ends = [], [], []
+                for c in cols:
+                    v = _sf(df.loc[key, c])
+                    if v is None:
+                        continue
+                    dt = pd.Timestamp(c).date()
+                    qnum = (dt.month + 2) // 3
+                    vals.append(float(v))
+                    lbls.append(f"Q{qnum} {dt.year}")
+                    ends.append(dt.isoformat())
+                vals = vals[:8]; lbls = lbls[:8]; ends = ends[:8]
+                vals.reverse(); lbls.reverse(); ends.reverse()  # oldest->newest
+                return vals, lbls, ends
         return [], [], []
 
-    # ── Fetch each metric independently ───────────────────────────────────────
-    eps_keys_yf    = ['Diluted EPS', 'Basic EPS', 'Earnings Per Share']
-    rev_keys_yf    = ['Total Revenue', 'Revenue', 'Operating Revenue']
-    ni_keys_yf     = ['Net Income Common Stockholders', 'Net Income',
-                      'Net Income From Continuing Operation Net Minority Interest']
-    eps_keys_edgar = ['EarningsPerShareDiluted', 'EarningsPerShareBasic']
-    rev_keys_edgar = ['RevenueFromContractWithCustomerExcludingAssessedTax',
-                      'RevenueFromContractWithCustomerIncludingAssessedTax',
-                      'Revenues',
-                      'SalesRevenueNet',
-                      'SalesRevenueGoodsNet',
-                      'RevenueFromContractWithCustomer']
-    ni_keys_edgar  = ['NetIncomeLoss',
-                      'NetIncome',
-                      'ProfitLoss',
-                      'NetIncomeLossAvailableToCommonStockholdersBasic']
+    try:
+        qdf = t.quarterly_income_stmt if t else pd.DataFrame()
+    except Exception:
+        qdf = pd.DataFrame()
 
-    if is_us:
-        # US: try EDGAR first, fallback to yfinance if <6 quarters
-        eps, eps_labels, eps_ends = _edgar_metric(eps_keys_edgar, unit='USD/shares')
-        if len(eps) >= 6:
-            sources['eps'] = 'EDGAR'
-        else:
-            eps, eps_labels, eps_ends = _yf_metric(eps_keys_yf)
-            sources['eps'] = 'yfinance'
+    rev, rev_labels, rev_ends = _yf_metric(qdf, ['Total Revenue', 'Revenue'])
+    ni, ni_labels, ni_ends = _yf_metric(qdf, ['Net Income', 'Net Income Common Stockholders'])
+    eps, eps_labels, eps_ends = _yf_metric(qdf, ['Diluted EPS', 'Basic EPS', 'Diluted Eps', 'Basic Eps'])
 
-        rev, rev_labels, rev_ends = _edgar_metric(rev_keys_edgar)
-        if len(rev) >= 6:
-            sources['rev'] = 'EDGAR'
-        else:
-            rev, rev_labels, rev_ends = _yf_metric(rev_keys_yf)
-            sources['rev'] = 'yfinance'
-
-        ni, ni_labels, ni_ends = _edgar_metric(ni_keys_edgar)
-        if len(ni) >= 6:
-            sources['ni'] = 'EDGAR'
-        else:
-            ni, ni_labels, ni_ends = _yf_metric(ni_keys_yf)
-            sources['ni'] = 'yfinance'
-    else:
-        # Non-US: yfinance only
-        eps, eps_labels, eps_ends = _yf_metric(eps_keys_yf)
-        sources['eps'] = 'yfinance'
-        rev, rev_labels, rev_ends = _yf_metric(rev_keys_yf)
-        sources['rev'] = 'yfinance'
-        ni, ni_labels, ni_ends = _yf_metric(ni_keys_yf)
-        sources['ni'] = 'yfinance'
+    sources = {'eps': 'yfinance', 'rev': 'yfinance', 'ni': 'yfinance'}
 
     return {
         'eps': eps, 'rev': rev, 'ni': ni,
         'eps_labels': eps_labels, 'rev_labels': rev_labels, 'ni_labels': ni_labels,
         'eps_end_dates': eps_ends, 'rev_end_dates': rev_ends, 'ni_end_dates': ni_ends,
-        'sources': sources, 'is_us': is_us,
+        'sources': sources, 'is_foreign': is_foreign, 'currency': currency,
     }
 
 # ── Financial statements (EDGAR primary, yfinance fallback) ───────────────────
@@ -824,8 +627,12 @@ def _c33_status(rates3: list) -> tuple:
     if len(rates3) < 3: return 'insufficient', None, None
     g1, g2, g3 = rates3[-3], rates3[-2], rates3[-1]
     d1, d2 = g2 - g1, g3 - g2
-    if d1 < 0 or d2 < 0: return 'red', d1, d2
-    if d2 >= d1:          return 'green', d1, d2
+    if d1 < 0 or d2 < 0:
+        return 'red', d1, d2
+    if g1 > 0 and g2 > 0 and g3 > 0 and d1 > 0 and d2 > 0:
+        if d2 < d1:
+            return 'yellow', d1, d2
+        return 'green', d1, d2
     return 'yellow', d1, d2
 
 def _dc(d):
@@ -1292,13 +1099,16 @@ with tab4:
         c33 = get_code33_data(ticker)
     except Exception:
         c33 = {'eps': [], 'rev': [], 'ni': [], 'sources': {},
-               'eps_labels': [], 'rev_labels': [], 'ni_labels': [], 'is_us': True}
+               'eps_labels': [], 'rev_labels': [], 'ni_labels': [],
+               'eps_end_dates': [], 'rev_end_dates': [], 'ni_end_dates': [],
+               'is_foreign': False, 'currency': ''}
 
     eps_raw = c33.get('eps', [])
     rev_raw = c33.get('rev', [])
     ni_raw  = c33.get('ni',  [])
     sources = c33.get('sources', {})
-    is_us   = c33.get('is_us', True)
+    is_foreign = c33.get('is_foreign', False)
+    c33_currency = c33.get('currency', '')
     eps_labels = c33.get('eps_labels', [])
     rev_labels = c33.get('rev_labels', [])
     ni_labels  = c33.get('ni_labels', [])
@@ -1308,31 +1118,38 @@ with tab4:
 
     # ── Pre-profit detection ──────────────────────────────────────────────────
     # Only flag as pre-profit if ALL of last 6 EPS quarters are negative.
-    # Companies with any positive EPS in last 6Q get evaluated normally.
     is_preprofit = False
     if len(eps_raw) >= 6:
         last6_eps = eps_raw[-6:]
         if all(v is not None and v < 0 for v in last6_eps):
             is_preprofit = True
 
-    # ── Compute YoY growth rates ──────────────────────────────────────────────
-    eps_yoy = _compute_yoy(eps_raw, eps_end_dates)
-    rev_yoy = _compute_yoy(rev_raw, rev_end_dates)
-    ni_yoy  = _compute_yoy(ni_raw, ni_end_dates)
+    eps3, eps_labels3, rev3, rev_labels3, ni3, ni_labels3 = [], [], [], [], [], []
+    eps_status = rev_status = ni_status = 'insufficient'
+    eps_d1 = eps_d2 = rev_d1 = rev_d2 = ni_d1 = ni_d2 = None
 
-    # Last 3 valid YoY points + matching labels (chronological)
-    eps3, eps_labels3 = _last3_valid_with_labels(eps_yoy, eps_labels)
-    rev3, rev_labels3 = _last3_valid_with_labels(rev_yoy, rev_labels)
-    ni3, ni_labels3   = _last3_valid_with_labels(ni_yoy, ni_labels)
-
-    eps_status, eps_d1, eps_d2 = _c33_status(eps3)
-    rev_status, rev_d1, rev_d2 = _c33_status(rev3)
-    ni_status, ni_d1, ni_d2 = _c33_status(ni3)
-
-    # ── Determine overall status ──────────────────────────────────────────────
-    if is_preprofit or not is_us:
+    # ── Determine overall status (pre-checks first) ───────────────────────────
+    if is_preprofit or is_foreign:
         overall = 'not_applicable'
     else:
+        # ── Compute YoY growth rates ──────────────────────────────────────────
+        eps_yoy = _compute_yoy(eps_raw, eps_end_dates)
+        rev_yoy = _compute_yoy(rev_raw, rev_end_dates)
+        ni_yoy  = _compute_yoy(ni_raw, ni_end_dates)
+
+        # Last 3 valid YoY points + matching labels (chronological)
+        eps3, eps_labels3 = _last3_valid_with_labels(eps_yoy, eps_labels)
+        rev3, rev_labels3 = _last3_valid_with_labels(rev_yoy, rev_labels)
+        ni3, ni_labels3   = _last3_valid_with_labels(ni_yoy, ni_labels)
+
+        # Need >=7 raw quarters per metric before status evaluation.
+        if len(eps_raw) >= 7:
+            eps_status, eps_d1, eps_d2 = _c33_status(eps3)
+        if len(rev_raw) >= 7:
+            rev_status, rev_d1, rev_d2 = _c33_status(rev3)
+        if len(ni_raw) >= 7:
+            ni_status, ni_d1, ni_d2 = _c33_status(ni3)
+
         statuses = [eps_status, rev_status, ni_status]
         if all(s == 'insufficient' for s in statuses):
             overall = 'insufficient'
@@ -1360,8 +1177,8 @@ with tab4:
     if overall == 'not_applicable':
         if is_preprofit:
             bn = f"Code 33 requires accelerating positive earnings. {ticker} is pre-profit."
-        elif not is_us:
-            bn = f"Code 33 uses SEC EDGAR data. {ticker} is a non-US company — limited data available."
+        elif is_foreign:
+            bn = f"Code 33 is USD-only. {ticker} reports in {c33_currency or 'non-USD'}."
 
     # Custom message for INSUFFICIENT
     if overall == 'insufficient':
@@ -1386,7 +1203,7 @@ with tab4:
         bg    = {'green': '#0d2818', 'yellow': '#1a1500', 'red': '#2a0d0d', 'insufficient': '#1a1a1a', 'not_applicable': '#1a1a1a'}[status]
 
         if len(rates3) < 3:
-            body = f'<div style="color:{GRAY};padding:12px;text-align:center;">Insufficient data<br><span style="font-size:10px">Need ≥7 raw quarters</span></div>'
+            body = f'<div style="color:{GRAY};padding:12px;text-align:center;">Insufficient data<br><span style="font-size:10px">Need >=7 raw quarters</span></div>'
         else:
             g1, g2, g3 = rates3[-3], rates3[-2], rates3[-1]
             def _qrow(label, rate, delta=None, is_first=False):
@@ -1434,13 +1251,13 @@ with tab4:
     eps_n = len([v for v in eps_raw if v is not None])
     rev_n = len([v for v in rev_raw if v is not None])
     ni_n  = len([v for v in ni_raw  if v is not None])
-    us_tag = 'US' if is_us else 'Non-US'
+    us_tag = 'USD' if not is_foreign else f'NON-USD ({c33_currency or "N/A"})'
     preprofit_tag = ' · PRE-PROFIT' if is_preprofit else ''
     st.caption(
         f"Data — EPS: {eps_n}Q ({sources.get('eps','—')}) · "
         f"Revenue: {rev_n}Q ({sources.get('rev','—')}) · "
         f"Net Income: {ni_n}Q ({sources.get('ni','—')}) · "
-        f"{us_tag}{preprofit_tag}"
+        f"{us_tag}{preprofit_tag} · Source: yfinance"
     )
 
     # ── Minervini note ────────────────────────────────────────────────────────
@@ -1466,10 +1283,10 @@ with tab4:
 3. **Net Income Growth YoY%** — rate must increase quarter-over-quarter (positive delta)
 
 **Status:**
-- <span style="color:{GREEN}">**ACTIVE**</span> — all 3: both deltas positive AND Δ2 ≥ Δ1
+- <span style="color:{GREEN}">**ACTIVE**</span> — all 3 rates positive and strictly increasing quarter-over-quarter
 - <span style="color:{YELLOW}">**AT RISK**</span> — all 3 rates positive, but at least one Δ is shrinking (Δ2 < Δ1, both still positive)
 - <span style="color:{RED}">**BROKEN**</span> — any metric has any negative delta
-- **NOT APPLICABLE** — pre-profit company (all recent EPS negative) or non-US company
+- **NOT APPLICABLE** — pre-profit company (all recent EPS negative) or non-USD company
 - EPS 80% → 65% → 28% = **BROKEN** (Δ=-15pp, Δ=-37pp — both negative)
 """, unsafe_allow_html=True)
 
