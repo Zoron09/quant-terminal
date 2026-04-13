@@ -703,19 +703,44 @@ def _render_fin_table(df: pd.DataFrame, rows_spec: list, title: str,
 
 # ── Code 33 computation ───────────────────────────────────────────────────────
 
-def _compute_yoy(vals: list) -> list:
-    """YoY[i] = (vals[i] - vals[i-4]) / |vals[i-4]| * 100 for i >= 4.
-    Handles negative-to-negative correctly: improving loss = positive growth.
-    Rate capped at ±500% to prevent outlier distortion.
-    Skips quarters where prior year value is None or 0."""
-    rates = [None] * min(4, len(vals))
-    for i in range(4, len(vals)):
-        c, p = vals[i], vals[i - 4]
-        if c is not None and p is not None and p != 0 and not _nan(c) and not _nan(p):
-            rate = (float(c) - float(p)) / abs(float(p)) * 100
-            rates.append(max(min(rate, 500.0), -500.0))
-        else:
-            rates.append(None)
+def _parse_quarter_label(label: str):
+    """Parse labels like 'Q1 2025' or 'FY2025Q1' into (quarter, year)."""
+    if not label:
+        return None
+    s = str(label).strip().upper()
+    m = re.search(r'Q([1-4])\s*[-/]?\s*(\d{4})', s)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.search(r'(\d{4}).*Q([1-4])', s)
+    if m:
+        return int(m.group(2)), int(m.group(1))
+    return None
+
+def _compute_yoy(vals: list, labels: list) -> list:
+    """Label-matched YoY: (current - prior_year_same_quarter) / abs(prior) * 100.
+    Uses quarter labels (Qx YYYY), caps at ±500, and returns None when unmatched."""
+    n = min(len(vals), len(labels))
+    rates = [None] * n
+    point_map = {}
+
+    for i in range(n):
+        v = vals[i]
+        qp = _parse_quarter_label(labels[i])
+        if qp is None or v is None or _nan(v):
+            continue
+        point_map[qp] = float(v)
+
+    for i in range(n):
+        c = vals[i]
+        qp = _parse_quarter_label(labels[i])
+        if qp is None or c is None or _nan(c):
+            continue
+        q, y = qp
+        prior = point_map.get((q, y - 1))
+        if prior is None or prior == 0:
+            continue
+        rate = (float(c) - float(prior)) / abs(float(prior)) * 100
+        rates[i] = max(min(rate, 500.0), -500.0)
     return rates
 
 def _margin_series(ni: list, rev: list) -> list:
@@ -731,6 +756,14 @@ def _last3_valid(lst: list) -> list:
     """Return last 3 non-None values from a list."""
     valid = [v for v in lst if v is not None]
     return valid[-3:] if len(valid) >= 3 else []
+
+def _last3_valid_with_labels(rates: list, labels: list) -> tuple:
+    """Return last 3 valid (rate, label) pairs."""
+    pairs = [(r, labels[i] if i < len(labels) else None) for i, r in enumerate(rates) if r is not None]
+    if len(pairs) < 3:
+        return [], []
+    last = pairs[-3:]
+    return [p[0] for p in last], [p[1] for p in last]
 
 def _c33_status(rates3: list) -> tuple:
     """(status, d1, d2) — green/yellow/red/insufficient."""
@@ -1226,32 +1259,24 @@ with tab4:
             is_preprofit = True
 
     # ── Compute YoY growth rates ──────────────────────────────────────────────
-    eps_yoy = _compute_yoy(eps_raw)
-    rev_yoy = _compute_yoy(rev_raw)
+    eps_yoy = _compute_yoy(eps_raw, eps_labels)
+    rev_yoy = _compute_yoy(rev_raw, rev_labels)
+    ni_yoy  = _compute_yoy(ni_raw, ni_labels)
 
-    # Margin: align NI and Rev to same length
-    mn = min(len(ni_raw), len(rev_raw))
-    mgn_vals = _margin_series(ni_raw[:mn], rev_raw[:mn])
-
-    # Get last 3 valid YoY values from each series
-    eps3 = _last3_valid(eps_yoy)
-    rev3 = _last3_valid(rev_yoy)
-    mgn3 = _last3_valid(mgn_vals)
-
-    # Labels: use the labels corresponding to the last 3 entries of the raw label list
-    eps_labels3 = eps_labels[-3:] if len(eps_labels) >= 3 else []
-    rev_labels3 = rev_labels[-3:] if len(rev_labels) >= 3 else []
-    ni_labels3  = ni_labels[-3:]  if len(ni_labels)  >= 3 else []
+    # Last 3 valid YoY points + matching labels (chronological)
+    eps3, eps_labels3 = _last3_valid_with_labels(eps_yoy, eps_labels)
+    rev3, rev_labels3 = _last3_valid_with_labels(rev_yoy, rev_labels)
+    ni3, ni_labels3   = _last3_valid_with_labels(ni_yoy, ni_labels)
 
     eps_status, eps_d1, eps_d2 = _c33_status(eps3)
     rev_status, rev_d1, rev_d2 = _c33_status(rev3)
-    mgn_status, mgn_d1, mgn_d2 = _c33_status(mgn3)
+    ni_status, ni_d1, ni_d2 = _c33_status(ni3)
 
     # ── Determine overall status ──────────────────────────────────────────────
     if is_preprofit or not is_us:
         overall = 'not_applicable'
     else:
-        statuses = [eps_status, rev_status, mgn_status]
+        statuses = [eps_status, rev_status, ni_status]
         if all(s == 'insufficient' for s in statuses):
             overall = 'insufficient'
         elif 'red' in statuses:
@@ -1341,12 +1366,12 @@ with tab4:
         card_col2.markdown(_c33_card("Revenue Growth YoY%", rev3, rev_d1, rev_d2,
                                      rev_status if rev_status != 'insufficient' else 'insufficient',
                                      labels3=rev_labels3, note="Revenue only — EPS negative"), unsafe_allow_html=True)
-        card_col3.markdown(_c33_card("Net Profit Margin", [], None, None, 'not_applicable',
+        card_col3.markdown(_c33_card("Net Income Growth YoY%", [], None, None, 'not_applicable',
                                      labels3=ni_labels3, note="Pre-profit — skipped"), unsafe_allow_html=True)
     else:
         card_col1.markdown(_c33_card("EPS Growth YoY%",     eps3, eps_d1, eps_d2, eps_status, labels3=eps_labels3), unsafe_allow_html=True)
         card_col2.markdown(_c33_card("Revenue Growth YoY%", rev3, rev_d1, rev_d2, rev_status, labels3=rev_labels3), unsafe_allow_html=True)
-        card_col3.markdown(_c33_card("Net Profit Margin",   mgn3, mgn_d1, mgn_d2, mgn_status, unit='%', labels3=ni_labels3), unsafe_allow_html=True)
+        card_col3.markdown(_c33_card("Net Income Growth YoY%", ni3, ni_d1, ni_d2, ni_status, labels3=ni_labels3), unsafe_allow_html=True)
 
     # ── Debug caption ──────────────────────────────────────────────────────────
     eps_n = len([v for v in eps_raw if v is not None])
@@ -1381,7 +1406,7 @@ with tab4:
 
 1. **EPS Growth YoY%** — rate must increase quarter-over-quarter (positive delta)
 2. **Revenue Growth YoY%** — rate must increase quarter-over-quarter (positive delta)
-3. **Net Profit Margin** — margin level must expand quarter-over-quarter (positive delta)
+3. **Net Income Growth YoY%** — rate must increase quarter-over-quarter (positive delta)
 
 **Status:**
 - <span style="color:{GREEN}">**ACTIVE**</span> — all 3: both deltas positive AND Δ2 ≥ Δ1
