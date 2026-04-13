@@ -10,7 +10,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import requests
-import re
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -189,34 +188,37 @@ def get_code33_data(ticker: str) -> dict:
 
     # ── yfinance fetcher (independent per metric) ─────────────────────────────
     def _yf_metric(keys):
-        """Return (values_list, labels_list) from yfinance quarterly_income_stmt."""
+        """Return (values_list, labels_list, end_dates_list) from yfinance quarterly_income_stmt."""
         try:
             t = yf.Ticker(ticker)
             df = t.quarterly_income_stmt
             if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-                return [], []
+                return [], [], []
             for k in keys:
                 if k in df.index:
                     cols = sorted(df.columns, reverse=True)  # newest first
-                    vals, lbls = [], []
+                    vals, lbls, ends = [], [], []
                     for c in cols:
                         v = _sf(df.loc[k, c])
                         if v is not None:
+                            dt = pd.Timestamp(c).date()
+                            qnum = (dt.month + 2) // 3
                             vals.append(v)
-                            lbls.append(f"Q{(c.month-1)//3+1} {c.year}")
+                            lbls.append(f"Q{qnum} {dt.year}")
+                            ends.append(dt.isoformat())
                     # Reverse to chronological ascending (oldest first)
-                    vals.reverse(); lbls.reverse()
-                    return vals[:12], lbls[:12]  # cap at 12 quarters
+                    vals.reverse(); lbls.reverse(); ends.reverse()
+                    return vals[:12], lbls[:12], ends[:12]  # cap at 12 quarters
         except Exception:
             pass
-        return [], []
+        return [], [], []
 
     # ── EDGAR fetcher (independent per metric) ────────────────────────────────
     def _edgar_metric(concepts, unit='USD'):
-        """Return (values_list, labels_list) from SEC EDGAR filings using strict quarterly filters."""
+        """Return (values_list, labels_list, end_dates_list) from SEC EDGAR filings using strict quarterly filters."""
         facts = get_edgar_facts(ticker)
         if not facts:
-            return [], []
+            return [], [], []
 
         usgaap = facts.get('facts', {}).get('us-gaap', {})
         cutoff_date = (datetime.utcnow() - timedelta(days=365 * 5)).date()
@@ -273,16 +275,11 @@ def get_code33_data(ticker: str) -> dict:
 
             filtered_entries.reverse()  # chronological ascending
             vals = [item['_val'] for item in filtered_entries]
-            lbls = []
-            for item in filtered_entries:
-                fp, fy = item.get('fp'), item.get('fy')
-                if fp and fy:
-                    lbls.append(f"{fp} {fy}")
-                else:
-                    lbls.append(str(item.get('end', ''))[:7])
-            return vals, lbls
+            ends = [item['_end_dt'].isoformat() for item in filtered_entries]
+            lbls = [f"Q{(item['_end_dt'].month + 2) // 3} {item['_end_dt'].year}" for item in filtered_entries]
+            return vals, lbls, ends
 
-        return [], []
+        return [], [], []
 
     # ── Fetch each metric independently ───────────────────────────────────────
     eps_keys_yf    = ['Diluted EPS', 'Basic EPS', 'Earnings Per Share']
@@ -303,38 +300,39 @@ def get_code33_data(ticker: str) -> dict:
 
     if is_us:
         # US: try EDGAR first, fallback to yfinance if <6 quarters
-        eps, eps_labels = _edgar_metric(eps_keys_edgar, unit='USD/shares')
+        eps, eps_labels, eps_ends = _edgar_metric(eps_keys_edgar, unit='USD/shares')
         if len(eps) >= 6:
             sources['eps'] = 'EDGAR'
         else:
-            eps, eps_labels = _yf_metric(eps_keys_yf)
+            eps, eps_labels, eps_ends = _yf_metric(eps_keys_yf)
             sources['eps'] = 'yfinance'
 
-        rev, rev_labels = _edgar_metric(rev_keys_edgar)
+        rev, rev_labels, rev_ends = _edgar_metric(rev_keys_edgar)
         if len(rev) >= 6:
             sources['rev'] = 'EDGAR'
         else:
-            rev, rev_labels = _yf_metric(rev_keys_yf)
+            rev, rev_labels, rev_ends = _yf_metric(rev_keys_yf)
             sources['rev'] = 'yfinance'
 
-        ni, ni_labels = _edgar_metric(ni_keys_edgar)
+        ni, ni_labels, ni_ends = _edgar_metric(ni_keys_edgar)
         if len(ni) >= 6:
             sources['ni'] = 'EDGAR'
         else:
-            ni, ni_labels = _yf_metric(ni_keys_yf)
+            ni, ni_labels, ni_ends = _yf_metric(ni_keys_yf)
             sources['ni'] = 'yfinance'
     else:
         # Non-US: yfinance only
-        eps, eps_labels = _yf_metric(eps_keys_yf)
+        eps, eps_labels, eps_ends = _yf_metric(eps_keys_yf)
         sources['eps'] = 'yfinance'
-        rev, rev_labels = _yf_metric(rev_keys_yf)
+        rev, rev_labels, rev_ends = _yf_metric(rev_keys_yf)
         sources['rev'] = 'yfinance'
-        ni, ni_labels = _yf_metric(ni_keys_yf)
+        ni, ni_labels, ni_ends = _yf_metric(ni_keys_yf)
         sources['ni'] = 'yfinance'
 
     return {
         'eps': eps, 'rev': rev, 'ni': ni,
         'eps_labels': eps_labels, 'rev_labels': rev_labels, 'ni_labels': ni_labels,
+        'eps_end_dates': eps_ends, 'rev_end_dates': rev_ends, 'ni_end_dates': ni_ends,
         'sources': sources, 'is_us': is_us,
     }
 
@@ -703,59 +701,39 @@ def _render_fin_table(df: pd.DataFrame, rows_spec: list, title: str,
 
 # ── Code 33 computation ───────────────────────────────────────────────────────
 
-def _parse_quarter_label(label: str):
-    """Parse labels like 'Q1 2025' or 'FY2025Q1' into (quarter, year)."""
-    if not label:
+def _parse_end_date(end_date: str):
+    try:
+        dt = datetime.strptime(str(end_date), '%Y-%m-%d').date()
+        q = (dt.month + 2) // 3
+        return dt.year, q
+    except Exception:
         return None
-    s = str(label).strip().upper()
-    m = re.search(r'Q([1-4])\s*[-/]?\s*(\d{4})', s)
-    if m:
-        return int(m.group(1)), int(m.group(2))
-    m = re.search(r'(\d{4}).*Q([1-4])', s)
-    if m:
-        return int(m.group(2)), int(m.group(1))
-    return None
 
-def _compute_yoy(vals: list, labels: list) -> list:
-    """Label-matched YoY: (current - prior_year_same_quarter) / abs(prior) * 100.
-    Uses quarter labels (Qx YYYY), caps at ±500, and returns None when unmatched."""
-    n = min(len(vals), len(labels))
+def _compute_yoy(vals: list, end_dates: list) -> list:
+    """Date-based YoY: match same quarter in prior year using end_date arithmetic."""
+    n = min(len(vals), len(end_dates))
     rates = [None] * n
     point_map = {}
 
     for i in range(n):
         v = vals[i]
-        qp = _parse_quarter_label(labels[i])
-        if qp is None or v is None or _nan(v):
+        yq = _parse_end_date(end_dates[i])
+        if yq is None or v is None or _nan(v):
             continue
-        point_map[qp] = float(v)
+        point_map[yq] = float(v)
 
     for i in range(n):
         c = vals[i]
-        qp = _parse_quarter_label(labels[i])
-        if qp is None or c is None or _nan(c):
+        yq = _parse_end_date(end_dates[i])
+        if yq is None or c is None or _nan(c):
             continue
-        q, y = qp
-        prior = point_map.get((q, y - 1))
+        year, quarter = yq
+        prior = point_map.get((year - 1, quarter))
         if prior is None or prior == 0:
             continue
         rate = (float(c) - float(prior)) / abs(float(prior)) * 100
         rates[i] = max(min(rate, 500.0), -500.0)
     return rates
-
-def _margin_series(ni: list, rev: list) -> list:
-    out = []
-    for n, r in zip(ni, rev):
-        if n is not None and r is not None and r != 0 and not _nan(n) and not _nan(r):
-            out.append(float(n) / float(r) * 100)
-        else:
-            out.append(None)
-    return out
-
-def _last3_valid(lst: list) -> list:
-    """Return last 3 non-None values from a list."""
-    valid = [v for v in lst if v is not None]
-    return valid[-3:] if len(valid) >= 3 else []
 
 def _last3_valid_with_labels(rates: list, labels: list) -> tuple:
     """Return last 3 valid (rate, label) pairs."""
@@ -1248,6 +1226,9 @@ with tab4:
     eps_labels = c33.get('eps_labels', [])
     rev_labels = c33.get('rev_labels', [])
     ni_labels  = c33.get('ni_labels', [])
+    eps_end_dates = c33.get('eps_end_dates', [])
+    rev_end_dates = c33.get('rev_end_dates', [])
+    ni_end_dates  = c33.get('ni_end_dates', [])
 
     # ── Pre-profit detection ──────────────────────────────────────────────────
     # Only flag as pre-profit if ALL of last 6 EPS quarters are negative.
@@ -1259,9 +1240,9 @@ with tab4:
             is_preprofit = True
 
     # ── Compute YoY growth rates ──────────────────────────────────────────────
-    eps_yoy = _compute_yoy(eps_raw, eps_labels)
-    rev_yoy = _compute_yoy(rev_raw, rev_labels)
-    ni_yoy  = _compute_yoy(ni_raw, ni_labels)
+    eps_yoy = _compute_yoy(eps_raw, eps_end_dates)
+    rev_yoy = _compute_yoy(rev_raw, rev_end_dates)
+    ni_yoy  = _compute_yoy(ni_raw, ni_end_dates)
 
     # Last 3 valid YoY points + matching labels (chronological)
     eps3, eps_labels3 = _last3_valid_with_labels(eps_yoy, eps_labels)
