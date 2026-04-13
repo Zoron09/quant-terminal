@@ -159,59 +159,111 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
             return {end: float(v['val']) for end, v in recent_8}
     return {}
 
-# ── Code 33 data fetcher — US: EDGAR primary, Non-US: yfinance only ───────────
+# ── Code 33 data fetcher — Finnhub primary, EDGAR fallback ────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_code33_data(ticker: str) -> dict:
     """Fetch EPS, Revenue, Net Income independently for Code 33 analysis.
-    US companies: EDGAR first (10-Q, ≤105 day duration), yfinance fallback.
-    Non-US companies: yfinance only.
-    Each metric fetched independently — no intersection required.
-    Need minimum 6 raw quarters per metric to compute YoY growth rates."""
+    Primary: Finnhub quarterly series.
+    Fallback per metric: EDGAR.
+    Need minimum 7 raw quarters per metric to compute 3 YoY rates."""
     import yfinance as yf
 
-    # ── Detect if US-listed company (exchange-based) ───────────────────────────
-    US_EXCHANGES = {'NYQ', 'NMS', 'NGM', 'NCM', 'BTS', 'ASE'}
-    is_us = False
-    if '.' not in ticker:
-        try:
-            info = yf.Ticker(ticker.upper()).info or {}
-            exchange = str(info.get('exchange', '')).upper()
-            currency = str(info.get('currency', '')).upper()
-            is_us = exchange in US_EXCHANGES
-            if currency and currency != 'USD':
-                is_us = False
-        except Exception:
+    # ── Pre-check currency (non-USD => NOT APPLICABLE downstream) ─────────────
+    is_us = True
+    try:
+        info = yf.Ticker(ticker.upper()).info or {}
+        currency = str(info.get('currency', '')).upper()
+        if currency and currency != 'USD':
             is_us = False
+    except Exception:
+        is_us = True
 
     sources = {}
 
-    # ── yfinance fetcher (independent per metric) ─────────────────────────────
-    def _yf_metric(keys):
-        """Return (values_list, labels_list, end_dates_list) from yfinance quarterly_income_stmt."""
+    # ── Finnhub helpers ────────────────────────────────────────────────────────
+    def _finnhub_quarterly_series(series_list) -> tuple[list, list, list]:
+        """Return (values, labels, end_dates) oldest->newest, capped 8 most recent."""
+        if not isinstance(series_list, list):
+            return [], [], []
+        rows = []
+        for item in series_list:
+            if not isinstance(item, dict):
+                continue
+            period = str(item.get('period', '')).strip()
+            val = _sf(item.get('v'))
+            if not period or val is None:
+                continue
+            try:
+                dt = datetime.strptime(period, '%Y-%m-%d').date()
+            except Exception:
+                continue
+            rows.append((dt, float(val)))
+        if not rows:
+            return [], [], []
+        rows = sorted(rows, key=lambda x: x[0], reverse=True)[:8]
+        rows.reverse()
+        vals = [v for _, v in rows]
+        ends = [d.isoformat() for d, _ in rows]
+        lbls = [f"Q{(d.month + 2)//3} {d.year}" for d, _ in rows]
+        return vals, lbls, ends
+
+    def _finnhub_fetch_eps_and_margin(symbol: str):
+        if not FINNHUB_KEY:
+            return [], [], [], [], [], []
         try:
-            t = yf.Ticker(ticker)
-            df = t.quarterly_income_stmt
-            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-                return [], [], []
-            for k in keys:
-                if k in df.index:
-                    cols = sorted(df.columns, reverse=True)  # newest first
-                    vals, lbls, ends = [], [], []
-                    for c in cols:
-                        v = _sf(df.loc[k, c])
-                        if v is not None:
-                            dt = pd.Timestamp(c).date()
-                            qnum = (dt.month + 2) // 3
-                            vals.append(v)
-                            lbls.append(f"Q{qnum} {dt.year}")
-                            ends.append(dt.isoformat())
-                    # Reverse to chronological ascending (oldest first)
-                    vals.reverse(); lbls.reverse(); ends.reverse()
-                    return vals[:12], lbls[:12], ends[:12]  # cap at 12 quarters
+            r = requests.get(
+                "https://finnhub.io/api/v1/stock/metric",
+                params={'symbol': symbol.upper(), 'metric': 'all', 'token': FINNHUB_KEY},
+                timeout=10
+            )
+            r.raise_for_status()
+            data = r.json() if isinstance(r.json(), dict) else {}
+            quarterly = ((data.get('series') or {}).get('quarterly') or {})
+            eps_vals, eps_lbls, eps_ends = _finnhub_quarterly_series(quarterly.get('eps'))
+            nm_vals, nm_lbls, nm_ends = _finnhub_quarterly_series(quarterly.get('netMargin'))
+            return eps_vals, eps_lbls, eps_ends, nm_vals, nm_lbls, nm_ends
         except Exception:
-            pass
-        return [], [], []
+            return [], [], [], [], [], []
+
+    def _finnhub_fetch_revenue(symbol: str):
+        if not FINNHUB_KEY:
+            return [], [], []
+        try:
+            r = requests.get(
+                "https://finnhub.io/api/v1/financials",
+                params={'symbol': symbol.upper(), 'statement': 'ic', 'freq': 'quarterly', 'token': FINNHUB_KEY},
+                timeout=10
+            )
+            r.raise_for_status()
+            data = r.json() if isinstance(r.json(), dict) else {}
+            fins = data.get('financials', [])
+            rows = []
+            if isinstance(fins, list):
+                for item in fins:
+                    if not isinstance(item, dict):
+                        continue
+                    period = str(item.get('period', '')).strip()
+                    val = _sf(item.get('revenue'))
+                    if val is None:
+                        val = _sf((item.get('report') or {}).get('revenue'))
+                    if not period or val is None:
+                        continue
+                    try:
+                        dt = datetime.strptime(period, '%Y-%m-%d').date()
+                    except Exception:
+                        continue
+                    rows.append((dt, float(val)))
+            if not rows:
+                return [], [], []
+            rows = sorted(rows, key=lambda x: x[0], reverse=True)[:8]
+            rows.reverse()
+            vals = [v for _, v in rows]
+            ends = [d.isoformat() for d, _ in rows]
+            lbls = [f"Q{(d.month + 2)//3} {d.year}" for d, _ in rows]
+            return vals, lbls, ends
+        except Exception:
+            return [], [], []
 
     # ── EDGAR fetcher (independent per metric) ────────────────────────────────
     def _edgar_metric(concepts, unit='USD'):
@@ -270,7 +322,7 @@ def get_code33_data(ticker: str) -> dict:
             filtered_entries = sorted(dedup_by_end.values(), key=lambda x: x['_end_dt'], reverse=True)
             filtered_entries = filtered_entries[:8]
 
-            if len(filtered_entries) < 6:
+            if len(filtered_entries) < 7:
                 continue
 
             filtered_entries.reverse()  # chronological ascending
@@ -282,10 +334,6 @@ def get_code33_data(ticker: str) -> dict:
         return [], [], []
 
     # ── Fetch each metric independently ───────────────────────────────────────
-    eps_keys_yf    = ['Diluted EPS', 'Basic EPS', 'Earnings Per Share']
-    rev_keys_yf    = ['Total Revenue', 'Revenue', 'Operating Revenue']
-    ni_keys_yf     = ['Net Income Common Stockholders', 'Net Income',
-                      'Net Income From Continuing Operation Net Minority Interest']
     eps_keys_edgar = ['EarningsPerShareDiluted', 'EarningsPerShareBasic']
     rev_keys_edgar = ['RevenueFromContractWithCustomerExcludingAssessedTax',
                       'RevenueFromContractWithCustomerIncludingAssessedTax',
@@ -298,36 +346,41 @@ def get_code33_data(ticker: str) -> dict:
                       'ProfitLoss',
                       'NetIncomeLossAvailableToCommonStockholdersBasic']
 
-    if is_us:
-        # US: try EDGAR first, fallback to yfinance if <6 quarters
+    eps_fh, eps_lbl_fh, eps_end_fh, nm_fh, nm_lbl_fh, nm_end_fh = _finnhub_fetch_eps_and_margin(ticker)
+    rev_fh, rev_lbl_fh, rev_end_fh = _finnhub_fetch_revenue(ticker)
+
+    # EPS: Finnhub primary -> EDGAR fallback per metric
+    if len(eps_fh) >= 7:
+        eps, eps_labels, eps_ends = eps_fh, eps_lbl_fh, eps_end_fh
+        sources['eps'] = 'Finnhub'
+    else:
         eps, eps_labels, eps_ends = _edgar_metric(eps_keys_edgar, unit='USD/shares')
-        if len(eps) >= 6:
+        if len(eps) >= 7:
             sources['eps'] = 'EDGAR'
         else:
-            eps, eps_labels, eps_ends = _yf_metric(eps_keys_yf)
-            sources['eps'] = 'yfinance'
+            sources['eps'] = 'EDGAR'
 
+    # Revenue: Finnhub primary -> EDGAR fallback per metric
+    if len(rev_fh) >= 7:
+        rev, rev_labels, rev_ends = rev_fh, rev_lbl_fh, rev_end_fh
+        sources['rev'] = 'Finnhub'
+    else:
         rev, rev_labels, rev_ends = _edgar_metric(rev_keys_edgar)
-        if len(rev) >= 6:
+        if len(rev) >= 7:
             sources['rev'] = 'EDGAR'
         else:
-            rev, rev_labels, rev_ends = _yf_metric(rev_keys_yf)
-            sources['rev'] = 'yfinance'
+            sources['rev'] = 'EDGAR'
 
+    # Net Income proxy for Code 33 metric #3 uses net margin if available.
+    if len(nm_fh) >= 7:
+        ni, ni_labels, ni_ends = nm_fh, nm_lbl_fh, nm_end_fh
+        sources['ni'] = 'Finnhub'
+    else:
         ni, ni_labels, ni_ends = _edgar_metric(ni_keys_edgar)
-        if len(ni) >= 6:
+        if len(ni) >= 7:
             sources['ni'] = 'EDGAR'
         else:
-            ni, ni_labels, ni_ends = _yf_metric(ni_keys_yf)
-            sources['ni'] = 'yfinance'
-    else:
-        # Non-US: yfinance only
-        eps, eps_labels, eps_ends = _yf_metric(eps_keys_yf)
-        sources['eps'] = 'yfinance'
-        rev, rev_labels, rev_ends = _yf_metric(rev_keys_yf)
-        sources['rev'] = 'yfinance'
-        ni, ni_labels, ni_ends = _yf_metric(ni_keys_yf)
-        sources['ni'] = 'yfinance'
+            sources['ni'] = 'EDGAR'
 
     return {
         'eps': eps, 'rev': rev, 'ni': ni,
