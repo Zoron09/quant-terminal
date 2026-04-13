@@ -160,140 +160,141 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
             return {end: float(v['val']) for end, v in recent_8}
     return {}
 
-# ── Code 33 data fetcher (EDGAR primary, yfinance extended fallback) ──────────
+# ── Code 33 data fetcher — US: EDGAR primary, Non-US: yfinance only ───────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_code33_data(ticker: str) -> dict:
-    facts = get_edgar_facts(ticker)
-    
-    eps_keys = ['Diluted EPS', 'Basic EPS', 'Earnings Per Share']
-    rev_keys = ['Total Revenue', 'Revenue', 'Operating Revenue']
-    ni_keys  = ['Net Income Common Stockholders', 'Net Income', 'Net Income From Continuing Operation Net Minority Interest']
-    
-    def _get_row(keys, df):
-        for k in keys:
-            if k in df.index: return k
-        return None
+    """Fetch EPS, Revenue, Net Income independently for Code 33 analysis.
+    US companies: EDGAR first (10-Q, ≤105 day duration), yfinance fallback.
+    Non-US companies: yfinance only.
+    Each metric fetched independently — no intersection required.
+    Need minimum 7 raw quarters per metric to compute 3 YoY growth rates."""
+    import yfinance as yf
 
-    def _get_yfinance_unified():
+    # ── Detect if US company ──────────────────────────────────────────────────
+    is_us = False
+    if '.' not in ticker:
         try:
-            import yfinance as yf
-            import pandas as pd
+            info = yf.Ticker(ticker).info
+            is_us = info.get('country', '') == 'United States'
+        except Exception:
+            is_us = True  # assume US if no dot and info fails
+
+    sources = {}
+
+    # ── yfinance fetcher (independent per metric) ─────────────────────────────
+    def _yf_metric(keys):
+        """Return (values_list, labels_list) from yfinance quarterly_income_stmt."""
+        try:
             t = yf.Ticker(ticker)
             df = t.quarterly_income_stmt
             if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-                return []
-            
-            e_row = _get_row(eps_keys, df)
-            r_row = _get_row(rev_keys, df)
-            n_row = _get_row(ni_keys, df)
-            
-            if not e_row or not r_row or not n_row:
-                return []
-                
-            cols = sorted(list(df.columns), reverse=True)
-            aligned = []
-            for c in cols:
-                e = _sf(df.loc[e_row, c])
-                r = _sf(df.loc[r_row, c])
-                n = _sf(df.loc[n_row, c])
-                if e is not None and r is not None and n is not None:
-                    if -50 <= e <= 500: # sanity bounds
-                        aligned.append((c, e, r, n, None))
-                        
-            aligned = aligned[:8]
-            aligned.reverse()
-            return aligned
+                return [], []
+            for k in keys:
+                if k in df.index:
+                    cols = sorted(df.columns, reverse=True)  # newest first
+                    vals, lbls = [], []
+                    for c in cols:
+                        v = _sf(df.loc[k, c])
+                        if v is not None:
+                            vals.append(v)
+                            lbls.append(f"Q{(c.month-1)//3+1} {c.year}")
+                    # Reverse to chronological ascending (oldest first)
+                    vals.reverse(); lbls.reverse()
+                    return vals[:12], lbls[:12]  # cap at 12 quarters
         except Exception:
             pass
-        return []
+        return [], []
 
-    def _get_edgar_unified():
-        if not facts: return []
+    # ── EDGAR fetcher (independent per metric) ────────────────────────────────
+    def _edgar_metric(concepts, unit='USD'):
+        """Return (values_list, labels_list) from SEC EDGAR 10-Q filings."""
+        facts = get_edgar_facts(ticker)
+        if not facts: return [], []
         usgaap = facts.get('facts', {}).get('us-gaap', {})
-        
-        def _get_entries(concepts, unit='USD'):
-            for concept in concepts:
-                entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
-                filtered = [e for e in entries if e.get('form') == '10-Q']
-                if len(filtered) >= 3: return filtered
-            return []
-            
-        eps_entries = _get_entries(['EarningsPerShareDiluted', 'EarningsPerShareBasic'], unit='USD/shares')
-        rev_entries = _get_entries(['Revenues', 'RevenueFromContractWithCustomerExcludingAssessedTax', 'SalesRevenueNet', 'RevenueFromContractWithCustomerIncludingAssessedTax'])
-        ni_entries  = _get_entries(['NetIncomeLoss'])
-        
-        if not eps_entries or not rev_entries or not ni_entries: return []
-            
-        def _build_dict(entries):
+        for concept in concepts:
+            entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
+            filtered = [e for e in entries if e.get('form') == '10-Q']
+            if len(filtered) < 3: continue
+
             by_end = {}
-            for e in entries:
+            for e in filtered:
                 end = e.get('end', '')
                 if not end: continue
+                # Duration check: ≤105 days to prevent YTD mixing
                 if 'start' in e:
                     try:
-                        from datetime import datetime
-                        if (datetime.strptime(end, '%Y-%m-%d') - datetime.strptime(e['start'], '%Y-%m-%d')).days > 105:
+                        from datetime import datetime as _dt
+                        if (_dt.strptime(end, '%Y-%m-%d') - _dt.strptime(e['start'], '%Y-%m-%d')).days > 105:
                             continue
-                    except Exception: pass
+                    except Exception:
+                        pass
                 if end not in by_end or e.get('filed', '') > by_end[end].get('filed', ''):
                     by_end[end] = e
-            return by_end
-            
-        eps_dict = _build_dict(eps_entries)
-        rev_dict = _build_dict(rev_entries)
-        ni_dict  = _build_dict(ni_entries)
-        
-        common_ends = set(eps_dict.keys()) & set(rev_dict.keys()) & set(ni_dict.keys())
-        sorted_ends = sorted(list(common_ends), reverse=True)[:8]
-        sorted_ends.reverse()
-        
-        import statistics
-        recent_e = [float(eps_dict[end]['val']) for end in sorted_ends]
-        valid_e = [abs(v) for v in recent_e if v is not None and v != 0]
-        med_e = statistics.median(valid_e) if valid_e else 1e-9
-        if med_e == 0: med_e = 1e-9
-        
-        aligned = []
-        for end in sorted_ends:
-            e = float(eps_dict[end]['val'])
-            r = float(rev_dict[end]['val'])
-            n = float(ni_dict[end]['val'])
-            
-            if abs(e) > 15 * med_e or abs(e) < med_e / 15:
-                continue # Skip anomalous quarter completely
-            if -50 <= e <= 500:
-                aligned.append((end, e, r, n, eps_dict[end]))
-                
-        return aligned
 
-    # MAIN LOGIC
-    source = 'yfinance'
-    aligned = _get_yfinance_unified()
-    
-    if len(aligned) < 5:
-        source = 'EDGAR'
-        aligned = _get_edgar_unified()
-        
-    if len(aligned) < 5:
-        return {'insufficient_count': len(aligned)}
-        
-    eps = [x[1] for x in aligned]
-    rev = [x[2] for x in aligned]
-    ni  = [x[3] for x in aligned]
-    
-    labels = []
-    if source == 'yfinance':
-        labels = [f"Q{(x[0].month-1)//3+1} {x[0].year}" for x in aligned]
+            if len(by_end) >= 3:
+                # Sort by end date descending, take 8 most recent
+                sorted_items = sorted(by_end.items(), key=lambda x: x[0], reverse=True)[:8]
+                sorted_items.reverse()  # back to chronological ascending
+                vals = [float(v['val']) for _, v in sorted_items]
+                lbls = []
+                for _, v in sorted_items:
+                    fp, fy = v.get('fp'), v.get('fy')
+                    if fp and fy:
+                        lbls.append(f"{fp} {fy}")
+                    else:
+                        lbls.append(str(v.get('end', ''))[:7])
+                return vals, lbls
+        return [], []
+
+    # ── Fetch each metric independently ───────────────────────────────────────
+    eps_keys_yf    = ['Diluted EPS', 'Basic EPS', 'Earnings Per Share']
+    rev_keys_yf    = ['Total Revenue', 'Revenue', 'Operating Revenue']
+    ni_keys_yf     = ['Net Income Common Stockholders', 'Net Income',
+                      'Net Income From Continuing Operation Net Minority Interest']
+    eps_keys_edgar = ['EarningsPerShareDiluted', 'EarningsPerShareBasic']
+    rev_keys_edgar = ['Revenues',
+                      'RevenueFromContractWithCustomerExcludingAssessedTax',
+                      'SalesRevenueNet',
+                      'RevenueFromContractWithCustomerIncludingAssessedTax']
+    ni_keys_edgar  = ['NetIncomeLoss']
+
+    if is_us:
+        # US: try EDGAR first, fallback to yfinance if <7 quarters
+        eps, eps_labels = _edgar_metric(eps_keys_edgar, unit='USD/shares')
+        if len(eps) >= 7:
+            sources['eps'] = 'EDGAR'
+        else:
+            eps, eps_labels = _yf_metric(eps_keys_yf)
+            sources['eps'] = 'yfinance'
+
+        rev, rev_labels = _edgar_metric(rev_keys_edgar)
+        if len(rev) >= 7:
+            sources['rev'] = 'EDGAR'
+        else:
+            rev, rev_labels = _yf_metric(rev_keys_yf)
+            sources['rev'] = 'yfinance'
+
+        ni, ni_labels = _edgar_metric(ni_keys_edgar)
+        if len(ni) >= 7:
+            sources['ni'] = 'EDGAR'
+        else:
+            ni, ni_labels = _yf_metric(ni_keys_yf)
+            sources['ni'] = 'yfinance'
     else:
-        for x in aligned:
-            v = x[4]
-            fp, fy = v.get('fp'), v.get('fy')
-            if fp and fy: labels.append(f"{fp} {fy}")
-            else: labels.append(str(x[0])[:7])
-            
-    sources = {'eps': source, 'rev': source, 'ni': source}
-    return {'eps': eps, 'rev': rev, 'ni': ni, 'sources': sources, 'labels': labels}
+        # Non-US: yfinance only
+        eps, eps_labels = _yf_metric(eps_keys_yf)
+        sources['eps'] = 'yfinance'
+        rev, rev_labels = _yf_metric(rev_keys_yf)
+        sources['rev'] = 'yfinance'
+        ni, ni_labels = _yf_metric(ni_keys_yf)
+        sources['ni'] = 'yfinance'
+
+    return {
+        'eps': eps, 'rev': rev, 'ni': ni,
+        'eps_labels': eps_labels, 'rev_labels': rev_labels, 'ni_labels': ni_labels,
+        'sources': sources, 'is_us': is_us,
+    }
 
 # ── Financial statements (EDGAR primary, yfinance fallback) ───────────────────
 
@@ -662,7 +663,9 @@ def _render_fin_table(df: pd.DataFrame, rows_spec: list, title: str,
 
 def _compute_yoy(vals: list) -> list:
     """YoY[i] = (vals[i] - vals[i-4]) / |vals[i-4]| * 100 for i >= 4.
-    Rate capped at ±500% to prevent outlier distortion."""
+    Handles negative-to-negative correctly: improving loss = positive growth.
+    Rate capped at ±500% to prevent outlier distortion.
+    Skips quarters where prior year value is None or 0."""
     rates = [None] * min(4, len(vals))
     for i in range(4, len(vals)):
         c, p = vals[i], vals[i - 4]
@@ -682,15 +685,15 @@ def _margin_series(ni: list, rev: list) -> list:
             out.append(None)
     return out
 
-def _last3(lst: list) -> list:
-    return lst[-3:] if len(lst) >= 3 else []
+def _last3_valid(lst: list) -> list:
+    """Return last 3 non-None values from a list."""
+    valid = [v for v in lst if v is not None]
+    return valid[-3:] if len(valid) >= 3 else []
 
 def _c33_status(rates3: list) -> tuple:
-    """(status, d1, d2) — GREEN/YELLOW/RED/insufficient."""
+    """(status, d1, d2) — green/yellow/red/insufficient."""
     if len(rates3) < 3: return 'insufficient', None, None
     g1, g2, g3 = rates3[-3], rates3[-2], rates3[-1]
-    if g1 is None or g2 is None or g3 is None:
-        return 'insufficient', None, None
     d1, d2 = g2 - g1, g3 - g2
     if d1 < 0 or d2 < 0: return 'red', d1, d2
     if d2 >= d1:          return 'green', d1, d2
@@ -1159,13 +1162,24 @@ with tab4:
     try:
         c33 = get_code33_data(ticker)
     except Exception:
-        c33 = {'eps': [], 'rev': [], 'ni': [], 'sources': {}}
+        c33 = {'eps': [], 'rev': [], 'ni': [], 'sources': {},
+               'eps_labels': [], 'rev_labels': [], 'ni_labels': [], 'is_us': True}
 
     eps_raw = c33.get('eps', [])
     rev_raw = c33.get('rev', [])
     ni_raw  = c33.get('ni',  [])
     sources = c33.get('sources', {})
-    eps_labels = c33.get('labels', [])
+    is_us   = c33.get('is_us', True)
+    eps_labels = c33.get('eps_labels', [])
+    rev_labels = c33.get('rev_labels', [])
+    ni_labels  = c33.get('ni_labels', [])
+
+    # ── Pre-profit detection ──────────────────────────────────────────────────
+    is_preprofit = False
+    if len(eps_raw) >= 3:
+        last3_eps = eps_raw[-3:]
+        if all(v is not None and v < 0 for v in last3_eps):
+            is_preprofit = True
 
     # ── Compute YoY growth rates ──────────────────────────────────────────────
     eps_yoy = _compute_yoy(eps_raw)
@@ -1175,31 +1189,59 @@ with tab4:
     mn = min(len(ni_raw), len(rev_raw))
     mgn_vals = _margin_series(ni_raw[:mn], rev_raw[:mn])
 
-    # Get last 3 valid values from each series
-    eps3 = _last3(eps_yoy)
-    rev3 = _last3(rev_yoy)
-    mgn3 = _last3(mgn_vals)
-    labels3 = _last3(eps_labels)
+    # Get last 3 valid YoY values from each series
+    eps3 = _last3_valid(eps_yoy)
+    rev3 = _last3_valid(rev_yoy)
+    mgn3 = _last3_valid(mgn_vals)
+
+    # Labels: use the labels corresponding to the last 3 entries of the raw label list
+    eps_labels3 = eps_labels[-3:] if len(eps_labels) >= 3 else []
+    rev_labels3 = rev_labels[-3:] if len(rev_labels) >= 3 else []
+    ni_labels3  = ni_labels[-3:]  if len(ni_labels)  >= 3 else []
 
     eps_status, eps_d1, eps_d2 = _c33_status(eps3)
     rev_status, rev_d1, rev_d2 = _c33_status(rev3)
     mgn_status, mgn_d1, mgn_d2 = _c33_status(mgn3)
 
-    statuses = [eps_status, rev_status, mgn_status]
-    if 'insufficient' in statuses:          overall = 'insufficient'
-    elif 'red'         in statuses:          overall = 'red'
-    elif 'yellow'      in statuses:          overall = 'yellow'
-    else:                                    overall = 'green'
+    # ── Determine overall status ──────────────────────────────────────────────
+    if is_preprofit or not is_us:
+        overall = 'not_applicable'
+    else:
+        statuses = [eps_status, rev_status, mgn_status]
+        if all(s == 'insufficient' for s in statuses):
+            overall = 'insufficient'
+        elif 'red' in statuses:
+            overall = 'red'
+        elif 'yellow' in statuses:
+            overall = 'yellow'
+        elif all(s == 'green' for s in statuses):
+            overall = 'green'
+        elif 'insufficient' in statuses:
+            overall = 'insufficient'
+        else:
+            overall = 'green'
 
     badge_map = {
-        'green':        (GREEN,  'ACTIVE',        'All 3 metrics accelerating for 3+ consecutive quarters'),
-        'yellow':       (YELLOW, 'AT RISK',       'Acceleration slowing — watch for deceleration'),
-        'red':          (RED,    'BROKEN',         'Deceleration detected — Code 33 is NOT active'),
-        'insufficient': (GRAY,   'INSUFFICIENT',  'Need ≥5 quarters of raw data to evaluate'),
+        'green':          (GREEN,  'ACTIVE',          'All 3 metrics accelerating for 3+ consecutive quarters'),
+        'yellow':         (YELLOW, 'AT RISK',         'Acceleration slowing — watch for deceleration'),
+        'red':            (RED,    'BROKEN',          'Deceleration detected — Code 33 is NOT active'),
+        'insufficient':   (GRAY,   'INSUFFICIENT',    'Need 7+ quarters of raw data per metric to evaluate'),
+        'not_applicable': (GRAY,   'NOT APPLICABLE',  ''),
     }
     bc, bl, bn = badge_map[overall]
-    if overall == 'insufficient' and c33.get('insufficient_count') is not None:
-        bn = f"Need 5+ quarters with complete EPS + Revenue + Net Income data. Only {c33['insufficient_count']} found."
+
+    # Custom messages for NOT APPLICABLE
+    if overall == 'not_applicable':
+        if is_preprofit:
+            bn = f"Code 33 requires accelerating positive earnings. {ticker} is pre-profit."
+        elif not is_us:
+            bn = f"Code 33 uses SEC EDGAR data. {ticker} is a non-US company — limited data available."
+
+    # Custom message for INSUFFICIENT
+    if overall == 'insufficient':
+        counts = [len(eps_raw), len(rev_raw), len(ni_raw)]
+        mn_count = min(counts)
+        bn = f"Need 7+ quarters with EPS, Revenue, and Net Income data. Best metric has {max(counts)}Q, worst has {mn_count}Q."
 
     st.markdown(f"""
 <div style="background:{BG};border:2px solid {bc};border-radius:8px;
@@ -1212,13 +1254,13 @@ with tab4:
 </div>""", unsafe_allow_html=True)
 
     # ── 3 side-by-side cards ──────────────────────────────────────────────────
-    def _c33_card(title, rates3, d1, d2, status, unit='%', labels3=None):
-        sc    = {'green': GREEN, 'yellow': YELLOW, 'red': RED, 'insufficient': GRAY}[status]
-        sl    = {'green': 'ACTIVE', 'yellow': 'AT RISK', 'red': 'BROKEN', 'insufficient': 'INSUFFICIENT'}[status]
-        bg    = {'green': '#0d2818', 'yellow': '#1a1500', 'red': '#2a0d0d', 'insufficient': '#1a1a1a'}[status]
+    def _c33_card(title, rates3, d1, d2, status, unit='%', labels3=None, note=None):
+        sc    = {'green': GREEN, 'yellow': YELLOW, 'red': RED, 'insufficient': GRAY, 'not_applicable': GRAY}[status]
+        sl    = {'green': 'ACTIVE', 'yellow': 'AT RISK', 'red': 'BROKEN', 'insufficient': 'INSUFFICIENT', 'not_applicable': 'N/A'}[status]
+        bg    = {'green': '#0d2818', 'yellow': '#1a1500', 'red': '#2a0d0d', 'insufficient': '#1a1a1a', 'not_applicable': '#1a1a1a'}[status]
 
         if len(rates3) < 3:
-            body = f'<div style="color:{GRAY};padding:12px;text-align:center;">Insufficient data<br><span style="font-size:10px">Need ≥5 raw quarters</span></div>'
+            body = f'<div style="color:{GRAY};padding:12px;text-align:center;">Insufficient data<br><span style="font-size:10px">Need ≥7 raw quarters</span></div>'
         else:
             g1, g2, g3 = rates3[-3], rates3[-2], rates3[-1]
             def _qrow(label, rate, delta=None, is_first=False):
@@ -1235,26 +1277,44 @@ with tab4:
                     _qrow(l2, g2, delta=d1) +
                     _qrow(l3, g3, delta=d2))
 
+        note_html = ''
+        if note:
+            note_html = f'<div style="color:{YELLOW};font-size:10px;text-align:center;margin-top:6px;font-style:italic">{note}</div>'
+
         return (f'<div style="background:{bg};border:2px solid {sc};border-radius:8px;padding:14px 16px;height:100%">'
                 f'<div style="color:#FFF;font-size:13px;font-weight:bold;margin-bottom:8px">{title}</div>'
-                f'{body}'
+                f'{body}{note_html}'
                 f'<div style="margin-top:10px;text-align:center;background:{sc}22;border-radius:4px;padding:4px">'
                 f'<span style="color:{sc};font-weight:bold;font-size:11px;font-family:monospace">{sl}</span></div>'
                 f'</div>')
 
     card_col1, card_col2, card_col3 = st.columns(3)
-    card_col1.markdown(_c33_card("EPS Growth YoY%",     eps3, eps_d1, eps_d2, eps_status, labels3=labels3), unsafe_allow_html=True)
-    card_col2.markdown(_c33_card("Revenue Growth YoY%", rev3, rev_d1, rev_d2, rev_status, labels3=labels3), unsafe_allow_html=True)
-    card_col3.markdown(_c33_card("Net Profit Margin",   mgn3, mgn_d1, mgn_d2, mgn_status, unit='%', labels3=labels3), unsafe_allow_html=True)
+
+    if is_preprofit:
+        # Pre-profit: EPS card shows N/A, Revenue card is informational, Margin N/A
+        card_col1.markdown(_c33_card("EPS Growth YoY%", [], None, None, 'not_applicable',
+                                     labels3=eps_labels3, note="EPS negative — skipped"), unsafe_allow_html=True)
+        card_col2.markdown(_c33_card("Revenue Growth YoY%", rev3, rev_d1, rev_d2,
+                                     rev_status if rev_status != 'insufficient' else 'insufficient',
+                                     labels3=rev_labels3, note="Revenue only — EPS negative"), unsafe_allow_html=True)
+        card_col3.markdown(_c33_card("Net Profit Margin", [], None, None, 'not_applicable',
+                                     labels3=ni_labels3, note="Pre-profit — skipped"), unsafe_allow_html=True)
+    else:
+        card_col1.markdown(_c33_card("EPS Growth YoY%",     eps3, eps_d1, eps_d2, eps_status, labels3=eps_labels3), unsafe_allow_html=True)
+        card_col2.markdown(_c33_card("Revenue Growth YoY%", rev3, rev_d1, rev_d2, rev_status, labels3=rev_labels3), unsafe_allow_html=True)
+        card_col3.markdown(_c33_card("Net Profit Margin",   mgn3, mgn_d1, mgn_d2, mgn_status, unit='%', labels3=ni_labels3), unsafe_allow_html=True)
 
     # ── Debug caption ──────────────────────────────────────────────────────────
     eps_n = len([v for v in eps_raw if v is not None])
     rev_n = len([v for v in rev_raw if v is not None])
     ni_n  = len([v for v in ni_raw  if v is not None])
+    us_tag = 'US' if is_us else 'Non-US'
+    preprofit_tag = ' · PRE-PROFIT' if is_preprofit else ''
     st.caption(
         f"Data — EPS: {eps_n}Q ({sources.get('eps','—')}) · "
         f"Revenue: {rev_n}Q ({sources.get('rev','—')}) · "
-        f"Net Income: {ni_n}Q ({sources.get('ni','—')})"
+        f"Net Income: {ni_n}Q ({sources.get('ni','—')}) · "
+        f"{us_tag}{preprofit_tag}"
     )
 
     # ── Minervini note ────────────────────────────────────────────────────────
@@ -1283,6 +1343,7 @@ with tab4:
 - <span style="color:{GREEN}">**ACTIVE**</span> — all 3: both deltas positive AND Δ2 ≥ Δ1
 - <span style="color:{YELLOW}">**AT RISK**</span> — all 3 rates positive, but at least one Δ is shrinking (Δ2 < Δ1, both still positive)
 - <span style="color:{RED}">**BROKEN**</span> — any metric has any negative delta
+- **NOT APPLICABLE** — pre-profit company (all recent EPS negative) or non-US company
 - EPS 80% → 65% → 28% = **BROKEN** (Δ=-15pp, Δ=-37pp — both negative)
 """, unsafe_allow_html=True)
 
