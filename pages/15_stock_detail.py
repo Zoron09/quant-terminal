@@ -189,12 +189,16 @@ def get_code33_data(ticker: str) -> dict:
         if isinstance(df, pd.DataFrame) and not df.empty:
             dfx = df.copy()
             dfx.columns = [pd.Timestamp(c).normalize() for c in dfx.columns]
+            # Deduplicate same-date columns inside each source first.
+            dfx = dfx.T.groupby(level=0).first().T
             frames.append(dfx)
 
     if frames:
-        qdf = pd.concat(frames, axis=1)
-        # Keep all unique quarter dates across both sources.
-        qdf = qdf.T.groupby(level=0).first().T
+        # Merge by row+date so we keep the union of both datasets.
+        qdf = frames[0]
+        for dfx in frames[1:]:
+            qdf = qdf.combine_first(dfx)
+        qdf = qdf.reindex(sorted(qdf.columns, reverse=True), axis=1).iloc[:, :8]
     else:
         qdf = pd.DataFrame()
 
