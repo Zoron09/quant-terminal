@@ -222,6 +222,7 @@ def get_code33_data(ticker: str) -> dict:
 
         usgaap = facts.get('facts', {}).get('us-gaap', {})
         cutoff_date = (datetime.utcnow() - timedelta(days=365 * 5)).date()
+        recency_cutoff = (datetime.utcnow() - timedelta(days=548)).date()  # ~18 months
 
         for concept in concepts:
             entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
@@ -271,6 +272,11 @@ def get_code33_data(ticker: str) -> dict:
             filtered_entries = filtered_entries[:8]
 
             if len(filtered_entries) < 6:
+                continue
+
+            # Reject stale concepts even if they have enough history.
+            most_recent_end = filtered_entries[0]['_end_dt']
+            if most_recent_end < recency_cutoff:
                 continue
 
             filtered_entries.reverse()  # chronological ascending
