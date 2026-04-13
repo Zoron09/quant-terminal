@@ -168,7 +168,7 @@ def get_code33_data(ticker: str) -> dict:
     sources = {}
 
     def _edgar_vals(concepts, quarterly=True, unit='USD'):
-        if not facts: return []
+        if not facts: return [], []
         usgaap = facts.get('facts', {}).get('us-gaap', {})
         for concept in concepts:
             entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
@@ -197,8 +197,10 @@ def get_code33_data(ticker: str) -> dict:
                     by_end[end] = e
             
             if len(by_end) >= 3:
-                sorted_items = sorted(by_end.items())
-                recent = [float(v['val']) for _, v in sorted_items[-8:]]
+                # Sort by end date descending and take 8 most recent
+                sorted_items = sorted(by_end.items(), key=lambda x: x[0], reverse=True)[:8]
+                sorted_items.reverse()
+                recent = [float(v['val']) for _, v in sorted_items]
                 
                 import statistics
                 valid = [abs(v) for v in recent if v is not None and v != 0]
@@ -223,8 +225,13 @@ def get_code33_data(ticker: str) -> dict:
                     continue
                     
                 if len(out) >= 5:
-                    return out
-        return []
+                    labels = []
+                    for _, v in sorted_items:
+                        fp, fy = v.get('fp'), v.get('fy')
+                        if fp and fy: labels.append(f"{fp} {fy}")
+                        else: labels.append(str(v.get('end', ''))[:7])
+                    return out, labels
+        return [], []
 
     def _yf_vals_extended(keys):
         """Fetch maximum available quarterly history from yfinance."""
@@ -236,7 +243,8 @@ def get_code33_data(ticker: str) -> dict:
                 cols = sorted(df.columns)
                 for k in keys:
                     if k in df.index:
-                        return [_sf(df.loc[k, c]) for c in cols]
+                        labels = [f"Q{(c.month-1)//3+1} {c.year}" for c in cols]
+                        return [_sf(df.loc[k, c]) for c in cols], labels
         except Exception:
             pass
         try:
@@ -245,55 +253,56 @@ def get_code33_data(ticker: str) -> dict:
                 cols = sorted(df2.columns)
                 for k in keys:
                     if k in df2.index:
-                        return [_sf(df2.loc[k, c]) for c in cols]
+                        labels = [str(c)[:7] for c in cols]
+                        return [_sf(df2.loc[k, c]) for c in cols], labels
         except Exception:
             pass
-        return []
+        return [], []
 
     # EPS — EDGAR first with correct unit, then yfinance
     def _eps_sanity(vals):
         if not vals: return False
         return all(v is None or -50 <= v <= 500 for v in vals)
 
-    eps = _edgar_vals(['EarningsPerShareDiluted'], unit='USD/shares')
+    eps, eps_labels = _edgar_vals(['EarningsPerShareDiluted'], unit='USD/shares')
     if not _eps_sanity(eps):
-        eps = []
+        eps, eps_labels = [], []
     if len(eps) < 5:
-        eps = _edgar_vals(['EarningsPerShareBasic'], unit='USD/shares')
+        eps, eps_labels = _edgar_vals(['EarningsPerShareBasic'], unit='USD/shares')
         if not _eps_sanity(eps):
-            eps = []
+            eps, eps_labels = [], []
         if len(eps) >= 5:
             sources['eps'] = 'EDGAR EarningsPerShareBasic'
     else:
         sources['eps'] = 'EDGAR EarningsPerShareDiluted'
     if len(eps) < 5:
-        eps = _yf_vals_extended(['Diluted EPS', 'Basic EPS', 'Earnings Per Share'])
+        eps, eps_labels = _yf_vals_extended(['Diluted EPS', 'Basic EPS', 'Earnings Per Share'])
         sources['eps'] = f'yfinance ({len(eps)}Q)'
 
     # Revenue — EDGAR first, then yfinance
-    rev = _edgar_vals(['Revenues'])
+    rev, _ = _edgar_vals(['Revenues'])
     if len(rev) >= 5:
         sources['rev'] = 'EDGAR Revenues'
     else:
-        rev = _edgar_vals(['RevenueFromContractWithCustomerExcludingAssessedTax',
+        rev, _ = _edgar_vals(['RevenueFromContractWithCustomerExcludingAssessedTax',
                            'SalesRevenueNet',
                            'RevenueFromContractWithCustomerIncludingAssessedTax'])
         if len(rev) >= 5:
             sources['rev'] = 'EDGAR RevenueFromContract'
         else:
-            rev = _yf_vals_extended(['Total Revenue', 'Revenue', 'Operating Revenue'])
+            rev, _ = _yf_vals_extended(['Total Revenue', 'Revenue', 'Operating Revenue'])
             sources['rev'] = f'yfinance ({len(rev)}Q)'
 
     # Net Income — EDGAR first, then yfinance
-    ni = _edgar_vals(['NetIncomeLoss'])
+    ni, _ = _edgar_vals(['NetIncomeLoss'])
     if len(ni) >= 5:
         sources['ni'] = 'EDGAR NetIncomeLoss'
     else:
-        ni = _yf_vals_extended(['Net Income', 'Net Income Common Stockholders',
+        ni, _ = _yf_vals_extended(['Net Income', 'Net Income Common Stockholders',
                                  'Net Income From Continuing Operation Net Minority Interest'])
         sources['ni'] = f'yfinance ({len(ni)}Q)'
 
-    return {'eps': eps, 'rev': rev, 'ni': ni, 'sources': sources}
+    return {'eps': eps, 'rev': rev, 'ni': ni, 'sources': sources, 'labels': eps_labels}
 
 # ── Financial statements (EDGAR primary, yfinance fallback) ───────────────────
 
@@ -683,13 +692,14 @@ def _margin_series(ni: list, rev: list) -> list:
     return out
 
 def _last3(lst: list) -> list:
-    valid = [v for v in lst if v is not None]
-    return valid[-3:] if len(valid) >= 3 else []
+    return lst[-3:] if len(lst) >= 3 else []
 
 def _c33_status(rates3: list) -> tuple:
     """(status, d1, d2) — GREEN/YELLOW/RED/insufficient."""
     if len(rates3) < 3: return 'insufficient', None, None
     g1, g2, g3 = rates3[-3], rates3[-2], rates3[-1]
+    if g1 is None or g2 is None or g3 is None:
+        return 'insufficient', None, None
     d1, d2 = g2 - g1, g3 - g2
     if d1 < 0 or d2 < 0: return 'red', d1, d2
     if d2 >= d1:          return 'green', d1, d2
@@ -1164,6 +1174,7 @@ with tab4:
     rev_raw = c33.get('rev', [])
     ni_raw  = c33.get('ni',  [])
     sources = c33.get('sources', {})
+    eps_labels = c33.get('labels', [])
 
     # ── Compute YoY growth rates ──────────────────────────────────────────────
     eps_yoy = _compute_yoy(eps_raw)
@@ -1177,6 +1188,7 @@ with tab4:
     eps3 = _last3(eps_yoy)
     rev3 = _last3(rev_yoy)
     mgn3 = _last3(mgn_vals)
+    labels3 = _last3(eps_labels)
 
     eps_status, eps_d1, eps_d2 = _c33_status(eps3)
     rev_status, rev_d1, rev_d2 = _c33_status(rev3)
@@ -1207,7 +1219,7 @@ with tab4:
 </div>""", unsafe_allow_html=True)
 
     # ── 3 side-by-side cards ──────────────────────────────────────────────────
-    def _c33_card(title, rates3, d1, d2, status, unit='%'):
+    def _c33_card(title, rates3, d1, d2, status, unit='%', labels3=None):
         sc    = {'green': GREEN, 'yellow': YELLOW, 'red': RED, 'insufficient': GRAY}[status]
         sl    = {'green': 'ACTIVE', 'yellow': 'AT RISK', 'red': 'BROKEN', 'insufficient': 'INSUFFICIENT'}[status]
         bg    = {'green': '#0d2818', 'yellow': '#1a1500', 'red': '#2a0d0d', 'insufficient': '#1a1a1a'}[status]
@@ -1223,9 +1235,12 @@ with tab4:
                         f'<div style="display:flex;justify-content:space-between;align-items:center">'
                         f'<span style="color:{GRAY};font-size:11px;font-family:monospace">{label}</span>'
                         f'<span style="font-size:14px">{_rate_badge(rate)}</span></div></div>')
-            body = (_qrow('Q-2 (oldest)', g1, is_first=True) +
-                    _qrow('Q-1',          g2, delta=d1) +
-                    _qrow('Q0 (latest)',  g3, delta=d2))
+            l1 = f'Q-2 ({labels3[0]})' if labels3 and len(labels3) > 0 else 'Q-2 (oldest)'
+            l2 = f'Q-1 ({labels3[1]})' if labels3 and len(labels3) > 1 else 'Q-1'
+            l3 = f'Q0 ({labels3[2]})' if labels3 and len(labels3) > 2 else 'Q0 (latest)'
+            body = (_qrow(l1, g1, is_first=True) +
+                    _qrow(l2, g2, delta=d1) +
+                    _qrow(l3, g3, delta=d2))
 
         return (f'<div style="background:{bg};border:2px solid {sc};border-radius:8px;padding:14px 16px;height:100%">'
                 f'<div style="color:#FFF;font-size:13px;font-weight:bold;margin-bottom:8px">{title}</div>'
@@ -1235,9 +1250,9 @@ with tab4:
                 f'</div>')
 
     card_col1, card_col2, card_col3 = st.columns(3)
-    card_col1.markdown(_c33_card("EPS Growth YoY%",     eps3, eps_d1, eps_d2, eps_status), unsafe_allow_html=True)
-    card_col2.markdown(_c33_card("Revenue Growth YoY%", rev3, rev_d1, rev_d2, rev_status), unsafe_allow_html=True)
-    card_col3.markdown(_c33_card("Net Profit Margin",   mgn3, mgn_d1, mgn_d2, mgn_status, unit='%'), unsafe_allow_html=True)
+    card_col1.markdown(_c33_card("EPS Growth YoY%",     eps3, eps_d1, eps_d2, eps_status, labels3=labels3), unsafe_allow_html=True)
+    card_col2.markdown(_c33_card("Revenue Growth YoY%", rev3, rev_d1, rev_d2, rev_status, labels3=labels3), unsafe_allow_html=True)
+    card_col3.markdown(_c33_card("Net Profit Margin",   mgn3, mgn_d1, mgn_d2, mgn_status, unit='%', labels3=labels3), unsafe_allow_html=True)
 
     # ── Debug caption ──────────────────────────────────────────────────────────
     eps_n = len([v for v in eps_raw if v is not None])
