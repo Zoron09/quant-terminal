@@ -242,7 +242,7 @@ def get_code33_data(ticker: str) -> dict:
             r = requests.get(
                 "https://financialmodelingprep.com/stable/income-statement",
                 params={'symbol': symbol.upper(), 'period': 'quarter',
-                        'limit': 8, 'apikey': FMP_API_KEY},
+                        'limit': 5, 'apikey': FMP_API_KEY},
                 timeout=10
             )
             r.raise_for_status()
@@ -306,6 +306,30 @@ def get_code33_data(ticker: str) -> dict:
             return (datetime.utcnow().date() - most_recent).days <= max_days
         except Exception:
             return False
+
+    def _merge_fmp_edgar(fmp_v, fmp_l, fmp_e, ed_v, ed_l, ed_e):
+        """Merge FMP primary with EDGAR fallback for remaining non-overlapping 45-day slots."""
+        combined = []
+        for v, l, e in zip(fmp_v, fmp_l, fmp_e):
+            try:
+                dt = datetime.strptime(e, '%Y-%m-%d').date()
+                combined.append({'v': v, 'l': l, 'e': dt, 'src': 'FMP'})
+            except Exception:
+                pass
+        
+        for v, l, e in zip(ed_v, ed_l, ed_e):
+            try:
+                dt = datetime.strptime(e, '%Y-%m-%d').date()
+                if not any(abs((c['e'] - dt).days) <= 45 for c in combined):
+                    combined.append({'v': v, 'l': l, 'e': dt, 'src': 'EDGAR'})
+            except Exception:
+                pass
+                
+        combined = sorted(combined, key=lambda x: x['e'], reverse=True)[:8]
+        combined.reverse()
+        
+        src_label = 'FMP+EDGAR' if any(c['src'] == 'FMP' for c in combined) and any(c['src'] == 'EDGAR' for c in combined) else ('FMP' if any(c['src'] == 'FMP' for c in combined) else 'EDGAR')
+        return [c['v'] for c in combined], [c['l'] for c in combined], [c['e'].isoformat() for c in combined], src_label
 
     # _finnhub_is_recent replaced by _is_recent above (shared by FMP + Finnhub)
 
@@ -409,37 +433,37 @@ def get_code33_data(ticker: str) -> dict:
     fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_ni, fmp_ni_lbl, fmp_ni_end, fmp_margin, fmp_margin_lbl, fmp_margin_end = _fmp_fetch_revenue_ni(ticker)
 
     # Revenue
-    if len(fmp_rev) >= 7 and _is_recent(fmp_rev_end):
-        rev, rev_labels, rev_ends = fmp_rev, fmp_rev_lbl, fmp_rev_end
-        sources['rev'] = 'FMP'
+    edgar_rev, edgar_rev_lbl, edgar_rev_end = _edgar_metric(rev_keys_edgar)
+    rev_merged, rev_lbl_merged, rev_end_merged, rev_src = _merge_fmp_edgar(fmp_rev, fmp_rev_lbl, fmp_rev_end, edgar_rev, edgar_rev_lbl, edgar_rev_end)
+    
+    if len(rev_merged) >= 7 and _is_recent(rev_end_merged):
+        rev, rev_labels, rev_ends = rev_merged, rev_lbl_merged, rev_end_merged
+        sources['rev'] = rev_src
     else:
-        rev, rev_labels, rev_ends = _edgar_metric(rev_keys_edgar)
-        if len(rev) >= 7:
-            sources['rev'] = 'EDGAR'
-        else:
-            sources['rev'] = 'EDGAR'
+        rev, rev_labels, rev_ends = edgar_rev, edgar_rev_lbl, edgar_rev_end
+        sources['rev'] = 'EDGAR'
 
     # Net Margin (computed as netIncome / revenue * 100 per quarter)
-    if len(fmp_margin) >= 7 and _is_recent(fmp_margin_end):
-        ni, ni_labels, ni_ends = fmp_margin, fmp_margin_lbl, fmp_margin_end
-        sources['ni'] = 'FMP'
+    edgar_ni, edgar_ni_lbl, edgar_ni_end = [], [], []
+    ni_abs, ni_labels_raw, ni_ends_raw = _edgar_metric(ni_keys_edgar)
+    if len(ni_abs) > 0:
+        rev_for_margin, _, rev_margin_ends = _edgar_metric(rev_keys_edgar)
+        rev_lookup = dict(zip(rev_margin_ends, rev_for_margin))
+        for i, end in enumerate(ni_ends_raw):
+            rev_val = rev_lookup.get(end)
+            if rev_val is not None and rev_val != 0:
+                edgar_ni.append(ni_abs[i] / rev_val * 100)
+                edgar_ni_lbl.append(ni_labels_raw[i])
+                edgar_ni_end.append(end)
+
+    ni_merged, ni_lbl_merged, ni_end_merged, ni_src = _merge_fmp_edgar(fmp_margin, fmp_margin_lbl, fmp_margin_end, edgar_ni, edgar_ni_lbl, edgar_ni_end)
+    
+    if len(ni_merged) >= 7 and _is_recent(ni_end_merged):
+        ni, ni_labels, ni_ends = ni_merged, ni_lbl_merged, ni_end_merged
+        sources['ni'] = ni_src
     else:
-        # EDGAR fallback: NetIncomeLoss / Revenue for same quarter end dates
-        ni_abs, ni_labels_raw, ni_ends_raw = _edgar_metric(ni_keys_edgar)
-        if len(ni_abs) >= 7:
-            rev_for_margin, _, rev_margin_ends = _edgar_metric(rev_keys_edgar)
-            rev_lookup = dict(zip(rev_margin_ends, rev_for_margin))
-            ni, ni_labels, ni_ends = [], [], []
-            for i, end in enumerate(ni_ends_raw):
-                rev_val = rev_lookup.get(end)
-                if rev_val is not None and rev_val != 0:
-                    ni.append(ni_abs[i] / rev_val * 100)
-                    ni_labels.append(ni_labels_raw[i])
-                    ni_ends.append(end)
-            sources['ni'] = 'EDGAR'
-        else:
-            ni, ni_labels, ni_ends = [], [], []
-            sources['ni'] = 'EDGAR'
+        ni, ni_labels, ni_ends = edgar_ni, edgar_ni_lbl, edgar_ni_end
+        sources['ni'] = 'EDGAR'
 
     return {
         'eps': eps, 'rev': rev, 'ni': ni,
