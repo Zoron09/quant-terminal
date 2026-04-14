@@ -553,6 +553,10 @@ def get_code33_data(ticker: str) -> dict:
             eps_labels.append(q4_lbl)
             eps_ends.append(q4_end)
             sources['eps'] = 'EDGAR (Q4 derived)'
+            # Re-sort eps, eps_labels, eps_ends together by date
+            if eps_ends:
+                zipped = sorted(zip(eps_ends, eps, eps_labels), key=lambda x: x[0])
+                eps_ends, eps, eps_labels = [list(x) for x in zip(*zipped)]
 
     if rev_labels and eps_labels and rev_labels[-1] != eps_labels[-1]:
         q4_val, q4_end, q4_lbl = _derive_q4(rev_keys_edgar, unit='USD')
@@ -561,6 +565,9 @@ def get_code33_data(ticker: str) -> dict:
             rev_labels.append(q4_lbl)
             rev_ends.append(q4_end)
             sources['rev'] = 'EDGAR (Q4 derived)'
+            if rev_ends:
+                zipped = sorted(zip(rev_ends, rev, rev_labels), key=lambda x: x[0])
+                rev_ends, rev, rev_labels = [list(x) for x in zip(*zipped)]
 
     if ni_labels and rev_labels and ni_labels[-1] != rev_labels[-1] and sources.get('rev') == 'EDGAR (Q4 derived)':
         q4_ni_val, q4_ni_end, q4_ni_lbl = _derive_q4(ni_keys_edgar, unit='USD')
