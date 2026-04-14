@@ -231,6 +231,24 @@ def get_code33_data(ticker: str) -> dict:
         except Exception:
             return [], [], []
 
+    def _finnhub_fetch_revenue_per_share(symbol: str):
+        """Fetch revenuePerShare from Finnhub /stock/metric quarterly series.
+        Returns (vals, lbls, ends)."""
+        if not FINNHUB_KEY:
+            return [], [], []
+        try:
+            r = requests.get(
+                "https://finnhub.io/api/v1/stock/metric",
+                params={'symbol': symbol.upper(), 'metric': 'all', 'token': FINNHUB_KEY},
+                timeout=10
+            )
+            r.raise_for_status()
+            data = r.json() if isinstance(r.json(), dict) else {}
+            quarterly = ((data.get('series') or {}).get('quarterly') or {})
+            return _finnhub_quarterly_series(quarterly.get('revenuePerShare'))
+        except Exception:
+            return [], [], []
+
     def _fmp_fetch_revenue_ni(symbol: str):
         """Fetch quarterly revenue + net income from FMP income-statement endpoint.
         Covers ALL fiscal calendars including Q4 from 10-K filings.
@@ -448,16 +466,16 @@ def get_code33_data(ticker: str) -> dict:
         else:
             sources['eps'] = 'insufficient'
 
-    # ── Revenue + Net Margin: FMP primary -> EDGAR fallback ───────────────────
+    # ── Revenue + Net Margin: Finnhub/FMP primary -> EDGAR fallback ───────────
     fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_ni, fmp_ni_lbl, fmp_ni_end, fmp_margin, fmp_margin_lbl, fmp_margin_end = _fmp_fetch_revenue_ni(ticker)
 
-    # Revenue
+    # Revenue (use Finnhub revenuePerShare as proxy)
+    fh_rev, fh_rev_lbl, fh_rev_end = _finnhub_fetch_revenue_per_share(ticker)
     edgar_rev, edgar_rev_lbl, edgar_rev_end = _edgar_metric(rev_keys_edgar)
-    rev_merged, rev_lbl_merged, rev_end_merged, rev_src = _merge_fmp_edgar(fmp_rev, fmp_rev_lbl, fmp_rev_end, edgar_rev, edgar_rev_lbl, edgar_rev_end)
-    
-    if len(rev_merged) >= 7 and _is_recent(rev_end_merged):
-        rev, rev_labels, rev_ends = rev_merged, rev_lbl_merged, rev_end_merged
-        sources['rev'] = rev_src
+
+    if len(fh_rev) >= 7 and _is_recent(fh_rev_end):
+        rev, rev_labels, rev_ends = fh_rev, fh_rev_lbl, fh_rev_end
+        sources['rev'] = 'Finnhub'
     else:
         rev, rev_labels, rev_ends = edgar_rev, edgar_rev_lbl, edgar_rev_end
         sources['rev'] = 'EDGAR'
