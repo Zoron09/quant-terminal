@@ -260,7 +260,7 @@ def get_code33_data(ticker: str) -> dict:
                 date_str = str(item.get('date', '')).strip()
                 revenue = _sf(item.get('revenue'))
                 net_income = _sf(item.get('netIncome'))
-                eps_val = _sf(item.get('epsdiluted')) or _sf(item.get('eps'))
+                eps_val = _sf(item.get('epsDiluted')) or _sf(item.get('eps'))
                 if not date_str or revenue is None:
                     continue
                 try:
