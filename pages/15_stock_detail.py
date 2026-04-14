@@ -421,19 +421,19 @@ def get_code33_data(ticker: str) -> dict:
         if not vals: return False
         return all(v is None or -500 <= v <= 5000 for v in vals)
 
-    # ── EPS: Finnhub primary -> EDGAR fallback ─────────────────────────────────
-    eps_fh, eps_lbl_fh, eps_end_fh = _finnhub_fetch_eps(ticker)
-    if len(eps_fh) >= 7 and _is_recent(eps_end_fh) and _eps_sanity(eps_fh):
-        eps, eps_labels, eps_ends = eps_fh, eps_lbl_fh, eps_end_fh
-        sources['eps'] = 'Finnhub'
+    # ── EPS: EDGAR primary -> Finnhub fallback ─────────────────────────────────
+    eps, eps_labels, eps_ends = _edgar_metric(eps_keys_edgar, unit='USD/shares')
+    if not _eps_sanity(eps):
+        eps, eps_labels, eps_ends = [], [], []
+    if len(eps) >= 7:
+        sources['eps'] = 'EDGAR'
     else:
-        eps, eps_labels, eps_ends = _edgar_metric(eps_keys_edgar, unit='USD/shares')
-        if not _eps_sanity(eps):
-            eps = []
-        if len(eps) >= 7:
-            sources['eps'] = 'EDGAR'
+        eps_fh, eps_lbl_fh, eps_end_fh = _finnhub_fetch_eps(ticker)
+        if len(eps_fh) >= 7 and _is_recent(eps_end_fh) and _eps_sanity(eps_fh):
+            eps, eps_labels, eps_ends = eps_fh, eps_lbl_fh, eps_end_fh
+            sources['eps'] = 'Finnhub'
         else:
-            sources['eps'] = 'EDGAR'
+            sources['eps'] = 'insufficient'
 
     # ── Revenue + Net Margin: FMP primary -> EDGAR fallback ───────────────────
     fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_ni, fmp_ni_lbl, fmp_ni_end, fmp_margin, fmp_margin_lbl, fmp_margin_end = _fmp_fetch_revenue_ni(ticker)
