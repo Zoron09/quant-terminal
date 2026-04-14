@@ -244,7 +244,7 @@ def get_code33_data(ticker: str) -> dict:
             r = requests.get(
                 "https://financialmodelingprep.com/stable/income-statement",
                 params={'symbol': symbol.upper(), 'period': 'quarter',
-                        'limit': 5, 'apikey': FMP_API_KEY},
+                        'limit': 8, 'apikey': FMP_API_KEY},
                 timeout=10
             )
             r.raise_for_status()
