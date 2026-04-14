@@ -572,6 +572,21 @@ def get_code33_data(ticker: str) -> dict:
                 ni_ends.append(q4_ni_end)
                 sources['ni'] = 'EDGAR (Q4 derived)'
 
+    min_len_eps = min(len(eps), len(eps_labels), len(eps_ends))
+    eps = eps[:min_len_eps]
+    eps_labels = eps_labels[:min_len_eps]
+    eps_ends = eps_ends[:min_len_eps]
+
+    min_len_rev = min(len(rev), len(rev_labels), len(rev_ends))
+    rev = rev[:min_len_rev]
+    rev_labels = rev_labels[:min_len_rev]
+    rev_ends = rev_ends[:min_len_rev]
+
+    min_len_ni = min(len(ni), len(ni_labels), len(ni_ends))
+    ni = ni[:min_len_ni]
+    ni_labels = ni_labels[:min_len_ni]
+    ni_ends = ni_ends[:min_len_ni]
+
     return {
         'eps': eps, 'rev': rev, 'ni': ni,
         'eps_labels': eps_labels, 'rev_labels': rev_labels, 'ni_labels': ni_labels,
