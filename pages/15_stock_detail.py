@@ -558,6 +558,24 @@ def get_code33_data(ticker: str) -> dict:
                 zipped = sorted(zip(eps_ends, eps, eps_labels), key=lambda x: x[0])
                 eps_ends, eps, eps_labels = [list(x) for x in zip(*zipped)]
 
+    # If EPS still behind Revenue by one quarter, try Finnhub for the gap quarter
+    if eps_labels and rev_labels and eps_labels[-1] != rev_labels[-1]:
+        gap_label = rev_labels[-1]  # the quarter we're missing
+        fh_eps, fh_lbl, fh_end = _finnhub_fetch_eps(ticker)
+        if fh_eps and fh_lbl:
+            # Find the matching quarter in Finnhub data
+            for i, lbl in enumerate(fh_lbl):
+                if lbl == gap_label and i < len(fh_eps):
+                    if _eps_sanity([fh_eps[i]]):
+                        eps.append(fh_eps[i])
+                        eps_labels.append(fh_lbl[i])
+                        eps_ends.append(fh_end[i])
+                        sources['eps'] = 'EDGAR+Finnhub (gap fill)'
+                        # Re-sort after appending
+                        zipped = sorted(zip(eps_ends, eps, eps_labels), key=lambda x: x[0])
+                        eps_ends, eps, eps_labels = [list(x) for x in zip(*zipped)]
+                        break
+
     if rev_labels and eps_labels and rev_labels[-1] != eps_labels[-1]:
         q4_val, q4_end, q4_lbl = _derive_q4(rev_keys_edgar, unit='USD')
         if q4_val is not None:
