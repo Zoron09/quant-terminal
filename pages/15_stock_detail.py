@@ -208,9 +208,9 @@ def get_code33_data(ticker: str) -> dict:
         lbls = [f"Q{(d.month + 2)//3} {d.year}" for d, _ in rows]
         return vals, lbls, ends
 
-    def _finnhub_fetch_eps_and_margin(symbol: str):
+    def _finnhub_fetch_eps_margin_revenue(symbol: str):
         if not FINNHUB_KEY:
-            return [], [], [], [], [], []
+            return [], [], [], [], [], [], [], [], []
         try:
             r = requests.get(
                 "https://finnhub.io/api/v1/stock/metric",
@@ -222,48 +222,20 @@ def get_code33_data(ticker: str) -> dict:
             quarterly = ((data.get('series') or {}).get('quarterly') or {})
             eps_vals, eps_lbls, eps_ends = _finnhub_quarterly_series(quarterly.get('eps'))
             nm_vals, nm_lbls, nm_ends = _finnhub_quarterly_series(quarterly.get('netMargin'))
-            return eps_vals, eps_lbls, eps_ends, nm_vals, nm_lbls, nm_ends
+            rev_vals, rev_lbls, rev_ends = _finnhub_quarterly_series(quarterly.get('revenue'))
+            return eps_vals, eps_lbls, eps_ends, nm_vals, nm_lbls, nm_ends, rev_vals, rev_lbls, rev_ends
         except Exception:
-            return [], [], [], [], [], []
+            return [], [], [], [], [], [], [], [], []
 
-    def _finnhub_fetch_revenue(symbol: str):
-        if not FINNHUB_KEY:
-            return [], [], []
+    def _finnhub_is_recent(end_dates, max_days=548):
+        """Reject Finnhub series if most recent date is older than max_days (~18 months)."""
+        if not end_dates:
+            return False
         try:
-            r = requests.get(
-                "https://finnhub.io/api/v1/financials",
-                params={'symbol': symbol.upper(), 'statement': 'ic', 'freq': 'quarterly', 'token': FINNHUB_KEY},
-                timeout=10
-            )
-            r.raise_for_status()
-            data = r.json() if isinstance(r.json(), dict) else {}
-            fins = data.get('financials', [])
-            rows = []
-            if isinstance(fins, list):
-                for item in fins:
-                    if not isinstance(item, dict):
-                        continue
-                    period = str(item.get('period', '')).strip()
-                    val = _sf(item.get('revenue'))
-                    if val is None:
-                        val = _sf((item.get('report') or {}).get('revenue'))
-                    if not period or val is None:
-                        continue
-                    try:
-                        dt = datetime.strptime(period, '%Y-%m-%d').date()
-                    except Exception:
-                        continue
-                    rows.append((dt, float(val)))
-            if not rows:
-                return [], [], []
-            rows = sorted(rows, key=lambda x: x[0], reverse=True)[:8]
-            rows.reverse()
-            vals = [v for _, v in rows]
-            ends = [d.isoformat() for d, _ in rows]
-            lbls = [f"Q{(d.month + 2)//3} {d.year}" for d, _ in rows]
-            return vals, lbls, ends
+            most_recent = max(datetime.strptime(d, '%Y-%m-%d').date() for d in end_dates)
+            return (datetime.utcnow().date() - most_recent).days <= max_days
         except Exception:
-            return [], [], []
+            return False
 
     # ── EDGAR fetcher (independent per metric) ────────────────────────────────
     def _edgar_metric(concepts, unit='USD'):
@@ -274,6 +246,7 @@ def get_code33_data(ticker: str) -> dict:
 
         usgaap = facts.get('facts', {}).get('us-gaap', {})
         cutoff_date = (datetime.utcnow() - timedelta(days=365 * 5)).date()
+        recency_cutoff = (datetime.utcnow() - timedelta(days=548)).date()  # ~18 months
 
         for concept in concepts:
             entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
@@ -324,6 +297,8 @@ def get_code33_data(ticker: str) -> dict:
 
             if len(filtered_entries) < 7:
                 continue
+            if filtered_entries[0]['_end_dt'] < recency_cutoff:
+                continue
 
             filtered_entries.reverse()  # chronological ascending
             vals = [item['_val'] for item in filtered_entries]
@@ -346,11 +321,10 @@ def get_code33_data(ticker: str) -> dict:
                       'ProfitLoss',
                       'NetIncomeLossAvailableToCommonStockholdersBasic']
 
-    eps_fh, eps_lbl_fh, eps_end_fh, nm_fh, nm_lbl_fh, nm_end_fh = _finnhub_fetch_eps_and_margin(ticker)
-    rev_fh, rev_lbl_fh, rev_end_fh = _finnhub_fetch_revenue(ticker)
+    eps_fh, eps_lbl_fh, eps_end_fh, nm_fh, nm_lbl_fh, nm_end_fh, rev_fh, rev_lbl_fh, rev_end_fh = _finnhub_fetch_eps_margin_revenue(ticker)
 
     # EPS: Finnhub primary -> EDGAR fallback per metric
-    if len(eps_fh) >= 7:
+    if len(eps_fh) >= 7 and _finnhub_is_recent(eps_end_fh):
         eps, eps_labels, eps_ends = eps_fh, eps_lbl_fh, eps_end_fh
         sources['eps'] = 'Finnhub'
     else:
@@ -361,7 +335,7 @@ def get_code33_data(ticker: str) -> dict:
             sources['eps'] = 'EDGAR'
 
     # Revenue: Finnhub primary -> EDGAR fallback per metric
-    if len(rev_fh) >= 7:
+    if len(rev_fh) >= 7 and _finnhub_is_recent(rev_end_fh):
         rev, rev_labels, rev_ends = rev_fh, rev_lbl_fh, rev_end_fh
         sources['rev'] = 'Finnhub'
     else:
@@ -371,15 +345,26 @@ def get_code33_data(ticker: str) -> dict:
         else:
             sources['rev'] = 'EDGAR'
 
-    # Net Income proxy for Code 33 metric #3 uses net margin if available.
-    if len(nm_fh) >= 7:
+    # Net Margin: Finnhub primary (already a %) -> EDGAR fallback (convert NI dollars to margin %)
+    if len(nm_fh) >= 7 and _finnhub_is_recent(nm_end_fh):
         ni, ni_labels, ni_ends = nm_fh, nm_lbl_fh, nm_end_fh
         sources['ni'] = 'Finnhub'
     else:
-        ni, ni_labels, ni_ends = _edgar_metric(ni_keys_edgar)
-        if len(ni) >= 7:
+        # EDGAR returns absolute NetIncomeLoss — convert to margin % using EDGAR revenue
+        ni_abs, ni_labels_raw, ni_ends_raw = _edgar_metric(ni_keys_edgar)
+        if len(ni_abs) >= 7:
+            rev_for_margin, _, rev_margin_ends = _edgar_metric(rev_keys_edgar)
+            rev_lookup = dict(zip(rev_margin_ends, rev_for_margin))
+            ni, ni_labels, ni_ends = [], [], []
+            for i, end in enumerate(ni_ends_raw):
+                rev_val = rev_lookup.get(end)
+                if rev_val is not None and rev_val != 0:
+                    ni.append(ni_abs[i] / rev_val * 100)
+                    ni_labels.append(ni_labels_raw[i])
+                    ni_ends.append(end)
             sources['ni'] = 'EDGAR'
         else:
+            ni, ni_labels, ni_ends = [], [], []
             sources['ni'] = 'EDGAR'
 
     return {
