@@ -232,12 +232,14 @@ def get_code33_data(ticker: str) -> dict:
             return [], [], []
 
     def _fmp_fetch_revenue_ni(symbol: str):
-        """Fetch quarterly revenue + net income from FMP income-statement endpoint.
+        """Fetch quarterly revenue + net income + EPS from FMP income-statement endpoint.
         Covers ALL fiscal calendars including Q4 from 10-K filings.
         Returns (rev_vals, rev_lbls, rev_ends, ni_vals, ni_lbls, ni_ends,
-                 margin_vals, margin_lbls, margin_ends)."""
+                 margin_vals, margin_lbls, margin_ends,
+                 eps_vals, eps_lbls, eps_ends)."""
+        _empty = [], [], [], [], [], [], [], [], [], [], [], []
         if not _HAS_FMP:
-            return [], [], [], [], [], [], [], [], []
+            return _empty
         try:
             r = requests.get(
                 "https://financialmodelingprep.com/stable/income-statement",
@@ -248,7 +250,7 @@ def get_code33_data(ticker: str) -> dict:
             r.raise_for_status()
             data = r.json() if isinstance(r.json(), list) else []
             if not data:
-                return [], [], [], [], [], [], [], [], []
+                return _empty
 
             # FMP returns newest first — sort descending, take 8, then reverse to ascending
             rows = []
@@ -258,6 +260,7 @@ def get_code33_data(ticker: str) -> dict:
                 date_str = str(item.get('date', '')).strip()
                 revenue = _sf(item.get('revenue'))
                 net_income = _sf(item.get('netIncome'))
+                eps_val = _sf(item.get('epsdiluted')) or _sf(item.get('eps'))
                 if not date_str or revenue is None:
                     continue
                 try:
@@ -265,10 +268,11 @@ def get_code33_data(ticker: str) -> dict:
                 except Exception:
                     continue
                 rows.append({'dt': dt, 'rev': float(revenue),
-                             'ni': float(net_income) if net_income is not None else None})
+                             'ni': float(net_income) if net_income is not None else None,
+                             'eps': float(eps_val) if eps_val is not None else None})
 
             if not rows:
-                return [], [], [], [], [], [], [], [], []
+                return _empty
 
             rows = sorted(rows, key=lambda x: x['dt'], reverse=True)[:8]
             rows.reverse()  # oldest first
@@ -293,9 +297,17 @@ def get_code33_data(ticker: str) -> dict:
                     margin_lbls.append(f"Q{(r['dt'].month + 2)//3} {r['dt'].year}")
                     margin_ends.append(r['dt'].isoformat())
 
-            return rev_vals, rev_lbls, rev_ends, ni_vals, ni_lbls, ni_ends, margin_vals, margin_lbls, margin_ends
+            # EPS (diluted preferred)
+            eps_vals, eps_lbls, eps_ends = [], [], []
+            for r in rows:
+                if r['eps'] is not None:
+                    eps_vals.append(r['eps'])
+                    eps_lbls.append(f"Q{(r['dt'].month + 2)//3} {r['dt'].year}")
+                    eps_ends.append(r['dt'].isoformat())
+
+            return rev_vals, rev_lbls, rev_ends, ni_vals, ni_lbls, ni_ends, margin_vals, margin_lbls, margin_ends, eps_vals, eps_lbls, eps_ends
         except Exception:
-            return [], [], [], [], [], [], [], [], []
+            return _empty
 
     def _is_recent(end_dates, max_days=548):
         """Reject data if most recent date is older than max_days (~18 months)."""
@@ -496,22 +508,28 @@ def get_code33_data(ticker: str) -> dict:
         if not vals: return False
         return all(v is None or -500 <= v <= 5000 for v in vals)
 
-    # ── EPS: EDGAR primary -> Finnhub fallback ─────────────────────────────────
-    eps, eps_labels, eps_ends = _edgar_metric(eps_keys_edgar, unit='USD/shares')
-    if not _eps_sanity(eps):
-        eps, eps_labels, eps_ends = [], [], []
-    if len(eps) >= 7:
-        sources['eps'] = 'EDGAR'
+    # ── FMP fetch (EPS + Revenue + Net Income from same source) ─────────────────
+    fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_ni, fmp_ni_lbl, fmp_ni_end, fmp_margin, fmp_margin_lbl, fmp_margin_end, fmp_eps, fmp_eps_lbl, fmp_eps_end = _fmp_fetch_revenue_ni(ticker)
+
+    # ── EPS: FMP primary -> EDGAR -> Finnhub fallback ─────────────────────────
+    if len(fmp_eps) >= 5 and _is_recent(fmp_eps_end) and _eps_sanity(fmp_eps):
+        eps, eps_labels, eps_ends = fmp_eps, fmp_eps_lbl, fmp_eps_end
+        sources['eps'] = 'FMP'
     else:
-        eps_fh, eps_lbl_fh, eps_end_fh = _finnhub_fetch_eps(ticker)
-        if len(eps_fh) >= 7 and _is_recent(eps_end_fh) and _eps_sanity(eps_fh):
-            eps, eps_labels, eps_ends = eps_fh, eps_lbl_fh, eps_end_fh
-            sources['eps'] = 'Finnhub'
+        eps, eps_labels, eps_ends = _edgar_metric(eps_keys_edgar, unit='USD/shares')
+        if not _eps_sanity(eps):
+            eps, eps_labels, eps_ends = [], [], []
+        if len(eps) >= 7:
+            sources['eps'] = 'EDGAR'
         else:
-            sources['eps'] = 'insufficient'
+            eps_fh, eps_lbl_fh, eps_end_fh = _finnhub_fetch_eps(ticker)
+            if len(eps_fh) >= 7 and _is_recent(eps_end_fh) and _eps_sanity(eps_fh):
+                eps, eps_labels, eps_ends = eps_fh, eps_lbl_fh, eps_end_fh
+                sources['eps'] = 'Finnhub'
+            else:
+                sources['eps'] = 'insufficient'
 
     # ── Revenue + Net Margin: FMP primary -> EDGAR fallback ───────────────────
-    fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_ni, fmp_ni_lbl, fmp_ni_end, fmp_margin, fmp_margin_lbl, fmp_margin_end = _fmp_fetch_revenue_ni(ticker)
 
     # Revenue
     edgar_rev, edgar_rev_lbl, edgar_rev_end = _edgar_metric(rev_keys_edgar)
@@ -545,51 +563,6 @@ def get_code33_data(ticker: str) -> dict:
     else:
         ni, ni_labels, ni_ends = edgar_ni, edgar_ni_lbl, edgar_ni_end
         sources['ni'] = 'EDGAR'
-
-    if eps_labels and rev_labels and eps_labels[-1] != rev_labels[-1]:
-        q4_val, q4_end, q4_lbl = _derive_q4(eps_keys_edgar, unit='USD/shares')
-        if q4_val is not None and _eps_sanity([q4_val]):
-            eps.append(q4_val)
-            eps_labels.append(q4_lbl)
-            eps_ends.append(q4_end)
-            sources['eps'] = 'EDGAR (Q4 derived)'
-            # Re-sort eps, eps_labels, eps_ends together by date
-            if eps_ends:
-                zipped = sorted(zip(eps_ends, eps, eps_labels), key=lambda x: x[0])
-                eps_ends, eps, eps_labels = [list(x) for x in zip(*zipped)]
-
-    # If EPS still behind Revenue by one quarter, try Finnhub for the gap quarter
-    if eps_labels and rev_labels and eps_labels[-1] != rev_labels[-1]:
-        gap_label = rev_labels[-1]  # the quarter we're missing
-        fh_eps, fh_lbl, fh_end = _finnhub_fetch_eps(ticker)
-        if fh_eps and fh_lbl:
-            # Find the matching quarter in Finnhub data
-            for i, lbl in enumerate(fh_lbl):
-                if lbl == gap_label and i < len(fh_eps):
-                    if _eps_sanity([fh_eps[i]]):
-                        eps.append(fh_eps[i])
-                        eps_labels.append(fh_lbl[i])
-                        eps_ends.append(fh_end[i])
-                        sources['eps'] = 'EDGAR+Finnhub (gap fill)'
-                        # Re-sort after appending
-                        zipped = sorted(zip(eps_ends, eps, eps_labels), key=lambda x: x[0])
-                        eps_ends, eps, eps_labels = [list(x) for x in zip(*zipped)]
-                        break
-
-    # If EDGAR EPS is more than 2 quarters behind Revenue, discard and use Finnhub
-    if eps_ends and rev_ends:
-        try:
-            latest_eps = datetime.strptime(max(eps_ends), '%Y-%m-%d').date()
-            latest_rev = datetime.strptime(max(rev_ends), '%Y-%m-%d').date()
-            if (latest_rev - latest_eps).days > 180:
-                fh_eps, fh_lbl, fh_end = _finnhub_fetch_eps(ticker)
-                if len(fh_eps) >= 7 and _is_recent(fh_end) and _eps_sanity(fh_eps):
-                    eps = fh_eps
-                    eps_labels = fh_lbl
-                    eps_ends = fh_end
-                    sources['eps'] = 'Finnhub (EDGAR stale)'
-        except Exception:
-            pass
 
     if rev_labels and eps_labels and rev_labels[-1] != eps_labels[-1]:
         q4_val, q4_end, q4_lbl = _derive_q4(rev_keys_edgar, unit='USD')
