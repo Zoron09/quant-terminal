@@ -511,23 +511,25 @@ def get_code33_data(ticker: str) -> dict:
     # ── FMP fetch (EPS + Revenue + Net Income from same source) ─────────────────
     fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_ni, fmp_ni_lbl, fmp_ni_end, fmp_margin, fmp_margin_lbl, fmp_margin_end, fmp_eps, fmp_eps_lbl, fmp_eps_end = _fmp_fetch_revenue_ni(ticker)
 
-    # ── EPS: FMP primary -> EDGAR -> Finnhub fallback ─────────────────────────
-    if len(fmp_eps) >= 5 and _is_recent(fmp_eps_end) and _eps_sanity(fmp_eps):
-        eps, eps_labels, eps_ends = fmp_eps, fmp_eps_lbl, fmp_eps_end
-        sources['eps'] = 'FMP'
+    # ── EPS: FMP primary + EDGAR backfill (identical to Revenue merge) ────────
+    edgar_eps, edgar_eps_lbl, edgar_eps_end = _edgar_metric(eps_keys_edgar, unit='USD/shares')
+    eps_merged, eps_lbl_merged, eps_end_merged, eps_src = _merge_fmp_edgar(
+        fmp_eps, fmp_eps_lbl, fmp_eps_end,
+        edgar_eps, edgar_eps_lbl, edgar_eps_end
+    )
+
+    if len(eps_merged) >= 7 and _is_recent(eps_end_merged) and _eps_sanity(eps_merged):
+        eps, eps_labels, eps_ends = eps_merged, eps_lbl_merged, eps_end_merged
+        sources['eps'] = eps_src
     else:
-        eps, eps_labels, eps_ends = _edgar_metric(eps_keys_edgar, unit='USD/shares')
-        if not _eps_sanity(eps):
-            eps, eps_labels, eps_ends = [], [], []
-        if len(eps) >= 7:
-            sources['eps'] = 'EDGAR'
+        # Finnhub final fallback
+        fh_eps, fh_lbl, fh_end = _finnhub_fetch_eps(ticker)
+        if len(fh_eps) >= 7 and _is_recent(fh_end) and _eps_sanity(fh_eps):
+            eps, eps_labels, eps_ends = fh_eps, fh_lbl, fh_end
+            sources['eps'] = 'Finnhub'
         else:
-            eps_fh, eps_lbl_fh, eps_end_fh = _finnhub_fetch_eps(ticker)
-            if len(eps_fh) >= 7 and _is_recent(eps_end_fh) and _eps_sanity(eps_fh):
-                eps, eps_labels, eps_ends = eps_fh, eps_lbl_fh, eps_end_fh
-                sources['eps'] = 'Finnhub'
-            else:
-                sources['eps'] = 'insufficient'
+            eps, eps_labels, eps_ends = [], [], []
+            sources['eps'] = 'insufficient'
 
     # ── Revenue + Net Margin: FMP primary -> EDGAR fallback ───────────────────
 
