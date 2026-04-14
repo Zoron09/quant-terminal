@@ -417,6 +417,68 @@ def get_code33_data(ticker: str) -> dict:
 
         return [], [], []
 
+    def _derive_q4(concepts, unit='USD'):
+        """Derive Q4 value = annual_10K_value - sum(Q1+Q2+Q3 from 10-Q).
+        Returns (value, end_date, label) or (None, None, None)."""
+        facts = get_edgar_facts(ticker)
+        if not facts:
+            return None, None, None
+        usgaap = facts.get('facts', {}).get('us-gaap', {})
+        for concept in concepts:
+            entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
+            if not entries:
+                continue
+            annual_candidates = []
+            for e in entries:
+                if str(e.get('form', '')).strip().upper() != '10-K':
+                    continue
+                end_str = str(e.get('end', '')).strip()
+                start_str = str(e.get('start', '')).strip()
+                val = _sf(e.get('val'))
+                if not end_str or not start_str or val is None:
+                    continue
+                try:
+                    end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
+                    start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
+                except Exception:
+                    continue
+                duration = (end_dt - start_dt).days
+                if 350 <= duration <= 380:
+                    annual_candidates.append((end_dt, float(val), start_dt))
+            if not annual_candidates:
+                continue
+            annual_candidates.sort(key=lambda x: x[0], reverse=True)
+            annual_end, annual_val, annual_start = annual_candidates[0]
+            quarterly_sum = 0.0
+            quarterly_count = 0
+            for e in entries:
+                if str(e.get('form', '')).strip().upper() != '10-Q':
+                    continue
+                end_str = str(e.get('end', '')).strip()
+                start_str = str(e.get('start', '')).strip()
+                val = _sf(e.get('val'))
+                if not end_str or not start_str or val is None:
+                    continue
+                try:
+                    end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
+                    start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
+                except Exception:
+                    continue
+                duration = (end_dt - start_dt).days
+                if duration < 80 or duration > 105:
+                    continue
+                if end_dt > annual_end or end_dt <= annual_start:
+                    continue
+                quarterly_sum += float(val)
+                quarterly_count += 1
+            if quarterly_count != 3:
+                continue
+            q4_val = annual_val - quarterly_sum
+            q4_quarter = (annual_end.month + 2) // 3
+            label = f"Q{q4_quarter} {annual_end.year}"
+            return q4_val, annual_end.isoformat(), label
+        return None, None, None
+
     # ── Fetch each metric independently ───────────────────────────────────────
     eps_keys_edgar = ['EarningsPerShareDiluted', 'EarningsPerShareBasic']
     rev_keys_edgar = ['RevenueFromContractWithCustomerExcludingAssessedTax',
@@ -483,6 +545,32 @@ def get_code33_data(ticker: str) -> dict:
     else:
         ni, ni_labels, ni_ends = edgar_ni, edgar_ni_lbl, edgar_ni_end
         sources['ni'] = 'EDGAR'
+
+    if eps_labels and rev_labels and eps_labels[-1] != rev_labels[-1]:
+        q4_val, q4_end, q4_lbl = _derive_q4(eps_keys_edgar, unit='USD/shares')
+        if q4_val is not None and _eps_sanity([q4_val]):
+            eps.append(q4_val)
+            eps_labels.append(q4_lbl)
+            eps_ends.append(q4_end)
+            sources['eps'] = 'EDGAR (Q4 derived)'
+
+    if rev_labels and eps_labels and rev_labels[-1] != eps_labels[-1]:
+        q4_val, q4_end, q4_lbl = _derive_q4(rev_keys_edgar, unit='USD')
+        if q4_val is not None:
+            rev.append(q4_val)
+            rev_labels.append(q4_lbl)
+            rev_ends.append(q4_end)
+            sources['rev'] = 'EDGAR (Q4 derived)'
+
+    if ni_labels and rev_labels and ni_labels[-1] != rev_labels[-1] and sources.get('rev') == 'EDGAR (Q4 derived)':
+        q4_ni_val, q4_ni_end, q4_ni_lbl = _derive_q4(ni_keys_edgar, unit='USD')
+        if q4_ni_val is not None and rev_ends and q4_ni_end == rev_ends[-1]:
+            q4_rev_val = rev[-1]
+            if q4_rev_val != 0:
+                ni.append((q4_ni_val / q4_rev_val) * 100)
+                ni_labels.append(q4_ni_lbl)
+                ni_ends.append(q4_ni_end)
+                sources['ni'] = 'EDGAR (Q4 derived)'
 
     return {
         'eps': eps, 'rev': rev, 'ni': ni,
