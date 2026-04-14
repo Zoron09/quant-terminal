@@ -351,7 +351,8 @@ def get_code33_data(ticker: str) -> dict:
 
             dedup_by_end = {}
             for e in entries:
-                if str(e.get('form', '')).strip().upper() != '10-Q':
+                form = str(e.get('form', '')).strip().upper()
+                if form not in ('10-Q', '10-K'):
                     continue
 
                 end_str = str(e.get('end', '')).strip()
@@ -387,6 +388,18 @@ def get_code33_data(ticker: str) -> dict:
                     cloned['_filed_dt'] = filed_dt
                     cloned['_val'] = float(val)
                     dedup_by_end[end_dt] = cloned
+
+            # For 10-K entries, only keep if end_date is more recent than latest 10-Q
+            latest_10q_end = max(
+                (v['_end_dt'] for v in dedup_by_end.values() if str(v.get('form','')).strip().upper() == '10-Q'),
+                default=None
+            )
+            if latest_10q_end is not None:
+                dedup_by_end = {
+                    k: v for k, v in dedup_by_end.items()
+                    if str(v.get('form','')).strip().upper() == '10-Q'
+                    or v['_end_dt'] > latest_10q_end
+                }
 
             filtered_entries = sorted(dedup_by_end.values(), key=lambda x: x['_end_dt'], reverse=True)
             filtered_entries = filtered_entries[:8]
