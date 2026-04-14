@@ -417,13 +417,19 @@ def get_code33_data(ticker: str) -> dict:
                       'ProfitLoss',
                       'NetIncomeLossAvailableToCommonStockholdersBasic']
 
+    def _eps_sanity(vals):
+        if not vals: return False
+        return all(v is None or -500 <= v <= 5000 for v in vals)
+
     # ── EPS: Finnhub primary -> EDGAR fallback ─────────────────────────────────
     eps_fh, eps_lbl_fh, eps_end_fh = _finnhub_fetch_eps(ticker)
-    if len(eps_fh) >= 7 and _is_recent(eps_end_fh):
+    if len(eps_fh) >= 7 and _is_recent(eps_end_fh) and _eps_sanity(eps_fh):
         eps, eps_labels, eps_ends = eps_fh, eps_lbl_fh, eps_end_fh
         sources['eps'] = 'Finnhub'
     else:
         eps, eps_labels, eps_ends = _edgar_metric(eps_keys_edgar, unit='USD/shares')
+        if not _eps_sanity(eps):
+            eps = []
         if len(eps) >= 7:
             sources['eps'] = 'EDGAR'
         else:
