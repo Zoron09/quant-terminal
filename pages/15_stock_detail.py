@@ -37,6 +37,11 @@ except Exception:
     def fh_earnings_surprises(x): return None
     def fh_basic_financials(x): return None
 
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
+FMP_API_KEY = os.getenv('FMP_API_KEY', '')
+_HAS_FMP = bool(FMP_API_KEY)
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Stock Detail · Quant Terminal", page_icon="📋", layout="wide")
 
@@ -159,13 +164,13 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
             return {end: float(v['val']) for end, v in recent_8}
     return {}
 
-# ── Code 33 data fetcher — Finnhub primary, EDGAR fallback ────────────────────
+# ── Code 33 data fetcher — FMP + Finnhub primary, EDGAR fallback ──────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_code33_data(ticker: str) -> dict:
-    """Fetch EPS, Revenue, Net Income independently for Code 33 analysis.
-    Primary: Finnhub quarterly series.
-    Fallback per metric: EDGAR.
+    """Fetch EPS, Revenue, Net Margin independently for Code 33 analysis.
+    EPS: Finnhub quarterly series primary, EDGAR fallback.
+    Revenue + Net Margin: FMP quarterly income statement primary, EDGAR fallback.
     Need minimum 7 raw quarters per metric to compute 3 YoY rates."""
     import yfinance as yf
 
@@ -208,20 +213,11 @@ def get_code33_data(ticker: str) -> dict:
         lbls = [f"Q{(d.month + 2)//3} {d.year}" for d, _ in rows]
         return vals, lbls, ends
 
-    def _finnhub_fetch_eps_ni_revenue(symbol: str):
-        """Fetch EPS + net income from /stock/metric quarterly series,
-        and revenue from /stock/earnings (revenueActual).
-        Returns 9 lists: (eps_vals, eps_lbls, eps_ends,
-                          ni_vals, ni_lbls, ni_ends,
-                          rev_vals, rev_lbls, rev_ends)"""
+    def _finnhub_fetch_eps(symbol: str):
+        """Fetch EPS from Finnhub /stock/metric quarterly series.
+        Returns (eps_vals, eps_lbls, eps_ends)."""
         if not FINNHUB_KEY:
-            return [], [], [], [], [], [], [], [], []
-
-        eps_vals, eps_lbls, eps_ends = [], [], []
-        ni_vals, ni_lbls, ni_ends = [], [], []
-        rev_vals, rev_lbls, rev_ends = [], [], []
-
-        # EPS + Net Income from /stock/metric series.quarterly
+            return [], [], []
         try:
             r = requests.get(
                 "https://finnhub.io/api/v1/stock/metric",
@@ -231,65 +227,78 @@ def get_code33_data(ticker: str) -> dict:
             r.raise_for_status()
             data = r.json() if isinstance(r.json(), dict) else {}
             quarterly = ((data.get('series') or {}).get('quarterly') or {})
-            eps_vals, eps_lbls, eps_ends = _finnhub_quarterly_series(quarterly.get('eps'))
-            ni_vals, ni_lbls, ni_ends = _finnhub_quarterly_series(quarterly.get('netIncome'))
+            return _finnhub_quarterly_series(quarterly.get('eps'))
         except Exception:
-            pass
+            return [], [], []
 
-        # Revenue from /stock/earnings (revenueActual — includes all quarters incl. fiscal Q4)
+    def _fmp_fetch_revenue_ni(symbol: str):
+        """Fetch quarterly revenue + net income from FMP income-statement endpoint.
+        Covers ALL fiscal calendars including Q4 from 10-K filings.
+        Returns (rev_vals, rev_lbls, rev_ends, ni_vals, ni_lbls, ni_ends,
+                 margin_vals, margin_lbls, margin_ends)."""
+        if not _HAS_FMP:
+            return [], [], [], [], [], [], [], [], []
         try:
-            r2 = requests.get(
-                "https://finnhub.io/api/v1/stock/earnings",
-                params={'symbol': symbol.upper(), 'token': FINNHUB_KEY},
+            r = requests.get(
+                "https://financialmodelingprep.com/stable/income-statement",
+                params={'symbol': symbol.upper(), 'period': 'quarter',
+                        'limit': 8, 'apikey': FMP_API_KEY},
                 timeout=10
             )
-            r2.raise_for_status()
-            earnings = r2.json() if isinstance(r2.json(), list) else []
-            rev_rows = []
-            for item in earnings:
+            r.raise_for_status()
+            data = r.json() if isinstance(r.json(), list) else []
+            if not data:
+                return [], [], [], [], [], [], [], [], []
+
+            # FMP returns newest first — sort descending, take 8, then reverse to ascending
+            rows = []
+            for item in data:
                 if not isinstance(item, dict):
                     continue
-                period = str(item.get('period', '')).strip()
-                val = _sf(item.get('revenueActual'))
-                if not period or val is None:
+                date_str = str(item.get('date', '')).strip()
+                revenue = _sf(item.get('revenue'))
+                net_income = _sf(item.get('netIncome'))
+                if not date_str or revenue is None:
                     continue
                 try:
-                    dt = datetime.strptime(period, '%Y-%m-%d').date()
+                    dt = datetime.strptime(date_str, '%Y-%m-%d').date()
                 except Exception:
                     continue
-                rev_rows.append((dt, float(val)))
-            if rev_rows:
-                rev_rows = sorted(rev_rows, key=lambda x: x[0], reverse=True)[:8]
-                rev_rows.reverse()
-                rev_vals = [v for _, v in rev_rows]
-                rev_ends = [d.isoformat() for d, _ in rev_rows]
-                rev_lbls = [f"Q{(d.month + 2)//3} {d.year}" for d, _ in rev_rows]
+                rows.append({'dt': dt, 'rev': float(revenue),
+                             'ni': float(net_income) if net_income is not None else None})
+
+            if not rows:
+                return [], [], [], [], [], [], [], [], []
+
+            rows = sorted(rows, key=lambda x: x['dt'], reverse=True)[:8]
+            rows.reverse()  # oldest first
+
+            rev_vals = [r['rev'] for r in rows]
+            rev_ends = [r['dt'].isoformat() for r in rows]
+            rev_lbls = [f"Q{(r['dt'].month + 2)//3} {r['dt'].year}" for r in rows]
+
+            # Net income absolute values
+            ni_vals, ni_lbls, ni_ends = [], [], []
+            for r in rows:
+                if r['ni'] is not None:
+                    ni_vals.append(r['ni'])
+                    ni_lbls.append(f"Q{(r['dt'].month + 2)//3} {r['dt'].year}")
+                    ni_ends.append(r['dt'].isoformat())
+
+            # Compute quarterly margin % = netIncome / revenue * 100
+            margin_vals, margin_lbls, margin_ends = [], [], []
+            for r in rows:
+                if r['ni'] is not None and r['rev'] != 0:
+                    margin_vals.append(r['ni'] / r['rev'] * 100)
+                    margin_lbls.append(f"Q{(r['dt'].month + 2)//3} {r['dt'].year}")
+                    margin_ends.append(r['dt'].isoformat())
+
+            return rev_vals, rev_lbls, rev_ends, ni_vals, ni_lbls, ni_ends, margin_vals, margin_lbls, margin_ends
         except Exception:
-            pass
+            return [], [], [], [], [], [], [], [], []
 
-        return eps_vals, eps_lbls, eps_ends, ni_vals, ni_lbls, ni_ends, rev_vals, rev_lbls, rev_ends
-
-    def _compute_quarterly_margin(ni_vals, ni_ends, rev_vals, rev_ends):
-        """Compute net margin % = netIncome / revenue * 100 for matching quarter end dates.
-        Returns (margin_vals, margin_labels, margin_ends) oldest->newest."""
-        if not ni_vals or not rev_vals:
-            return [], [], []
-        rev_lookup = {end: val for end, val in zip(rev_ends, rev_vals)}
-        margin_vals, margin_lbls, margin_ends = [], [], []
-        for i, end in enumerate(ni_ends):
-            rv = rev_lookup.get(end)
-            if rv is not None and rv != 0:
-                margin_vals.append(ni_vals[i] / rv * 100)
-                try:
-                    dt = datetime.strptime(end, '%Y-%m-%d').date()
-                    margin_lbls.append(f"Q{(dt.month + 2)//3} {dt.year}")
-                except Exception:
-                    margin_lbls.append(end)
-                margin_ends.append(end)
-        return margin_vals, margin_lbls, margin_ends
-
-    def _finnhub_is_recent(end_dates, max_days=548):
-        """Reject Finnhub series if most recent date is older than max_days (~18 months)."""
+    def _is_recent(end_dates, max_days=548):
+        """Reject data if most recent date is older than max_days (~18 months)."""
         if not end_dates:
             return False
         try:
@@ -297,6 +306,8 @@ def get_code33_data(ticker: str) -> dict:
             return (datetime.utcnow().date() - most_recent).days <= max_days
         except Exception:
             return False
+
+    # _finnhub_is_recent replaced by _is_recent above (shared by FMP + Finnhub)
 
     # ── EDGAR fetcher (independent per metric) ────────────────────────────────
     def _edgar_metric(concepts, unit='USD'):
@@ -382,10 +393,9 @@ def get_code33_data(ticker: str) -> dict:
                       'ProfitLoss',
                       'NetIncomeLossAvailableToCommonStockholdersBasic']
 
-    eps_fh, eps_lbl_fh, eps_end_fh, ni_fh, ni_lbl_fh, ni_end_fh, rev_fh, rev_lbl_fh, rev_end_fh = _finnhub_fetch_eps_ni_revenue(ticker)
-
-    # EPS: Finnhub primary -> EDGAR fallback per metric
-    if len(eps_fh) >= 7 and _finnhub_is_recent(eps_end_fh):
+    # ── EPS: Finnhub primary -> EDGAR fallback ─────────────────────────────────
+    eps_fh, eps_lbl_fh, eps_end_fh = _finnhub_fetch_eps(ticker)
+    if len(eps_fh) >= 7 and _is_recent(eps_end_fh):
         eps, eps_labels, eps_ends = eps_fh, eps_lbl_fh, eps_end_fh
         sources['eps'] = 'Finnhub'
     else:
@@ -395,10 +405,13 @@ def get_code33_data(ticker: str) -> dict:
         else:
             sources['eps'] = 'EDGAR'
 
-    # Revenue: Finnhub total quarterly revenue -> EDGAR fallback
-    if len(rev_fh) >= 7 and _finnhub_is_recent(rev_end_fh):
-        rev, rev_labels, rev_ends = rev_fh, rev_lbl_fh, rev_end_fh
-        sources['rev'] = 'Finnhub'
+    # ── Revenue + Net Margin: FMP primary -> EDGAR fallback ───────────────────
+    fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_ni, fmp_ni_lbl, fmp_ni_end, fmp_margin, fmp_margin_lbl, fmp_margin_end = _fmp_fetch_revenue_ni(ticker)
+
+    # Revenue
+    if len(fmp_rev) >= 7 and _is_recent(fmp_rev_end):
+        rev, rev_labels, rev_ends = fmp_rev, fmp_rev_lbl, fmp_rev_end
+        sources['rev'] = 'FMP'
     else:
         rev, rev_labels, rev_ends = _edgar_metric(rev_keys_edgar)
         if len(rev) >= 7:
@@ -406,12 +419,10 @@ def get_code33_data(ticker: str) -> dict:
         else:
             sources['rev'] = 'EDGAR'
 
-    # Net Margin: Compute quarterly margin % = netIncome / revenue for matching periods
-    # Finnhub primary: use netIncome and revenue series from Finnhub
-    nm_fh, nm_lbl_fh, nm_end_fh = _compute_quarterly_margin(ni_fh, ni_end_fh, rev_fh, rev_end_fh)
-    if len(nm_fh) >= 7 and _finnhub_is_recent(nm_end_fh):
-        ni, ni_labels, ni_ends = nm_fh, nm_lbl_fh, nm_end_fh
-        sources['ni'] = 'Finnhub'
+    # Net Margin (computed as netIncome / revenue * 100 per quarter)
+    if len(fmp_margin) >= 7 and _is_recent(fmp_margin_end):
+        ni, ni_labels, ni_ends = fmp_margin, fmp_margin_lbl, fmp_margin_end
+        sources['ni'] = 'FMP'
     else:
         # EDGAR fallback: NetIncomeLoss / Revenue for same quarter end dates
         ni_abs, ni_labels_raw, ni_ends_raw = _edgar_metric(ni_keys_edgar)
