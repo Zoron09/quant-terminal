@@ -576,6 +576,21 @@ def get_code33_data(ticker: str) -> dict:
                         eps_ends, eps, eps_labels = [list(x) for x in zip(*zipped)]
                         break
 
+    # If EDGAR EPS is more than 2 quarters behind Revenue, discard and use Finnhub
+    if eps_ends and rev_ends:
+        try:
+            latest_eps = datetime.strptime(max(eps_ends), '%Y-%m-%d').date()
+            latest_rev = datetime.strptime(max(rev_ends), '%Y-%m-%d').date()
+            if (latest_rev - latest_eps).days > 180:
+                fh_eps, fh_lbl, fh_end = _finnhub_fetch_eps(ticker)
+                if len(fh_eps) >= 7 and _is_recent(fh_end) and _eps_sanity(fh_eps):
+                    eps = fh_eps
+                    eps_labels = fh_lbl
+                    eps_ends = fh_end
+                    sources['eps'] = 'Finnhub (EDGAR stale)'
+        except Exception:
+            pass
+
     if rev_labels and eps_labels and rev_labels[-1] != eps_labels[-1]:
         q4_val, q4_end, q4_lbl = _derive_q4(rev_keys_edgar, unit='USD')
         if q4_val is not None:
