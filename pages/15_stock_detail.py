@@ -209,12 +209,19 @@ def get_code33_data(ticker: str) -> dict:
         return vals, lbls, ends
 
     def _finnhub_fetch_eps_ni_revenue(symbol: str):
-        """Fetch EPS, net income, and revenue quarterly series from Finnhub.
+        """Fetch EPS + net income from /stock/metric quarterly series,
+        and revenue from /stock/earnings (revenueActual).
         Returns 9 lists: (eps_vals, eps_lbls, eps_ends,
                           ni_vals, ni_lbls, ni_ends,
                           rev_vals, rev_lbls, rev_ends)"""
         if not FINNHUB_KEY:
             return [], [], [], [], [], [], [], [], []
+
+        eps_vals, eps_lbls, eps_ends = [], [], []
+        ni_vals, ni_lbls, ni_ends = [], [], []
+        rev_vals, rev_lbls, rev_ends = [], [], []
+
+        # EPS + Net Income from /stock/metric series.quarterly
         try:
             r = requests.get(
                 "https://finnhub.io/api/v1/stock/metric",
@@ -226,10 +233,41 @@ def get_code33_data(ticker: str) -> dict:
             quarterly = ((data.get('series') or {}).get('quarterly') or {})
             eps_vals, eps_lbls, eps_ends = _finnhub_quarterly_series(quarterly.get('eps'))
             ni_vals, ni_lbls, ni_ends = _finnhub_quarterly_series(quarterly.get('netIncome'))
-            rev_vals, rev_lbls, rev_ends = _finnhub_quarterly_series(quarterly.get('revenue'))
-            return eps_vals, eps_lbls, eps_ends, ni_vals, ni_lbls, ni_ends, rev_vals, rev_lbls, rev_ends
         except Exception:
-            return [], [], [], [], [], [], [], [], []
+            pass
+
+        # Revenue from /stock/earnings (revenueActual — includes all quarters incl. fiscal Q4)
+        try:
+            r2 = requests.get(
+                "https://finnhub.io/api/v1/stock/earnings",
+                params={'symbol': symbol.upper(), 'token': FINNHUB_KEY},
+                timeout=10
+            )
+            r2.raise_for_status()
+            earnings = r2.json() if isinstance(r2.json(), list) else []
+            rev_rows = []
+            for item in earnings:
+                if not isinstance(item, dict):
+                    continue
+                period = str(item.get('period', '')).strip()
+                val = _sf(item.get('revenueActual'))
+                if not period or val is None:
+                    continue
+                try:
+                    dt = datetime.strptime(period, '%Y-%m-%d').date()
+                except Exception:
+                    continue
+                rev_rows.append((dt, float(val)))
+            if rev_rows:
+                rev_rows = sorted(rev_rows, key=lambda x: x[0], reverse=True)[:8]
+                rev_rows.reverse()
+                rev_vals = [v for _, v in rev_rows]
+                rev_ends = [d.isoformat() for d, _ in rev_rows]
+                rev_lbls = [f"Q{(d.month + 2)//3} {d.year}" for d, _ in rev_rows]
+        except Exception:
+            pass
+
+        return eps_vals, eps_lbls, eps_ends, ni_vals, ni_lbls, ni_ends, rev_vals, rev_lbls, rev_ends
 
     def _compute_quarterly_margin(ni_vals, ni_ends, rev_vals, rev_ends):
         """Compute net margin % = netIncome / revenue * 100 for matching quarter end dates.
