@@ -208,7 +208,11 @@ def get_code33_data(ticker: str) -> dict:
         lbls = [f"Q{(d.month + 2)//3} {d.year}" for d, _ in rows]
         return vals, lbls, ends
 
-    def _finnhub_fetch_eps_margin_revenue(symbol: str):
+    def _finnhub_fetch_eps_ni_revenue(symbol: str):
+        """Fetch EPS, net income, and revenue quarterly series from Finnhub.
+        Returns 9 lists: (eps_vals, eps_lbls, eps_ends,
+                          ni_vals, ni_lbls, ni_ends,
+                          rev_vals, rev_lbls, rev_ends)"""
         if not FINNHUB_KEY:
             return [], [], [], [], [], [], [], [], []
         try:
@@ -221,11 +225,30 @@ def get_code33_data(ticker: str) -> dict:
             data = r.json() if isinstance(r.json(), dict) else {}
             quarterly = ((data.get('series') or {}).get('quarterly') or {})
             eps_vals, eps_lbls, eps_ends = _finnhub_quarterly_series(quarterly.get('eps'))
-            nm_vals, nm_lbls, nm_ends = _finnhub_quarterly_series(quarterly.get('netMargin'))
+            ni_vals, ni_lbls, ni_ends = _finnhub_quarterly_series(quarterly.get('netIncome'))
             rev_vals, rev_lbls, rev_ends = _finnhub_quarterly_series(quarterly.get('revenue'))
-            return eps_vals, eps_lbls, eps_ends, nm_vals, nm_lbls, nm_ends, rev_vals, rev_lbls, rev_ends
+            return eps_vals, eps_lbls, eps_ends, ni_vals, ni_lbls, ni_ends, rev_vals, rev_lbls, rev_ends
         except Exception:
             return [], [], [], [], [], [], [], [], []
+
+    def _compute_quarterly_margin(ni_vals, ni_ends, rev_vals, rev_ends):
+        """Compute net margin % = netIncome / revenue * 100 for matching quarter end dates.
+        Returns (margin_vals, margin_labels, margin_ends) oldest->newest."""
+        if not ni_vals or not rev_vals:
+            return [], [], []
+        rev_lookup = {end: val for end, val in zip(rev_ends, rev_vals)}
+        margin_vals, margin_lbls, margin_ends = [], [], []
+        for i, end in enumerate(ni_ends):
+            rv = rev_lookup.get(end)
+            if rv is not None and rv != 0:
+                margin_vals.append(ni_vals[i] / rv * 100)
+                try:
+                    dt = datetime.strptime(end, '%Y-%m-%d').date()
+                    margin_lbls.append(f"Q{(dt.month + 2)//3} {dt.year}")
+                except Exception:
+                    margin_lbls.append(end)
+                margin_ends.append(end)
+        return margin_vals, margin_lbls, margin_ends
 
     def _finnhub_is_recent(end_dates, max_days=548):
         """Reject Finnhub series if most recent date is older than max_days (~18 months)."""
@@ -321,7 +344,7 @@ def get_code33_data(ticker: str) -> dict:
                       'ProfitLoss',
                       'NetIncomeLossAvailableToCommonStockholdersBasic']
 
-    eps_fh, eps_lbl_fh, eps_end_fh, nm_fh, nm_lbl_fh, nm_end_fh, rev_fh, rev_lbl_fh, rev_end_fh = _finnhub_fetch_eps_margin_revenue(ticker)
+    eps_fh, eps_lbl_fh, eps_end_fh, ni_fh, ni_lbl_fh, ni_end_fh, rev_fh, rev_lbl_fh, rev_end_fh = _finnhub_fetch_eps_ni_revenue(ticker)
 
     # EPS: Finnhub primary -> EDGAR fallback per metric
     if len(eps_fh) >= 7 and _finnhub_is_recent(eps_end_fh):
@@ -334,7 +357,7 @@ def get_code33_data(ticker: str) -> dict:
         else:
             sources['eps'] = 'EDGAR'
 
-    # Revenue: Finnhub primary -> EDGAR fallback per metric
+    # Revenue: Finnhub total quarterly revenue -> EDGAR fallback
     if len(rev_fh) >= 7 and _finnhub_is_recent(rev_end_fh):
         rev, rev_labels, rev_ends = rev_fh, rev_lbl_fh, rev_end_fh
         sources['rev'] = 'Finnhub'
@@ -345,12 +368,14 @@ def get_code33_data(ticker: str) -> dict:
         else:
             sources['rev'] = 'EDGAR'
 
-    # Net Margin: Finnhub primary (already a %) -> EDGAR fallback (convert NI dollars to margin %)
+    # Net Margin: Compute quarterly margin % = netIncome / revenue for matching periods
+    # Finnhub primary: use netIncome and revenue series from Finnhub
+    nm_fh, nm_lbl_fh, nm_end_fh = _compute_quarterly_margin(ni_fh, ni_end_fh, rev_fh, rev_end_fh)
     if len(nm_fh) >= 7 and _finnhub_is_recent(nm_end_fh):
         ni, ni_labels, ni_ends = nm_fh, nm_lbl_fh, nm_end_fh
         sources['ni'] = 'Finnhub'
     else:
-        # EDGAR returns absolute NetIncomeLoss — convert to margin % using EDGAR revenue
+        # EDGAR fallback: NetIncomeLoss / Revenue for same quarter end dates
         ni_abs, ni_labels_raw, ni_ends_raw = _edgar_metric(ni_keys_edgar)
         if len(ni_abs) >= 7:
             rev_for_margin, _, rev_margin_ends = _edgar_metric(rev_keys_edgar)
