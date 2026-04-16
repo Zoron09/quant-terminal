@@ -518,7 +518,7 @@ def get_code33_data(ticker: str) -> dict:
         edgar_eps, edgar_eps_lbl, edgar_eps_end
     )
 
-    if len(eps_merged) >= 7 and _is_recent(eps_end_merged) and _eps_sanity(eps_merged):
+    if len(eps_merged) >= 5 and _is_recent(eps_end_merged) and _eps_sanity(eps_merged):
         eps, eps_labels, eps_ends = eps_merged, eps_lbl_merged, eps_end_merged
         sources['eps'] = eps_src
     else:
@@ -537,7 +537,7 @@ def get_code33_data(ticker: str) -> dict:
     edgar_rev, edgar_rev_lbl, edgar_rev_end = _edgar_metric(rev_keys_edgar)
     rev_merged, rev_lbl_merged, rev_end_merged, rev_src = _merge_fmp_edgar(fmp_rev, fmp_rev_lbl, fmp_rev_end, edgar_rev, edgar_rev_lbl, edgar_rev_end)
     
-    if len(rev_merged) >= 7 and _is_recent(rev_end_merged):
+    if len(rev_merged) >= 5 and _is_recent(rev_end_merged):
         rev, rev_labels, rev_ends = rev_merged, rev_lbl_merged, rev_end_merged
         sources['rev'] = rev_src
     else:
@@ -559,7 +559,7 @@ def get_code33_data(ticker: str) -> dict:
 
     ni_merged, ni_lbl_merged, ni_end_merged, ni_src = _merge_fmp_edgar(fmp_margin, fmp_margin_lbl, fmp_margin_end, edgar_ni, edgar_ni_lbl, edgar_ni_end)
     
-    if len(ni_merged) >= 7 and _is_recent(ni_end_merged):
+    if len(ni_merged) >= 5 and _is_recent(ni_end_merged):
         ni, ni_labels, ni_ends = ni_merged, ni_lbl_merged, ni_end_merged
         sources['ni'] = ni_src
     else:
@@ -1020,6 +1020,8 @@ def _c33_status(rates3: list) -> tuple:
     """(status, d1, d2) — green/yellow/red/insufficient."""
     if len(rates3) < 3: return 'insufficient', None, None
     g1, g2, g3 = rates3[-3], rates3[-2], rates3[-1]
+    # Any negative rate = broken immediately (pre-profit or declining)
+    if g1 < 0 or g2 < 0 or g3 < 0: return 'red', None, None
     d1, d2 = g2 - g1, g3 - g2
     if d1 < 0 or d2 < 0: return 'red', d1, d2
     if d2 >= d1:          return 'green', d1, d2
