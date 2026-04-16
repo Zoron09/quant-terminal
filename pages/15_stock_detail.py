@@ -947,7 +947,12 @@ def _compute_yoy(vals: list, end_dates: list) -> list:
             continue
 
         # Look for prior year quarter: end_date within 45 days of current - 365
-        target_dt  = current_dt.replace(year=current_dt.year - 1)
+        # Use timedelta(days=365) to safely handle Feb 29 leap-year dates
+        try:
+            target_dt = current_dt.replace(year=current_dt.year - 1)
+        except ValueError:
+            from datetime import timedelta
+            target_dt = current_dt - timedelta(days=365)
         prior_val  = None
         best_diff  = 46  # must be within 45 days
         for dt, v in date_val_map.items():
