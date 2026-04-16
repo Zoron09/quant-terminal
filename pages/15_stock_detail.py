@@ -244,10 +244,11 @@ def get_code33_data(ticker: str) -> dict:
             r = requests.get(
                 "https://financialmodelingprep.com/stable/income-statement",
                 params={'symbol': symbol.upper(), 'period': 'quarter',
-                        'limit': 8, 'apikey': FMP_API_KEY},
+                        'limit': 5, 'apikey': FMP_API_KEY},
                 timeout=10
             )
             r.raise_for_status()
+            print(f"FMP response status: {r.status_code}, rows: {len(r.json()) if isinstance(r.json(), list) else 'not a list'}")
             data = r.json() if isinstance(r.json(), list) else []
             if not data:
                 return _empty
@@ -306,7 +307,8 @@ def get_code33_data(ticker: str) -> dict:
                     eps_ends.append(r['dt'].isoformat())
 
             return rev_vals, rev_lbls, rev_ends, ni_vals, ni_lbls, ni_ends, margin_vals, margin_lbls, margin_ends, eps_vals, eps_lbls, eps_ends
-        except Exception:
+        except Exception as e:
+            print(f"FMP fetch error: {e}")
             return _empty
 
     def _is_recent(end_dates, max_days=548):
