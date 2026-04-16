@@ -550,118 +550,124 @@ def get_code33_data(ticker: str) -> dict:
 
     eps_fmp_clean   = _sane_eps(fmp_eps)
     eps_edgar_clean = _sane_eps(edgar_eps)
-    eps_fh_clean    = _sane_eps(fh_eps)
 
-    # ── Revenue: strict lineage YoY ───────────────────────────────────────────
-    fmp_rev_yoy   = _compute_yoy(fmp_rev, fmp_rev_end)   if len(fmp_rev)   >= 5 else []
-    fmp_rev_valid = [r for r in fmp_rev_yoy if r is not None]
+    # ── Strict per-pair lineage YoY ───────────────────────────────────────────
+    def _strict_lineage_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends):
+        """
+        Compute YoY rates using strict source lineage per quarter pair.
+        For each quarter: if both current AND prior year exist in FMP, use FMP.
+        Otherwise use EDGAR for both. Never mix sources within a pair.
+        Returns (yoy_rates, labels, end_dates)
+        """
+        fmp_map = {}
+        for v, e in zip(fmp_vals, fmp_ends):
+            if v is not None and e is not None:
+                try:
+                    dt = datetime.strptime(e, '%Y-%m-%d').date()
+                    fmp_map[dt] = float(v)
+                except Exception:
+                    pass
 
-    edgar_rev_yoy   = _compute_yoy(edgar_rev, edgar_rev_end)   if len(edgar_rev)   >= 5 else []
-    edgar_rev_valid = [r for r in edgar_rev_yoy if r is not None]
+        edgar_map = {}
+        for v, e in zip(edgar_vals, edgar_ends):
+            if v is not None and e is not None:
+                try:
+                    dt = datetime.strptime(e, '%Y-%m-%d').date()
+                    edgar_map[dt] = float(v)
+                except Exception:
+                    pass
 
-    if len(fmp_rev_valid) >= 3:
-        rev_yoy_final    = fmp_rev_yoy
-        rev_labels_final = fmp_rev_lbl
-        rev_ends_final   = fmp_rev_end
-        rev_raw_final    = fmp_rev
-        sources['rev']   = 'FMP'
-    elif len(edgar_rev_valid) >= 3:
-        rev_yoy_final    = edgar_rev_yoy
-        rev_labels_final = edgar_rev_lbl
-        rev_ends_final   = edgar_rev_end
-        rev_raw_final    = edgar_rev
-        sources['rev']   = 'EDGAR'
-    else:
-        rev_merged, rev_lbl_merged, rev_end_merged, _ = _normalize_to_pool([
-            (fmp_rev, fmp_rev_end, 'FMP'),
-            (edgar_rev, edgar_rev_end, 'EDGAR'),
-        ])
-        rev_yoy_final    = _compute_yoy(rev_merged, rev_end_merged)
-        rev_labels_final = rev_lbl_merged
-        rev_ends_final   = rev_end_merged
-        rev_raw_final    = rev_merged
-        sources['rev']   = 'FMP+EDGAR' if rev_merged else 'insufficient'
+        def _find_nearest(date_map, target_dt, window=45):
+            best_val = None
+            best_diff = window + 1
+            for dt, v in date_map.items():
+                diff = abs((dt - target_dt).days)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_val = v
+            return best_val
 
-    # ── Net Income: strict lineage YoY ────────────────────────────────────────
-    fmp_ni_yoy   = _compute_yoy(fmp_ni, fmp_ni_end)         if len(fmp_ni)       >= 5 else []
-    fmp_ni_valid = [r for r in fmp_ni_yoy if r is not None]
+        all_ends = sorted(set(list(fmp_ends) + list(edgar_ends)), reverse=True)[:8]
+        all_ends.reverse()
 
-    edgar_ni_yoy   = _compute_yoy(edgar_ni_abs, edgar_ni_end) if len(edgar_ni_abs) >= 5 else []
-    edgar_ni_valid = [r for r in edgar_ni_yoy if r is not None]
+        rates, labels, ends_out = [], [], []
 
-    if len(fmp_ni_valid) >= 3:
-        ni_yoy_final    = fmp_ni_yoy
-        ni_labels_final = fmp_ni_lbl
-        ni_ends_final   = fmp_ni_end
-        ni_raw_final    = fmp_ni
-        sources['ni']   = 'FMP'
-    elif len(edgar_ni_valid) >= 3:
-        ni_yoy_final    = edgar_ni_yoy
-        ni_labels_final = edgar_ni_lbl
-        ni_ends_final   = edgar_ni_end
-        ni_raw_final    = edgar_ni_abs
-        sources['ni']   = 'EDGAR'
-    else:
-        ni_merged, ni_lbl_merged, ni_end_merged, _ = _normalize_to_pool([
-            (fmp_ni, fmp_ni_end, 'FMP'),
-            (edgar_ni_abs, edgar_ni_end, 'EDGAR'),
-        ])
-        ni_yoy_final    = _compute_yoy(ni_merged, ni_end_merged)
-        ni_labels_final = ni_lbl_merged
-        ni_ends_final   = ni_end_merged
-        ni_raw_final    = ni_merged
-        sources['ni']   = 'FMP+EDGAR' if ni_merged else 'insufficient'
+        for e in all_ends:
+            try:
+                current_dt = datetime.strptime(e, '%Y-%m-%d').date()
+            except Exception:
+                continue
 
-    # ── EPS: strict lineage YoY ───────────────────────────────────────────────
-    fmp_eps_yoy   = _compute_yoy(eps_fmp_clean, fmp_eps_end)     if len(eps_fmp_clean)   >= 5 else []
-    fmp_eps_valid = [r for r in fmp_eps_yoy if r is not None]
+            try:
+                prior_target = current_dt.replace(year=current_dt.year - 1)
+            except ValueError:
+                from datetime import timedelta
+                prior_target = current_dt - timedelta(days=365)
 
-    edgar_eps_yoy   = _compute_yoy(eps_edgar_clean, edgar_eps_end) if len(eps_edgar_clean) >= 5 else []
-    edgar_eps_valid = [r for r in edgar_eps_yoy if r is not None]
+            # Try FMP pair first
+            fmp_current = _find_nearest(fmp_map, current_dt, window=15)
+            fmp_prior   = _find_nearest(fmp_map, prior_target, window=45)
 
-    fh_eps_yoy   = _compute_yoy(eps_fh_clean, fh_eps_end)         if len(eps_fh_clean)    >= 5 else []
-    fh_eps_valid = [r for r in fh_eps_yoy if r is not None]
+            if fmp_current is not None and fmp_prior is not None and fmp_prior != 0:
+                rate = (fmp_current - fmp_prior) / abs(fmp_prior) * 100
+                rates.append(max(min(rate, 500.0), -500.0))
+                labels.append(f"Q{(current_dt.month + 2) // 3} {current_dt.year}")
+                ends_out.append(e)
+                continue
 
-    if len(fmp_eps_valid) >= 3:
-        eps_yoy_final    = fmp_eps_yoy
-        eps_labels_final = fmp_eps_lbl
-        eps_ends_final   = fmp_eps_end
-        eps_raw_final    = eps_fmp_clean
-        sources['eps']   = 'FMP'
-    elif len(edgar_eps_valid) >= 3:
-        eps_yoy_final    = edgar_eps_yoy
-        eps_labels_final = edgar_eps_lbl
-        eps_ends_final   = edgar_eps_end
-        eps_raw_final    = eps_edgar_clean
-        sources['eps']   = 'EDGAR'
-    elif len(fh_eps_valid) >= 3:
-        eps_yoy_final    = fh_eps_yoy
-        eps_labels_final = fh_eps_lbl
-        eps_ends_final   = fh_eps_end
-        eps_raw_final    = eps_fh_clean
-        sources['eps']   = 'Finnhub'
-    else:
-        eps_merged, eps_lbl_merged, eps_end_merged, _ = _normalize_to_pool([
-            (eps_fmp_clean,   fmp_eps_end,   'FMP'),
-            (eps_edgar_clean, edgar_eps_end, 'EDGAR'),
-            (eps_fh_clean,    fh_eps_end,    'Finnhub'),
-        ])
-        eps_yoy_final    = _compute_yoy(eps_merged, eps_end_merged)
-        eps_labels_final = eps_lbl_merged
-        eps_ends_final   = eps_end_merged
-        eps_raw_final    = eps_merged
-        sources['eps']   = 'FMP+EDGAR+Finnhub' if eps_merged else 'insufficient'
+            # Fall back to EDGAR pair
+            edgar_current = _find_nearest(edgar_map, current_dt, window=15)
+            edgar_prior   = _find_nearest(edgar_map, prior_target, window=45)
+
+            if edgar_current is not None and edgar_prior is not None and edgar_prior != 0:
+                rate = (edgar_current - edgar_prior) / abs(edgar_prior) * 100
+                rates.append(max(min(rate, 500.0), -500.0))
+                labels.append(f"Q{(current_dt.month + 2) // 3} {current_dt.year}")
+                ends_out.append(e)
+
+        return rates, labels, ends_out
+
+    # ── Revenue ───────────────────────────────────────────────────────────────
+    rev_yoy_final, rev_labels_final, _ = _strict_lineage_yoy(
+        fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end
+    )
+    # Raw values + matching end dates (aligned pair, used by test + debug count)
+    rev_raw_final      = edgar_rev     if edgar_rev     else fmp_rev
+    rev_raw_ends_final = edgar_rev_end if edgar_rev     else fmp_rev_end
+    sources['rev'] = 'FMP|EDGAR' if rev_yoy_final else 'insufficient'
+
+    # ── Net Income ────────────────────────────────────────────────────────────
+    ni_yoy_final, ni_labels_final, _ = _strict_lineage_yoy(
+        fmp_ni, fmp_ni_end, edgar_ni_abs, edgar_ni_end
+    )
+    ni_raw_final      = edgar_ni_abs if edgar_ni_abs else fmp_ni
+    ni_raw_ends_final = edgar_ni_end if edgar_ni_abs else fmp_ni_end
+    sources['ni'] = 'FMP|EDGAR' if ni_yoy_final else 'insufficient'
+
+    # ── EPS ───────────────────────────────────────────────────────────────────
+    eps_yoy_final, eps_labels_final, _ = _strict_lineage_yoy(
+        eps_fmp_clean, fmp_eps_end, eps_edgar_clean, edgar_eps_end
+    )
+    # For pre-profit detection use EDGAR history (more quarters) if available
+    eps_raw_final      = eps_edgar_clean if eps_edgar_clean else eps_fmp_clean
+    eps_raw_ends_final = edgar_eps_end   if eps_edgar_clean else fmp_eps_end
+    sources['eps'] = 'FMP|EDGAR' if eps_yoy_final else 'insufficient'
 
     # ── Recency check ─────────────────────────────────────────────────────────
-    if not _is_recent(rev_ends_final):
-        rev_yoy_final, rev_labels_final, rev_ends_final, rev_raw_final = [], [], [], []
+    if not _is_recent(rev_raw_ends_final):
+        rev_yoy_final, rev_labels_final = [], []
+        rev_raw_final, rev_raw_ends_final = [], []
         sources['rev'] = 'insufficient'
 
     return {
+        # Raw values aligned with raw end dates (for test + debug count)
         'eps': eps_raw_final, 'rev': rev_raw_final, 'ni': ni_raw_final,
+        'eps_end_dates': eps_raw_ends_final,
+        'rev_end_dates': rev_raw_ends_final,
+        'ni_end_dates':  ni_raw_ends_final,
+        # Pre-computed per-pair YoY (for render site — never mixes sources)
         'eps_yoy': eps_yoy_final, 'rev_yoy': rev_yoy_final, 'ni_yoy': ni_yoy_final,
         'eps_labels': eps_labels_final, 'rev_labels': rev_labels_final, 'ni_labels': ni_labels_final,
-        'eps_end_dates': eps_ends_final, 'rev_end_dates': rev_ends_final, 'ni_end_dates': ni_ends_final,
         'sources': sources, 'is_us': is_us,
     }
 
