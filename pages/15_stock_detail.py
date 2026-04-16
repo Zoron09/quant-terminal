@@ -551,31 +551,52 @@ def get_code33_data(ticker: str) -> dict:
     eps_fmp_clean   = _sane_eps(fmp_eps)
     eps_edgar_clean = _sane_eps(edgar_eps)
 
+    # ── yfinance fallback fetch ───────────────────────────────────────────────
+    try:
+        import yfinance as _yf
+        _yf_ticker = _yf.Ticker(ticker)
+        yf_q = _yf_ticker.quarterly_income_stmt
+        def _yf_series(keys):
+            if yf_q is None or yf_q.empty:
+                return [], []
+            for k in keys:
+                if k in yf_q.index:
+                    cols = sorted(yf_q.columns, reverse=False)
+                    vals = [_sf(yf_q.loc[k, c]) for c in cols]
+                    ends = [c.strftime('%Y-%m-%d') for c in cols]
+                    return vals, ends
+            return [], []
+        yf_rev, yf_rev_end = _yf_series(['Total Revenue', 'Revenue'])
+        yf_ni,  yf_ni_end  = _yf_series(['Net Income', 'Net Income Common Stockholders'])
+        yf_eps, yf_eps_end = _yf_series(['Diluted EPS', 'Basic EPS'])
+    except Exception:
+        yf_rev = yf_rev_end = yf_ni = yf_ni_end = yf_eps = yf_eps_end = []
+
     # ── Strict per-pair lineage YoY ───────────────────────────────────────────
-    def _strict_lineage_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends):
+    def _strict_lineage_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends,
+                             yf_vals=None, yf_ends=None):
         """
         Compute YoY rates using strict source lineage per quarter pair.
-        For each quarter: if both current AND prior year exist in FMP, use FMP.
-        Otherwise use EDGAR for both. Never mix sources within a pair.
-        Returns (yoy_rates, labels, end_dates)
+        Tier 1: FMP pair (both current + prior in FMP).
+        Tier 2: EDGAR pair.
+        Tier 3: yfinance pair.
+        Never mixes sources within a single YoY pair.
+        Returns (yoy_rates, labels, end_dates, used_yf)
         """
-        fmp_map = {}
-        for v, e in zip(fmp_vals, fmp_ends):
-            if v is not None and e is not None:
-                try:
-                    dt = datetime.strptime(e, '%Y-%m-%d').date()
-                    fmp_map[dt] = float(v)
-                except Exception:
-                    pass
+        def _build_map(vals, ends):
+            m = {}
+            for v, e in zip(vals or [], ends or []):
+                if v is not None and e is not None:
+                    try:
+                        dt = datetime.strptime(e, '%Y-%m-%d').date()
+                        m[dt] = float(v)
+                    except Exception:
+                        pass
+            return m
 
-        edgar_map = {}
-        for v, e in zip(edgar_vals, edgar_ends):
-            if v is not None and e is not None:
-                try:
-                    dt = datetime.strptime(e, '%Y-%m-%d').date()
-                    edgar_map[dt] = float(v)
-                except Exception:
-                    pass
+        fmp_map   = _build_map(fmp_vals, fmp_ends)
+        edgar_map = _build_map(edgar_vals, edgar_ends)
+        yf_map    = _build_map(yf_vals, yf_ends)
 
         def _find_nearest(date_map, target_dt, window=45):
             best_val = None
@@ -587,10 +608,14 @@ def get_code33_data(ticker: str) -> dict:
                     best_val = v
             return best_val
 
-        all_ends = sorted(set(list(fmp_ends) + list(edgar_ends)), reverse=True)[:8]
+        all_ends = sorted(
+            set(list(fmp_ends or []) + list(edgar_ends or []) + list(yf_ends or [])),
+            reverse=True
+        )[:8]
         all_ends.reverse()
 
         rates, labels, ends_out = [], [], []
+        used_yf = False
 
         for e in all_ends:
             try:
@@ -604,10 +629,9 @@ def get_code33_data(ticker: str) -> dict:
                 from datetime import timedelta
                 prior_target = current_dt - timedelta(days=365)
 
-            # Try FMP pair first
+            # Tier 1 — FMP pair
             fmp_current = _find_nearest(fmp_map, current_dt, window=15)
             fmp_prior   = _find_nearest(fmp_map, prior_target, window=45)
-
             if fmp_current is not None and fmp_prior is not None and fmp_prior != 0:
                 rate = (fmp_current - fmp_prior) / abs(fmp_prior) * 100
                 rates.append(max(min(rate, 500.0), -500.0))
@@ -615,43 +639,61 @@ def get_code33_data(ticker: str) -> dict:
                 ends_out.append(e)
                 continue
 
-            # Fall back to EDGAR pair
+            # Tier 2 — EDGAR pair
             edgar_current = _find_nearest(edgar_map, current_dt, window=15)
             edgar_prior   = _find_nearest(edgar_map, prior_target, window=45)
-
             if edgar_current is not None and edgar_prior is not None and edgar_prior != 0:
                 rate = (edgar_current - edgar_prior) / abs(edgar_prior) * 100
                 rates.append(max(min(rate, 500.0), -500.0))
                 labels.append(f"Q{(current_dt.month + 2) // 3} {current_dt.year}")
                 ends_out.append(e)
+                continue
 
-        return rates, labels, ends_out
+            # Tier 3 — yfinance pair
+            yf_current = _find_nearest(yf_map, current_dt, window=15)
+            yf_prior   = _find_nearest(yf_map, prior_target, window=45)
+            if yf_current is not None and yf_prior is not None and yf_prior != 0:
+                rate = (yf_current - yf_prior) / abs(yf_prior) * 100
+                rates.append(max(min(rate, 500.0), -500.0))
+                labels.append(f"Q{(current_dt.month + 2) // 3} {current_dt.year}")
+                ends_out.append(e)
+                used_yf = True
+
+        return rates, labels, ends_out, used_yf
 
     # ── Revenue ───────────────────────────────────────────────────────────────
-    rev_yoy_final, rev_labels_final, _ = _strict_lineage_yoy(
-        fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end
+    rev_yoy_final, rev_labels_final, _, rev_used_yf = _strict_lineage_yoy(
+        fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end, yf_rev, yf_rev_end
     )
-    # Raw values + matching end dates (aligned pair, used by test + debug count)
     rev_raw_final      = edgar_rev     if edgar_rev     else fmp_rev
     rev_raw_ends_final = edgar_rev_end if edgar_rev     else fmp_rev_end
-    sources['rev'] = 'FMP|EDGAR' if rev_yoy_final else 'insufficient'
+    if rev_yoy_final:
+        sources['rev'] = 'FMP|EDGAR|yfinance' if rev_used_yf else 'FMP|EDGAR'
+    else:
+        sources['rev'] = 'insufficient'
 
     # ── Net Income ────────────────────────────────────────────────────────────
-    ni_yoy_final, ni_labels_final, _ = _strict_lineage_yoy(
-        fmp_ni, fmp_ni_end, edgar_ni_abs, edgar_ni_end
+    ni_yoy_final, ni_labels_final, _, ni_used_yf = _strict_lineage_yoy(
+        fmp_ni, fmp_ni_end, edgar_ni_abs, edgar_ni_end, yf_ni, yf_ni_end
     )
     ni_raw_final      = edgar_ni_abs if edgar_ni_abs else fmp_ni
     ni_raw_ends_final = edgar_ni_end if edgar_ni_abs else fmp_ni_end
-    sources['ni'] = 'FMP|EDGAR' if ni_yoy_final else 'insufficient'
+    if ni_yoy_final:
+        sources['ni'] = 'FMP|EDGAR|yfinance' if ni_used_yf else 'FMP|EDGAR'
+    else:
+        sources['ni'] = 'insufficient'
 
     # ── EPS ───────────────────────────────────────────────────────────────────
-    eps_yoy_final, eps_labels_final, _ = _strict_lineage_yoy(
-        eps_fmp_clean, fmp_eps_end, eps_edgar_clean, edgar_eps_end
+    eps_yoy_final, eps_labels_final, _, eps_used_yf = _strict_lineage_yoy(
+        eps_fmp_clean, fmp_eps_end, eps_edgar_clean, edgar_eps_end,
+        _sane_eps(yf_eps), yf_eps_end
     )
-    # For pre-profit detection use EDGAR history (more quarters) if available
     eps_raw_final      = eps_edgar_clean if eps_edgar_clean else eps_fmp_clean
     eps_raw_ends_final = edgar_eps_end   if eps_edgar_clean else fmp_eps_end
-    sources['eps'] = 'FMP|EDGAR' if eps_yoy_final else 'insufficient'
+    if eps_yoy_final:
+        sources['eps'] = 'FMP|EDGAR|yfinance' if eps_used_yf else 'FMP|EDGAR'
+    else:
+        sources['eps'] = 'insufficient'
 
     # ── Recency check ─────────────────────────────────────────────────────────
     if not _is_recent(rev_raw_ends_final):
