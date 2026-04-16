@@ -441,6 +441,52 @@ def get_code33_data(ticker: str) -> dict:
                 continue
 
             filtered_entries.reverse()  # chronological ascending
+
+            # Attempt to derive missing recent quarter from 10-K annual filing
+            if filtered_entries:
+                most_recent = filtered_entries[-1]['_end_dt']
+                days_since = (datetime.utcnow().date() - most_recent).days
+                if days_since > 120:
+                    # Look for 10-K annual entry
+                    for e in entries:
+                        if str(e.get('form', '')).strip().upper() != '10-K':
+                            continue
+                        end_str = str(e.get('end', '')).strip()
+                        start_str = str(e.get('start', '')).strip()
+                        val = _sf(e.get('val'))
+                        if not end_str or not start_str or val is None:
+                            continue
+                        try:
+                            end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
+                            start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
+                        except Exception:
+                            continue
+                        duration = (end_dt - start_dt).days
+                        if not (350 <= duration <= 380):
+                            continue
+                        if end_dt <= most_recent:
+                            continue
+                        # Found a more recent annual filing — derive Q4
+                        # Q4 = annual - sum of Q1+Q2+Q3 within this fiscal year
+                        quarterly_sum = sum(
+                            item['_val'] for item in filtered_entries
+                            if item['_end_dt'] > start_dt and item['_end_dt'] <= end_dt
+                        )
+                        quarterly_count = sum(
+                            1 for item in filtered_entries
+                            if item['_end_dt'] > start_dt and item['_end_dt'] <= end_dt
+                        )
+                        if quarterly_count == 3:
+                            q4_val = float(val) - quarterly_sum
+                            derived = {
+                                '_end_dt': end_dt,
+                                '_filed_dt': None,
+                                '_val': q4_val,
+                                'form': '10-K-derived'
+                            }
+                            filtered_entries.append(derived)
+                        break
+
             vals = [item['_val'] for item in filtered_entries]
             ends = [item['_end_dt'].isoformat() for item in filtered_entries]
             lbls = [f"Q{(item['_end_dt'].month + 2) // 3} {item['_end_dt'].year}" for item in filtered_entries]
@@ -473,6 +519,25 @@ def get_code33_data(ticker: str) -> dict:
     )
 
     fh_eps, fh_eps_lbl, fh_eps_end = _finnhub_fetch_eps(ticker)
+
+    # Concept mismatch guard: if sources differ by >5x, EDGAR has wrong concept
+    if fmp_rev and edgar_rev:
+        fmp_avg = sum(fmp_rev) / len(fmp_rev)
+        edgar_vals = [v for v in edgar_rev if v is not None]
+        edgar_avg = sum(edgar_vals) / len(edgar_vals) if edgar_vals else 0
+        if edgar_avg > 0 and fmp_avg > 0:
+            ratio = max(fmp_avg, edgar_avg) / min(fmp_avg, edgar_avg)
+            if ratio > 5:
+                edgar_rev, edgar_rev_lbl, edgar_rev_end = [], [], []
+
+    if fmp_ni and edgar_ni_abs:
+        fmp_ni_avg = sum(fmp_ni) / len(fmp_ni)
+        edgar_ni_vals = [v for v in edgar_ni_abs if v is not None]
+        edgar_ni_avg = sum(edgar_ni_vals) / len(edgar_ni_vals) if edgar_ni_vals else 0
+        if fmp_ni_avg != 0 and edgar_ni_avg != 0:
+            ratio = max(abs(fmp_ni_avg), abs(edgar_ni_avg)) / max(abs(min(fmp_ni_avg, edgar_ni_avg)), 1)
+            if ratio > 5:
+                edgar_ni_abs, edgar_ni_lbl, edgar_ni_end = [], [], []
 
     # ── Normalize Revenue ──────────────────────────────────────────────────────
     rev, rev_labels, rev_ends = _normalize_to_pool([
@@ -532,6 +597,13 @@ def get_code33_data(ticker: str) -> dict:
     if not _is_recent(rev_ends):
         rev, rev_labels, rev_ends = [], [], []
         sources['rev'] = 'insufficient'
+
+    # ── TEMPORARY DEBUG (ORCL only) ────────────────────────────────────────────
+    import os as _os
+    if ticker.upper() == 'ORCL':
+        print(f"REV pool: {list(zip(rev_ends, rev))}")
+        print(f"REV yoy will use date_val_map built from these dates")
+    # ── END TEMPORARY DEBUG ────────────────────────────────────────────────────
 
     return {
         'eps': eps, 'rev': rev, 'ni': ni,

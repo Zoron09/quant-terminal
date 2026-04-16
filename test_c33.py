@@ -1,50 +1,34 @@
-"""Test Code 33 rewrite against UCTT, WULF, TBBB, AAPL"""
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-# Minimal streamlit mock for caching
+import sys
+sys.path.insert(0, '.')
 import streamlit as st
+st.cache_data = lambda **kw: (lambda f: f)
 
-import importlib
-M = importlib.import_module('pages.15_stock_detail')
+import importlib.util, pathlib
+spec = importlib.util.spec_from_file_location(
+    "fifteen_stock_detail",
+    pathlib.Path("pages/15_stock_detail.py")
+)
+p = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(p)
 
-def test_ticker(t):
-    print(f"\n{'='*60}")
-    print(f"TICKER: {t}")
-    print(f"{'='*60}")
-    c33 = M.get_code33_data(t)
-    is_us = c33.get('is_us', '?')
-    sources = c33.get('sources', {})
-    eps = c33.get('eps', [])
-    rev = c33.get('rev', [])
-    ni  = c33.get('ni', [])
-    eps_labels = c33.get('eps_labels', [])
+tickers = {
+    'TSLA': [(-11.8, 11.6, -3.1)],
+    'PLTR': [(48.0, 62.8, 70.0)],
+    'SOFI': [(33.0, 44.0, 32.5)],
+    'NVDA': [(69, 56, 62)],
+    'META': [(21.6, 26.2, 23.8)],
+    'APP':  [(40.3, 77.0, 68.2)],
+    'CRWD': [(19.8, 21.3, 22.2)],
+    'MSFT': [(13.0, 18.0, 17.0)],
+    'ORCL': [(12.2, 14.2, 21.7)],
+    'HIMS': [(110.7, 72.6, 49.2)],
+}
 
-    print(f"  is_us: {is_us}")
-    print(f"  sources: {sources}")
-    print(f"  EPS ({len(eps)}Q): {eps[-5:] if len(eps)>5 else eps}")
-    print(f"  REV ({len(rev)}Q): {[f'{v/1e6:.0f}M' if v and abs(v)>1e6 else v for v in (rev[-5:] if len(rev)>5 else rev)]}")
-    print(f"  NI  ({len(ni)}Q):  {[f'{v/1e6:.0f}M' if v and abs(v)>1e6 else v for v in (ni[-5:]  if len(ni)>5  else ni)]}")
-    print(f"  labels: {eps_labels[-5:] if len(eps_labels)>5 else eps_labels}")
-
-    # Pre-profit check
-    if len(eps) >= 3:
-        last3 = eps[-3:]
-        is_pp = all(v is not None and v < 0 for v in last3)
-        print(f"  pre-profit: {is_pp} (last 3 EPS: {last3})")
-
-    # YoY
-    eps_yoy = M._compute_yoy(eps)
-    rev_yoy = M._compute_yoy(rev)
-    print(f"  EPS YoY: {[f'{v:.1f}' if v else 'None' for v in eps_yoy]}")
-    print(f"  REV YoY: {[f'{v:.1f}' if v else 'None' for v in rev_yoy]}")
-
-    eps3 = M._last3_valid(eps_yoy)
-    rev3 = M._last3_valid(rev_yoy)
-    eps_status, eps_d1, eps_d2 = M._c33_status(eps3)
-    rev_status, rev_d1, rev_d2 = M._c33_status(rev3)
-    print(f"  EPS status: {eps_status} (d1={eps_d1}, d2={eps_d2})")
-    print(f"  REV status: {rev_status} (d1={rev_d1}, d2={rev_d2})")
-
-for t in ['GTE', 'WULF', 'UCTT', 'TBBB']:
-    test_ticker(t)
+for ticker, (expected,) in tickers.items():
+    d = p.get_code33_data(ticker)
+    rev = d.get('rev', [])
+    rev_ends = d.get('rev_end_dates', [])
+    rates = p._compute_yoy(rev, rev_ends) if rev and rev_ends else []
+    valid = [r for r in rates if r is not None]
+    last3 = valid[-3:] if len(valid) >= 3 else valid
+    print(f"{ticker}: {[round(r,1) for r in last3]} | expected {list(expected)} | src: {d.get('sources',{}).get('rev','?')}")
