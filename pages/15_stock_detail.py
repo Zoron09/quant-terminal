@@ -319,29 +319,48 @@ def get_code33_data(ticker: str) -> dict:
         except Exception:
             return False
 
-    def _merge_fmp_edgar(fmp_v, fmp_l, fmp_e, ed_v, ed_l, ed_e):
-        """Merge FMP primary with EDGAR fallback for remaining non-overlapping 45-day slots."""
-        combined = []
-        for v, l, e in zip(fmp_v, fmp_l, fmp_e):
-            try:
-                dt = datetime.strptime(e, '%Y-%m-%d').date()
-                combined.append({'v': v, 'l': l, 'e': dt, 'src': 'FMP'})
-            except Exception:
-                pass
-        
-        for v, l, e in zip(ed_v, ed_l, ed_e):
-            try:
-                dt = datetime.strptime(e, '%Y-%m-%d').date()
-                if not any(abs((c['e'] - dt).days) <= 45 for c in combined):
-                    combined.append({'v': v, 'l': l, 'e': dt, 'src': 'EDGAR'})
-            except Exception:
-                pass
-                
-        combined = sorted(combined, key=lambda x: x['e'], reverse=True)[:8]
-        combined.reverse()
-        
-        src_label = 'FMP+EDGAR' if any(c['src'] == 'FMP' for c in combined) and any(c['src'] == 'EDGAR' for c in combined) else ('FMP' if any(c['src'] == 'FMP' for c in combined) else 'EDGAR')
-        return [c['v'] for c in combined], [c['l'] for c in combined], [c['e'].isoformat() for c in combined], src_label
+    def _normalize_to_pool(entries_list):
+        """
+        Merge data points from multiple sources into one deduplicated pool.
+        entries_list = list of (values, end_dates, source_name) tuples.
+        Two entries are same quarter if end_dates within 45 days.
+        Returns (values, labels, end_dates) sorted ascending, max 8 most recent.
+        """
+        pool = []
+        for vals, ends, src in entries_list:
+            for v, e in zip(vals, ends):
+                if v is None or e is None:
+                    continue
+                try:
+                    dt = datetime.strptime(e, '%Y-%m-%d').date()
+                except Exception:
+                    continue
+                pool.append({'dt': dt, 'val': float(v), 'src': src})
+
+        if not pool:
+            return [], [], []
+
+        # Deduplicate: for each quarter window, keep entry with latest dt
+        # Sort by date descending, then deduplicate by 45-day proximity
+        pool.sort(key=lambda x: x['dt'], reverse=True)
+        deduped = []
+        for entry in pool:
+            duplicate = False
+            for kept in deduped:
+                if abs((entry['dt'] - kept['dt']).days) <= 45:
+                    duplicate = True
+                    break
+            if not duplicate:
+                deduped.append(entry)
+
+        # Take 8 most recent, then reverse to ascending
+        deduped = deduped[:8]
+        deduped.reverse()
+
+        vals = [e['val'] for e in deduped]
+        ends = [e['dt'].isoformat() for e in deduped]
+        lbls = [f"Q{(e['dt'].month + 2) // 3} {e['dt'].year}" for e in deduped]
+        return vals, lbls, ends
 
     # _finnhub_is_recent replaced by _is_recent above (shared by FMP + Finnhub)
 
@@ -429,68 +448,6 @@ def get_code33_data(ticker: str) -> dict:
 
         return [], [], []
 
-    def _derive_q4(concepts, unit='USD'):
-        """Derive Q4 value = annual_10K_value - sum(Q1+Q2+Q3 from 10-Q).
-        Returns (value, end_date, label) or (None, None, None)."""
-        facts = get_edgar_facts(ticker)
-        if not facts:
-            return None, None, None
-        usgaap = facts.get('facts', {}).get('us-gaap', {})
-        for concept in concepts:
-            entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
-            if not entries:
-                continue
-            annual_candidates = []
-            for e in entries:
-                if str(e.get('form', '')).strip().upper() != '10-K':
-                    continue
-                end_str = str(e.get('end', '')).strip()
-                start_str = str(e.get('start', '')).strip()
-                val = _sf(e.get('val'))
-                if not end_str or not start_str or val is None:
-                    continue
-                try:
-                    end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
-                    start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
-                except Exception:
-                    continue
-                duration = (end_dt - start_dt).days
-                if 350 <= duration <= 380:
-                    annual_candidates.append((end_dt, float(val), start_dt))
-            if not annual_candidates:
-                continue
-            annual_candidates.sort(key=lambda x: x[0], reverse=True)
-            annual_end, annual_val, annual_start = annual_candidates[0]
-            quarterly_sum = 0.0
-            quarterly_count = 0
-            for e in entries:
-                if str(e.get('form', '')).strip().upper() != '10-Q':
-                    continue
-                end_str = str(e.get('end', '')).strip()
-                start_str = str(e.get('start', '')).strip()
-                val = _sf(e.get('val'))
-                if not end_str or not start_str or val is None:
-                    continue
-                try:
-                    end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
-                    start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
-                except Exception:
-                    continue
-                duration = (end_dt - start_dt).days
-                if duration < 80 or duration > 105:
-                    continue
-                if end_dt > annual_end or end_dt <= annual_start:
-                    continue
-                quarterly_sum += float(val)
-                quarterly_count += 1
-            if quarterly_count != 3:
-                continue
-            q4_val = annual_val - quarterly_sum
-            q4_quarter = (annual_end.month + 2) // 3
-            label = f"Q{q4_quarter} {annual_end.year}"
-            return q4_val, annual_end.isoformat(), label
-        return None, None, None
-
     # ── Fetch each metric independently ───────────────────────────────────────
     eps_keys_edgar = ['EarningsPerShareDiluted', 'EarningsPerShareBasic']
     rev_keys_edgar = ['RevenueFromContractWithCustomerExcludingAssessedTax',
@@ -504,103 +461,77 @@ def get_code33_data(ticker: str) -> dict:
                       'ProfitLoss',
                       'NetIncomeLossAvailableToCommonStockholdersBasic']
 
-    def _eps_sanity(vals):
-        if not vals: return False
-        return all(v is None or -500 <= v <= 5000 for v in vals)
+    # ── Fetch from all sources ─────────────────────────────────────────────────
+    fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_ni, fmp_ni_lbl, fmp_ni_end, \
+    fmp_margin, fmp_margin_lbl, fmp_margin_end, \
+    fmp_eps, fmp_eps_lbl, fmp_eps_end = _fmp_fetch_revenue_ni(ticker)
 
-    # ── FMP fetch (EPS + Revenue + Net Income from same source) ─────────────────
-    fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_ni, fmp_ni_lbl, fmp_ni_end, fmp_margin, fmp_margin_lbl, fmp_margin_end, fmp_eps, fmp_eps_lbl, fmp_eps_end = _fmp_fetch_revenue_ni(ticker)
-
-    # ── EPS: FMP primary + EDGAR backfill (identical to Revenue merge) ────────
-    edgar_eps, edgar_eps_lbl, edgar_eps_end = _edgar_metric(eps_keys_edgar, unit='USD/shares')
-    eps_merged, eps_lbl_merged, eps_end_merged, eps_src = _merge_fmp_edgar(
-        fmp_eps, fmp_eps_lbl, fmp_eps_end,
-        edgar_eps, edgar_eps_lbl, edgar_eps_end
+    edgar_rev, edgar_rev_lbl, edgar_rev_end = _edgar_metric(rev_keys_edgar)
+    edgar_ni_abs, edgar_ni_lbl, edgar_ni_end = _edgar_metric(ni_keys_edgar)
+    edgar_eps, edgar_eps_lbl, edgar_eps_end = _edgar_metric(
+        eps_keys_edgar, unit='USD/shares'
     )
 
-    if len(eps_merged) >= 5 and _is_recent(eps_end_merged) and _eps_sanity(eps_merged):
-        eps, eps_labels, eps_ends = eps_merged, eps_lbl_merged, eps_end_merged
-        sources['eps'] = eps_src
-    else:
-        # Finnhub final fallback
-        fh_eps, fh_lbl, fh_end = _finnhub_fetch_eps(ticker)
-        if len(fh_eps) >= 7 and _is_recent(fh_end) and _eps_sanity(fh_eps):
-            eps, eps_labels, eps_ends = fh_eps, fh_lbl, fh_end
-            sources['eps'] = 'Finnhub'
-        else:
-            eps, eps_labels, eps_ends = [], [], []
-            sources['eps'] = 'insufficient'
+    fh_eps, fh_eps_lbl, fh_eps_end = _finnhub_fetch_eps(ticker)
 
-    # ── Revenue + Net Margin: FMP primary -> EDGAR fallback ───────────────────
+    # ── Normalize Revenue ──────────────────────────────────────────────────────
+    rev, rev_labels, rev_ends = _normalize_to_pool([
+        (fmp_rev, fmp_rev_end, 'FMP'),
+        (edgar_rev, edgar_rev_end, 'EDGAR'),
+    ])
+    sources['rev'] = 'FMP+EDGAR' if rev else 'insufficient'
 
-    # Revenue
-    edgar_rev, edgar_rev_lbl, edgar_rev_end = _edgar_metric(rev_keys_edgar)
-    rev_merged, rev_lbl_merged, rev_end_merged, rev_src = _merge_fmp_edgar(fmp_rev, fmp_rev_lbl, fmp_rev_end, edgar_rev, edgar_rev_lbl, edgar_rev_end)
-    
-    if len(rev_merged) >= 5 and _is_recent(rev_end_merged):
-        rev, rev_labels, rev_ends = rev_merged, rev_lbl_merged, rev_end_merged
-        sources['rev'] = rev_src
-    else:
-        rev, rev_labels, rev_ends = edgar_rev, edgar_rev_lbl, edgar_rev_end
-        sources['rev'] = 'EDGAR'
+    # ── Normalize Net Income (use absolute values, compute margin later) ───────
+    ni_abs, ni_abs_labels, ni_abs_ends = _normalize_to_pool([
+        (fmp_ni, fmp_ni_end, 'FMP'),
+        (edgar_ni_abs, edgar_ni_end, 'EDGAR'),
+    ])
+    # Compute margin % using matched rev values
+    rev_lookup = dict(zip(rev_ends, rev))
+    ni, ni_labels, ni_ends = [], [], []
+    for v, l, e in zip(ni_abs, ni_abs_labels, ni_abs_ends):
+        rev_val = rev_lookup.get(e)
+        if rev_val is not None and rev_val != 0:
+            ni.append(v / rev_val * 100)
+            ni_labels.append(l)
+            ni_ends.append(e)
+    sources['ni'] = 'FMP+EDGAR' if ni else 'insufficient'
 
-    # Net Margin (computed as netIncome / revenue * 100 per quarter)
-    edgar_ni, edgar_ni_lbl, edgar_ni_end = [], [], []
-    ni_abs, ni_labels_raw, ni_ends_raw = _edgar_metric(ni_keys_edgar)
-    if len(ni_abs) > 0:
-        rev_for_margin, _, rev_margin_ends = _edgar_metric(rev_keys_edgar)
-        rev_lookup = dict(zip(rev_margin_ends, rev_for_margin))
-        for i, end in enumerate(ni_ends_raw):
-            rev_val = rev_lookup.get(end)
-            if rev_val is not None and rev_val != 0:
-                edgar_ni.append(ni_abs[i] / rev_val * 100)
-                edgar_ni_lbl.append(ni_labels_raw[i])
-                edgar_ni_end.append(end)
+    # ── Normalize EPS ──────────────────────────────────────────────────────────
+    # EPS sanity: values must be between -500 and 5000
+    def _sane_eps(vals):
+        return [(v if v is not None and -500 <= v <= 5000 else None) for v in vals]
 
-    ni_merged, ni_lbl_merged, ni_end_merged, ni_src = _merge_fmp_edgar(fmp_margin, fmp_margin_lbl, fmp_margin_end, edgar_ni, edgar_ni_lbl, edgar_ni_end)
-    
-    if len(ni_merged) >= 5 and _is_recent(ni_end_merged):
-        ni, ni_labels, ni_ends = ni_merged, ni_lbl_merged, ni_end_merged
-        sources['ni'] = ni_src
-    else:
-        ni, ni_labels, ni_ends = edgar_ni, edgar_ni_lbl, edgar_ni_end
-        sources['ni'] = 'EDGAR'
+    eps_fmp_clean   = _sane_eps(fmp_eps)
+    eps_edgar_clean = _sane_eps(edgar_eps)
+    eps_fh_clean    = _sane_eps(fh_eps)
 
-    if rev_labels and eps_labels and rev_labels[-1] != eps_labels[-1]:
-        q4_val, q4_end, q4_lbl = _derive_q4(rev_keys_edgar, unit='USD')
-        if q4_val is not None:
-            rev.append(q4_val)
-            rev_labels.append(q4_lbl)
-            rev_ends.append(q4_end)
-            sources['rev'] = 'EDGAR (Q4 derived)'
-            if rev_ends:
-                zipped = sorted(zip(rev_ends, rev, rev_labels), key=lambda x: x[0])
-                rev_ends, rev, rev_labels = [list(x) for x in zip(*zipped)]
+    eps, eps_labels, eps_ends = _normalize_to_pool([
+        (eps_fmp_clean,   fmp_eps_end,   'FMP'),
+        (eps_edgar_clean, edgar_eps_end, 'EDGAR'),
+        (eps_fh_clean,    fh_eps_end,    'Finnhub'),
+    ])
+    sources['eps'] = 'FMP+EDGAR+Finnhub' if eps else 'insufficient'
 
-    if ni_labels and rev_labels and ni_labels[-1] != rev_labels[-1] and sources.get('rev') == 'EDGAR (Q4 derived)':
-        q4_ni_val, q4_ni_end, q4_ni_lbl = _derive_q4(ni_keys_edgar, unit='USD')
-        if q4_ni_val is not None and rev_ends and q4_ni_end == rev_ends[-1]:
-            q4_rev_val = rev[-1]
-            if q4_rev_val != 0:
-                ni.append((q4_ni_val / q4_rev_val) * 100)
-                ni_labels.append(q4_ni_lbl)
-                ni_ends.append(q4_ni_end)
-                sources['ni'] = 'EDGAR (Q4 derived)'
+    # ── Align all three to common latest quarter ───────────────────────────────
+    if eps_ends and rev_ends and ni_ends:
+        common_latest = min(max(eps_ends), max(rev_ends), max(ni_ends))
+        def _trim(vals, labels, ends, cutoff):
+            trimmed = [(v, l, e) for v, l, e in zip(vals, labels, ends)
+                       if e <= cutoff]
+            if not trimmed:
+                return [], [], []
+            return ([x[0] for x in trimmed],
+                    [x[1] for x in trimmed],
+                    [x[2] for x in trimmed])
+        eps, eps_labels, eps_ends = _trim(eps, eps_labels, eps_ends, common_latest)
+        rev, rev_labels, rev_ends = _trim(rev, rev_labels, rev_ends, common_latest)
+        ni,  ni_labels,  ni_ends  = _trim(ni,  ni_labels,  ni_ends,  common_latest)
 
-    min_len_eps = min(len(eps), len(eps_labels), len(eps_ends))
-    eps = eps[:min_len_eps]
-    eps_labels = eps_labels[:min_len_eps]
-    eps_ends = eps_ends[:min_len_eps]
-
-    min_len_rev = min(len(rev), len(rev_labels), len(rev_ends))
-    rev = rev[:min_len_rev]
-    rev_labels = rev_labels[:min_len_rev]
-    rev_ends = rev_ends[:min_len_rev]
-
-    min_len_ni = min(len(ni), len(ni_labels), len(ni_ends))
-    ni = ni[:min_len_ni]
-    ni_labels = ni_labels[:min_len_ni]
-    ni_ends = ni_ends[:min_len_ni]
+    # ── Recency check ──────────────────────────────────────────────────────────
+    if not _is_recent(rev_ends):
+        rev, rev_labels, rev_ends = [], [], []
+        sources['rev'] = 'insufficient'
 
     return {
         'eps': eps, 'rev': rev, 'ni': ni,
