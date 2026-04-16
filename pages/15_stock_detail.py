@@ -245,7 +245,7 @@ def get_code33_data(ticker: str) -> dict:
             r = requests.get(
                 "https://financialmodelingprep.com/stable/income-statement",
                 params={'symbol': symbol.upper(), 'period': 'quarter',
-                        'limit': 5, 'apikey': FMP_API_KEY},
+                        'limit': 12, 'apikey': FMP_API_KEY},
                 timeout=10
             )
             r.raise_for_status()
@@ -279,7 +279,7 @@ def get_code33_data(ticker: str) -> dict:
             if not rows:
                 return _empty
 
-            rows = sorted(rows, key=lambda x: x['dt'], reverse=True)[:8]
+            rows = sorted(rows, key=lambda x: x['dt'], reverse=True)[:12]
             rows.reverse()  # oldest first
 
             rev_vals = [r['rev'] for r in rows]
@@ -433,10 +433,17 @@ def get_code33_data(ticker: str) -> dict:
                     cloned['_end_dt'] = end_dt
                     cloned['_filed_dt'] = filed_dt
                     cloned['_val'] = float(val)
-                    # Normalise fp to uppercase; keep fy as int
+                    # Normalise fp to uppercase; derive fy from end_date (not EDGAR's filing year)
                     raw_fp = str(e.get('fp', '')).upper().strip()
-                    cloned['_fy'] = int(e['fy']) if e.get('fy') is not None else None
-                    cloned['_fp'] = raw_fp if raw_fp in ('Q1','Q2','Q3','Q4') else None
+                    if raw_fp in ('Q1', 'Q2', 'Q3', 'Q4'):
+                        cloned['_fp'] = raw_fp
+                        cloned['_fy'] = end_dt.year  # use period year, not filing year
+                    elif raw_fp == 'FY' and 80 <= duration_days <= 105:
+                        cloned['_fp'] = 'Q4'  # 10-K covering only Q4 period (fiscal-year companies)
+                        cloned['_fy'] = end_dt.year
+                    else:
+                        cloned['_fp'] = None
+                        cloned['_fy'] = int(e['fy']) if e.get('fy') is not None else None
                     dedup_by_end[end_dt] = cloned
 
             # For 10-K entries, only keep if end_date is more recent than latest 10-Q
@@ -542,6 +549,7 @@ def get_code33_data(ticker: str) -> dict:
      fmp_eps, fmp_eps_lbl, fmp_eps_end, fmp_eps_fy, fmp_eps_fp) = _fmp_fetch_revenue_ni(ticker)
 
     edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp = _edgar_metric(rev_keys_edgar)
+
     edgar_ni_abs, edgar_ni_lbl, edgar_ni_end, edgar_ni_fy, edgar_ni_fp = _edgar_metric(ni_keys_edgar)
     edgar_eps, edgar_eps_lbl, edgar_eps_end, edgar_eps_fy, edgar_eps_fp = _edgar_metric(
         eps_keys_edgar, unit='USD/shares'
