@@ -248,7 +248,6 @@ def get_code33_data(ticker: str) -> dict:
                 timeout=10
             )
             r.raise_for_status()
-            print(f"FMP response status: {r.status_code}, rows: {len(r.json()) if isinstance(r.json(), list) else 'not a list'}")
             data = r.json() if isinstance(r.json(), list) else []
             if not data:
                 return _empty
@@ -307,8 +306,7 @@ def get_code33_data(ticker: str) -> dict:
                     eps_ends.append(r['dt'].isoformat())
 
             return rev_vals, rev_lbls, rev_ends, ni_vals, ni_lbls, ni_ends, margin_vals, margin_lbls, margin_ends, eps_vals, eps_lbls, eps_ends
-        except Exception as e:
-            print(f"FMP fetch error: {e}")
+        except Exception:
             return _empty
 
     def _is_recent(end_dates, max_days=548):
@@ -418,7 +416,7 @@ def get_code33_data(ticker: str) -> dict:
             filtered_entries = sorted(dedup_by_end.values(), key=lambda x: x['_end_dt'], reverse=True)
             filtered_entries = filtered_entries[:8]
 
-            if len(filtered_entries) < 7:
+            if len(filtered_entries) < 3:
                 continue
             if filtered_entries[0]['_end_dt'] < recency_cutoff:
                 continue
