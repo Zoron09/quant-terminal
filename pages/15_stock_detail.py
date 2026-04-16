@@ -338,7 +338,7 @@ def get_code33_data(ticker: str) -> dict:
                 pool.append({'dt': dt, 'val': float(v), 'src': src})
 
         if not pool:
-            return [], [], []
+            return [], [], [], []
 
         # Deduplicate: for each quarter window, keep entry with latest dt
         # Sort by date descending, then deduplicate by 45-day proximity
@@ -360,7 +360,8 @@ def get_code33_data(ticker: str) -> dict:
         vals = [e['val'] for e in deduped]
         ends = [e['dt'].isoformat() for e in deduped]
         lbls = [f"Q{(e['dt'].month + 2) // 3} {e['dt'].year}" for e in deduped]
-        return vals, lbls, ends
+        srcs = [e['src'] for e in deduped]
+        return vals, lbls, ends, srcs
 
     # _finnhub_is_recent replaced by _is_recent above (shared by FMP + Finnhub)
 
@@ -544,14 +545,14 @@ def get_code33_data(ticker: str) -> dict:
                 edgar_ni_abs, edgar_ni_lbl, edgar_ni_end = [], [], []
 
     # ── Normalize Revenue ──────────────────────────────────────────────────────
-    rev, rev_labels, rev_ends = _normalize_to_pool([
+    rev, rev_labels, rev_ends, rev_srcs = _normalize_to_pool([
         (fmp_rev, fmp_rev_end, 'FMP'),
         (edgar_rev, edgar_rev_end, 'EDGAR'),
     ])
     sources['rev'] = 'FMP+EDGAR' if rev else 'insufficient'
 
     # ── Normalize Net Income (use absolute values, compute margin later) ───────
-    ni_abs, ni_abs_labels, ni_abs_ends = _normalize_to_pool([
+    ni_abs, ni_abs_labels, ni_abs_ends, ni_abs_srcs = _normalize_to_pool([
         (fmp_ni, fmp_ni_end, 'FMP'),
         (edgar_ni_abs, edgar_ni_end, 'EDGAR'),
     ])
@@ -575,7 +576,7 @@ def get_code33_data(ticker: str) -> dict:
     eps_edgar_clean = _sane_eps(edgar_eps)
     eps_fh_clean    = _sane_eps(fh_eps)
 
-    eps, eps_labels, eps_ends = _normalize_to_pool([
+    eps, eps_labels, eps_ends, eps_srcs = _normalize_to_pool([
         (eps_fmp_clean,   fmp_eps_end,   'FMP'),
         (eps_edgar_clean, edgar_eps_end, 'EDGAR'),
         (eps_fh_clean,    fh_eps_end,    'Finnhub'),
@@ -613,6 +614,7 @@ def get_code33_data(ticker: str) -> dict:
         'eps': eps, 'rev': rev, 'ni': ni,
         'eps_labels': eps_labels, 'rev_labels': rev_labels, 'ni_labels': ni_labels,
         'eps_end_dates': eps_ends, 'rev_end_dates': rev_ends, 'ni_end_dates': ni_ends,
+        'eps_srcs': eps_srcs, 'rev_srcs': rev_srcs, 'ni_srcs': ni_abs_srcs,
         'sources': sources, 'is_us': is_us,
     }
 
@@ -989,24 +991,25 @@ def _parse_end_date(end_date: str):
     except Exception:
         return None
 
-def _compute_yoy(vals: list, end_dates: list) -> list:
+def _compute_yoy(vals: list, end_dates: list, srcs=None) -> list:
     """
     Date-based YoY: for each quarter, find the same quarter
     from ~1 year ago by looking for an end_date within 45 days
     of (this_date - 365 days). Works for all fiscal calendars.
+    Prefers same-source prior-year match when srcs provided.
     """
     if not vals or not end_dates:
         return []
 
     n = min(len(vals), len(end_dates))
 
-    # Build lookup: date -> value
-    date_val_map = {}
+    # Build lookup: date -> (value, source)
+    date_src_val_map = {}
     for i in range(n):
         if vals[i] is not None and end_dates[i] is not None:
             try:
                 dt = datetime.strptime(end_dates[i], '%Y-%m-%d').date()
-                date_val_map[dt] = float(vals[i])
+                date_src_val_map[dt] = (float(vals[i]), srcs[i] if srcs and i < len(srcs) else 'unknown')
             except Exception:
                 pass
 
@@ -1029,13 +1032,19 @@ def _compute_yoy(vals: list, end_dates: list) -> list:
         except ValueError:
             from datetime import timedelta
             target_dt = current_dt - timedelta(days=365)
+
+        current_src = srcs[i] if srcs and i < len(srcs) else 'unknown'
         prior_val  = None
         best_diff  = 46  # must be within 45 days
-        for dt, v in date_val_map.items():
+        for dt, (v, src) in date_src_val_map.items():
             diff = abs((dt - target_dt).days)
             if diff < best_diff:
-                best_diff = diff
-                prior_val = v
+                if src == current_src or prior_val is None:
+                    best_diff = diff
+                    prior_val = v
+                elif diff < best_diff - 5:
+                    best_diff = diff
+                    prior_val = v
 
         if prior_val is None or prior_val == 0:
             rates.append(None)
@@ -1543,6 +1552,9 @@ with tab4:
     eps_end_dates = c33.get('eps_end_dates', [])
     rev_end_dates = c33.get('rev_end_dates', [])
     ni_end_dates  = c33.get('ni_end_dates', [])
+    eps_srcs      = c33.get('eps_srcs', [])
+    rev_srcs      = c33.get('rev_srcs', [])
+    ni_srcs       = c33.get('ni_srcs', [])
 
     # ── Pre-profit detection ──────────────────────────────────────────────────
     # Only flag as pre-profit if ALL of last 6 EPS quarters are negative.
@@ -1554,9 +1566,9 @@ with tab4:
             is_preprofit = True
 
     # ── Compute YoY growth rates ──────────────────────────────────────────────
-    eps_yoy = _compute_yoy(eps_raw, eps_end_dates)
-    rev_yoy = _compute_yoy(rev_raw, rev_end_dates)
-    ni_yoy  = _compute_yoy(ni_raw, ni_end_dates)
+    eps_yoy = _compute_yoy(eps_raw, eps_end_dates, eps_srcs)
+    rev_yoy = _compute_yoy(rev_raw, rev_end_dates, rev_srcs)
+    ni_yoy  = _compute_yoy(ni_raw, ni_end_dates, ni_srcs)
 
     # Last 3 valid YoY points + matching labels (chronological)
     eps3, eps_labels3 = _last3_valid_with_labels(eps_yoy, eps_labels)
