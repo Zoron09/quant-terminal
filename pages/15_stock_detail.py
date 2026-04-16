@@ -234,10 +234,11 @@ def get_code33_data(ticker: str) -> dict:
     def _fmp_fetch_revenue_ni(symbol: str):
         """Fetch quarterly revenue + net income + EPS from FMP income-statement endpoint.
         Covers ALL fiscal calendars including Q4 from 10-K filings.
-        Returns (rev_vals, rev_lbls, rev_ends, ni_vals, ni_lbls, ni_ends,
+        Returns (rev_vals, rev_lbls, rev_ends, rev_fy, rev_fp,
+                 ni_vals, ni_lbls, ni_ends, ni_fy, ni_fp,
                  margin_vals, margin_lbls, margin_ends,
-                 eps_vals, eps_lbls, eps_ends)."""
-        _empty = [], [], [], [], [], [], [], [], [], [], [], []
+                 eps_vals, eps_lbls, eps_ends, eps_fy, eps_fp)."""
+        _empty = [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []
         if not _HAS_FMP:
             return _empty
         try:
@@ -261,15 +262,19 @@ def get_code33_data(ticker: str) -> dict:
                 revenue = _sf(item.get('revenue'))
                 net_income = _sf(item.get('netIncome'))
                 eps_val = _sf(item.get('epsDiluted')) or _sf(item.get('eps'))
+                fiscal_year = item.get('fiscalYear') or item.get('calendarYear')
+                period = str(item.get('period', '')).upper().strip()
                 if not date_str or revenue is None:
                     continue
                 try:
                     dt = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    fy_int = int(fiscal_year) if fiscal_year is not None else None
                 except Exception:
                     continue
                 rows.append({'dt': dt, 'rev': float(revenue),
                              'ni': float(net_income) if net_income is not None else None,
-                             'eps': float(eps_val) if eps_val is not None else None})
+                             'eps': float(eps_val) if eps_val is not None else None,
+                             'fy': fy_int, 'fp': period if period in ('Q1','Q2','Q3','Q4') else None})
 
             if not rows:
                 return _empty
@@ -280,14 +285,18 @@ def get_code33_data(ticker: str) -> dict:
             rev_vals = [r['rev'] for r in rows]
             rev_ends = [r['dt'].isoformat() for r in rows]
             rev_lbls = [f"Q{(r['dt'].month + 2)//3} {r['dt'].year}" for r in rows]
+            rev_fy   = [r['fy']  for r in rows]
+            rev_fp   = [r['fp']  for r in rows]
 
             # Net income absolute values
-            ni_vals, ni_lbls, ni_ends = [], [], []
+            ni_vals, ni_lbls, ni_ends, ni_fy, ni_fp = [], [], [], [], []
             for r in rows:
                 if r['ni'] is not None:
                     ni_vals.append(r['ni'])
                     ni_lbls.append(f"Q{(r['dt'].month + 2)//3} {r['dt'].year}")
                     ni_ends.append(r['dt'].isoformat())
+                    ni_fy.append(r['fy'])
+                    ni_fp.append(r['fp'])
 
             # Compute quarterly margin % = netIncome / revenue * 100
             margin_vals, margin_lbls, margin_ends = [], [], []
@@ -298,14 +307,19 @@ def get_code33_data(ticker: str) -> dict:
                     margin_ends.append(r['dt'].isoformat())
 
             # EPS (diluted preferred)
-            eps_vals, eps_lbls, eps_ends = [], [], []
+            eps_vals, eps_lbls, eps_ends, eps_fy, eps_fp = [], [], [], [], []
             for r in rows:
                 if r['eps'] is not None:
                     eps_vals.append(r['eps'])
                     eps_lbls.append(f"Q{(r['dt'].month + 2)//3} {r['dt'].year}")
                     eps_ends.append(r['dt'].isoformat())
+                    eps_fy.append(r['fy'])
+                    eps_fp.append(r['fp'])
 
-            return rev_vals, rev_lbls, rev_ends, ni_vals, ni_lbls, ni_ends, margin_vals, margin_lbls, margin_ends, eps_vals, eps_lbls, eps_ends
+            return (rev_vals, rev_lbls, rev_ends, rev_fy, rev_fp,
+                    ni_vals, ni_lbls, ni_ends, ni_fy, ni_fp,
+                    margin_vals, margin_lbls, margin_ends,
+                    eps_vals, eps_lbls, eps_ends, eps_fy, eps_fp)
         except Exception:
             return _empty
 
@@ -367,10 +381,10 @@ def get_code33_data(ticker: str) -> dict:
 
     # ── EDGAR fetcher (independent per metric) ────────────────────────────────
     def _edgar_metric(concepts, unit='USD'):
-        """Return (values_list, labels_list, end_dates_list) from SEC EDGAR filings using strict quarterly filters."""
+        """Return (values, labels, end_dates, fy_list, fp_list) from SEC EDGAR filings using strict quarterly filters."""
         facts = get_edgar_facts(ticker)
         if not facts:
-            return [], [], []
+            return [], [], [], [], []
 
         usgaap = facts.get('facts', {}).get('us-gaap', {})
         cutoff_date = (datetime.utcnow() - timedelta(days=365 * 5)).date()
@@ -419,6 +433,10 @@ def get_code33_data(ticker: str) -> dict:
                     cloned['_end_dt'] = end_dt
                     cloned['_filed_dt'] = filed_dt
                     cloned['_val'] = float(val)
+                    # Normalise fp to uppercase; keep fy as int
+                    raw_fp = str(e.get('fp', '')).upper().strip()
+                    cloned['_fy'] = int(e['fy']) if e.get('fy') is not None else None
+                    cloned['_fp'] = raw_fp if raw_fp in ('Q1','Q2','Q3','Q4') else None
                     dedup_by_end[end_dt] = cloned
 
             # For 10-K entries, only keep if end_date is more recent than latest 10-Q
@@ -461,11 +479,12 @@ def get_code33_data(ticker: str) -> dict:
                     continue
                 duration = (end_dt - start_dt).days
                 if 350 <= duration <= 380:
-                    annual_entries.append((end_dt, start_dt, float(val)))
+                    annual_fy = int(e['fy']) if e.get('fy') is not None else None
+                    annual_entries.append((end_dt, start_dt, float(val), annual_fy))
             
             # For each annual entry, check if Q4 is missing and derive it
             existing_ends = {item['_end_dt'] for item in filtered_entries}
-            for annual_end, annual_start, annual_val in annual_entries:
+            for annual_end, annual_start, annual_val, annual_fy in annual_entries:
                 # Check if a quarterly entry already exists near this annual end date
                 already_exists = any(
                     abs((annual_end - existing_end).days) <= 45
@@ -484,7 +503,9 @@ def get_code33_data(ticker: str) -> dict:
                         '_end_dt': annual_end,
                         '_filed_dt': None,
                         '_val': q4_val,
-                        'form': '10-K-derived'
+                        'form': '10-K-derived',
+                        '_fy': annual_fy,
+                        '_fp': 'Q4',
                     }
                     filtered_entries.append(derived)
                     existing_ends.add(annual_end)
@@ -492,12 +513,14 @@ def get_code33_data(ticker: str) -> dict:
             # Re-sort after adding derived entries
             filtered_entries.sort(key=lambda x: x['_end_dt'])
 
-            vals = [item['_val'] for item in filtered_entries]
-            ends = [item['_end_dt'].isoformat() for item in filtered_entries]
-            lbls = [f"Q{(item['_end_dt'].month + 2) // 3} {item['_end_dt'].year}" for item in filtered_entries]
-            return vals, lbls, ends
+            vals    = [item['_val'] for item in filtered_entries]
+            ends    = [item['_end_dt'].isoformat() for item in filtered_entries]
+            lbls    = [f"Q{(item['_end_dt'].month + 2) // 3} {item['_end_dt'].year}" for item in filtered_entries]
+            fy_list = [item.get('_fy') for item in filtered_entries]
+            fp_list = [item.get('_fp') for item in filtered_entries]
+            return vals, lbls, ends, fy_list, fp_list
 
-        return [], [], []
+        return [], [], [], [], []
 
     # ── Fetch each metric independently ───────────────────────────────────────
     eps_keys_edgar = ['EarningsPerShareDiluted', 'EarningsPerShareBasic']
@@ -513,13 +536,14 @@ def get_code33_data(ticker: str) -> dict:
                       'NetIncomeLossAvailableToCommonStockholdersBasic']
 
     # ── Fetch from all sources ─────────────────────────────────────────────────
-    fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_ni, fmp_ni_lbl, fmp_ni_end, \
-    fmp_margin, fmp_margin_lbl, fmp_margin_end, \
-    fmp_eps, fmp_eps_lbl, fmp_eps_end = _fmp_fetch_revenue_ni(ticker)
+    (fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_rev_fy, fmp_rev_fp,
+     fmp_ni,  fmp_ni_lbl,  fmp_ni_end,  fmp_ni_fy,  fmp_ni_fp,
+     fmp_margin, fmp_margin_lbl, fmp_margin_end,
+     fmp_eps, fmp_eps_lbl, fmp_eps_end, fmp_eps_fy, fmp_eps_fp) = _fmp_fetch_revenue_ni(ticker)
 
-    edgar_rev, edgar_rev_lbl, edgar_rev_end = _edgar_metric(rev_keys_edgar)
-    edgar_ni_abs, edgar_ni_lbl, edgar_ni_end = _edgar_metric(ni_keys_edgar)
-    edgar_eps, edgar_eps_lbl, edgar_eps_end = _edgar_metric(
+    edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp = _edgar_metric(rev_keys_edgar)
+    edgar_ni_abs, edgar_ni_lbl, edgar_ni_end, edgar_ni_fy, edgar_ni_fp = _edgar_metric(ni_keys_edgar)
+    edgar_eps, edgar_eps_lbl, edgar_eps_end, edgar_eps_fy, edgar_eps_fp = _edgar_metric(
         eps_keys_edgar, unit='USD/shares'
     )
 
@@ -533,7 +557,7 @@ def get_code33_data(ticker: str) -> dict:
         if edgar_avg > 0 and fmp_avg > 0:
             ratio = max(fmp_avg, edgar_avg) / min(fmp_avg, edgar_avg)
             if ratio > 5:
-                edgar_rev, edgar_rev_lbl, edgar_rev_end = [], [], []
+                edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp = [], [], [], [], []
 
     if fmp_ni and edgar_ni_abs:
         fmp_ni_avg = sum(fmp_ni) / len(fmp_ni)
@@ -542,7 +566,7 @@ def get_code33_data(ticker: str) -> dict:
         if fmp_ni_avg != 0 and edgar_ni_avg != 0:
             ratio = max(abs(fmp_ni_avg), abs(edgar_ni_avg)) / max(abs(min(fmp_ni_avg, edgar_ni_avg)), 1)
             if ratio > 5:
-                edgar_ni_abs, edgar_ni_lbl, edgar_ni_end = [], [], []
+                edgar_ni_abs, edgar_ni_lbl, edgar_ni_end, edgar_ni_fy, edgar_ni_fp = [], [], [], [], []
 
     # ── EPS sanity filter ─────────────────────────────────────────────────────
     def _sane_eps(vals):
@@ -572,126 +596,147 @@ def get_code33_data(ticker: str) -> dict:
     except Exception:
         yf_rev = yf_rev_end = yf_ni = yf_ni_end = yf_eps = yf_eps_end = []
 
-    # ── Strict per-pair lineage YoY ───────────────────────────────────────────
-    def _strict_lineage_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends,
+    # ── Strict per-pair fiscal-key YoY ───────────────────────────────────────
+    def _strict_lineage_yoy(fmp_vals, fmp_fy, fmp_fp,
+                             edgar_vals, edgar_fy, edgar_fp,
                              yf_vals=None, yf_ends=None):
         """
-        Compute YoY rates using strict source lineage per quarter pair.
-        Tier 1: FMP pair (both current + prior in FMP).
-        Tier 2: EDGAR pair.
-        Tier 3: yfinance pair.
-        Never mixes sources within a single YoY pair.
-        Returns (yoy_rates, labels, end_dates, used_yf)
+        Compute YoY rates using (fiscalYear, period) composite keys.
+        Eliminates date-proximity duplicate-quarter ambiguity universally.
+
+        Tier 1 (most recent quarter): prefer FMP pair → (fy, fp) + (fy-1, fp)
+        Tier 1 (historical quarters): prefer EDGAR pair
+        Tier 2: fallback to the other source
+        Tier 3: yfinance date-proximity (calendar-year approximation)
+
+        Returns (yoy_rates, labels, ends_out, used_yf)
         """
-        def _build_map(vals, ends):
-            m = {}
-            for v, e in zip(vals or [], ends or []):
-                if v is not None and e is not None:
-                    try:
-                        dt = datetime.strptime(e, '%Y-%m-%d').date()
-                        m[dt] = float(v)
-                    except Exception:
-                        pass
-            return m
+        _fp_order = {'Q1': 1, 'Q2': 2, 'Q3': 3, 'Q4': 4}
 
-        fmp_map   = _build_map(fmp_vals, fmp_ends)
-        edgar_map = _build_map(edgar_vals, edgar_ends)
-        yf_map    = _build_map(yf_vals, yf_ends)
+        # Build FMP map: {(fy, fp): value}
+        fmp_map = {}
+        for v, fy, fp in zip(fmp_vals or [], fmp_fy or [], fmp_fp or []):
+            if v is not None and fy is not None and fp is not None:
+                fmp_map[(int(fy), str(fp).upper())] = float(v)
 
-        def _find_nearest(date_map, target_dt, window=45):
-            best_val = None
-            best_diff = window + 1
+        # Build EDGAR map: {(fy, fp): value} — exclude fp=='FY'
+        edgar_map = {}
+        for v, fy, fp in zip(edgar_vals or [], edgar_fy or [], edgar_fp or []):
+            if v is not None and fy is not None and fp is not None:
+                fp_str = str(fp).upper()
+                if fp_str != 'FY':
+                    edgar_map[(int(fy), fp_str)] = float(v)
+
+        # yfinance fallback: date-based
+        yf_map = {}
+        for v, e in zip(yf_vals or [], yf_ends or []):
+            if v is not None and e is not None:
+                try:
+                    yf_map[datetime.strptime(e, '%Y-%m-%d').date()] = float(v)
+                except Exception:
+                    pass
+
+        def _find_nearest_date(date_map, target_dt, window=45):
+            best_val, best_diff = None, window + 1
             for dt, v in date_map.items():
                 diff = abs((dt - target_dt).days)
                 if diff < best_diff:
-                    best_diff = diff
-                    best_val = v
+                    best_diff, best_val = diff, v
             return best_val
 
-        all_ends = sorted(
-            set(list(fmp_ends or []) + list(edgar_ends or []) + list(yf_ends or [])),
-            reverse=True
-        )[:8]
-        all_ends.reverse()
+        # All fiscal period keys, sorted chronologically
+        all_keys = sorted(
+            set(list(fmp_map.keys()) + list(edgar_map.keys())),
+            key=lambda k: (k[0], _fp_order.get(k[1], 0))
+        )[-8:]  # most recent 8
 
+        most_recent_key = all_keys[-1] if all_keys else None
         rates, labels, ends_out = [], [], []
         used_yf = False
 
-        for e in all_ends:
-            try:
-                current_dt = datetime.strptime(e, '%Y-%m-%d').date()
-            except Exception:
+        _quarter_month_day = {'Q1': (3, 31), 'Q2': (6, 30), 'Q3': (9, 30), 'Q4': (12, 31)}
+
+        for key in all_keys:
+            fy, fp = key
+            prior_key = (fy - 1, fp)
+
+            # Q0 (most recent): prefer FMP; historical: prefer EDGAR
+            if key == most_recent_key:
+                tiers = [(fmp_map, fmp_map), (edgar_map, edgar_map)]
+            else:
+                tiers = [(edgar_map, edgar_map), (fmp_map, fmp_map)]
+
+            found = False
+            for cur_map, pri_map in tiers:
+                cur_val = cur_map.get(key)
+                pri_val = pri_map.get(prior_key)
+                if cur_val is not None and pri_val is not None and pri_val != 0:
+                    rate = (cur_val - pri_val) / abs(pri_val) * 100
+                    rates.append(max(min(rate, 500.0), -500.0))
+                    labels.append(f"{fp} {fy}")
+                    month, day = _quarter_month_day.get(fp, (12, 31))
+                    ends_out.append(f"{fy}-{month:02d}-{day:02d}")
+                    found = True
+                    break
+
+            if found:
                 continue
 
-            try:
-                prior_target = current_dt.replace(year=current_dt.year - 1)
-            except ValueError:
-                from datetime import timedelta
-                prior_target = current_dt - timedelta(days=365)
-
-            # Tier 1 — FMP pair
-            fmp_current = _find_nearest(fmp_map, current_dt, window=15)
-            fmp_prior   = _find_nearest(fmp_map, prior_target, window=45)
-            if fmp_current is not None and fmp_prior is not None and fmp_prior != 0:
-                rate = (fmp_current - fmp_prior) / abs(fmp_prior) * 100
-                rates.append(max(min(rate, 500.0), -500.0))
-                labels.append(f"Q{(current_dt.month + 2) // 3} {current_dt.year}")
-                ends_out.append(e)
-                continue
-
-            # Tier 2 — EDGAR pair
-            edgar_current = _find_nearest(edgar_map, current_dt, window=15)
-            edgar_prior   = _find_nearest(edgar_map, prior_target, window=45)
-            if edgar_current is not None and edgar_prior is not None and edgar_prior != 0:
-                rate = (edgar_current - edgar_prior) / abs(edgar_prior) * 100
-                rates.append(max(min(rate, 500.0), -500.0))
-                labels.append(f"Q{(current_dt.month + 2) // 3} {current_dt.year}")
-                ends_out.append(e)
-                continue
-
-            # Tier 3 — yfinance pair
-            yf_current = _find_nearest(yf_map, current_dt, window=15)
-            yf_prior   = _find_nearest(yf_map, prior_target, window=45)
-            if yf_current is not None and yf_prior is not None and yf_prior != 0:
-                rate = (yf_current - yf_prior) / abs(yf_prior) * 100
-                rates.append(max(min(rate, 500.0), -500.0))
-                labels.append(f"Q{(current_dt.month + 2) // 3} {current_dt.year}")
-                ends_out.append(e)
-                used_yf = True
+            # Tier 3 — yfinance date-proximity (calendar-year approximation)
+            if yf_map:
+                month, day = _quarter_month_day.get(fp, (12, 31))
+                try:
+                    cur_date  = datetime(fy,     month, day).date()
+                    pri_date  = datetime(fy - 1, month, day).date()
+                except ValueError:
+                    continue
+                yf_cur = _find_nearest_date(yf_map, cur_date,  window=15)
+                yf_pri = _find_nearest_date(yf_map, pri_date, window=45)
+                if yf_cur is not None and yf_pri is not None and yf_pri != 0:
+                    rate = (yf_cur - yf_pri) / abs(yf_pri) * 100
+                    rates.append(max(min(rate, 500.0), -500.0))
+                    labels.append(f"{fp} {fy}")
+                    ends_out.append(f"{fy}-{month:02d}-{day:02d}")
+                    used_yf = True
 
         return rates, labels, ends_out, used_yf
 
     # ── Revenue ───────────────────────────────────────────────────────────────
     rev_yoy_final, rev_labels_final, _, rev_used_yf = _strict_lineage_yoy(
-        fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end, yf_rev, yf_rev_end
+        fmp_rev, fmp_rev_fy, fmp_rev_fp,
+        edgar_rev, edgar_rev_fy, edgar_rev_fp,
+        yf_rev, yf_rev_end
     )
     rev_raw_final      = edgar_rev     if edgar_rev     else fmp_rev
     rev_raw_ends_final = edgar_rev_end if edgar_rev     else fmp_rev_end
     if rev_yoy_final:
-        sources['rev'] = 'FMP|EDGAR|yfinance' if rev_used_yf else 'FMP|EDGAR'
+        sources['rev'] = 'FMP|EDGAR|yf' if rev_used_yf else 'FMP|EDGAR'
     else:
         sources['rev'] = 'insufficient'
 
     # ── Net Income ────────────────────────────────────────────────────────────
     ni_yoy_final, ni_labels_final, _, ni_used_yf = _strict_lineage_yoy(
-        fmp_ni, fmp_ni_end, edgar_ni_abs, edgar_ni_end, yf_ni, yf_ni_end
+        fmp_ni, fmp_ni_fy, fmp_ni_fp,
+        edgar_ni_abs, edgar_ni_fy, edgar_ni_fp,
+        yf_ni, yf_ni_end
     )
     ni_raw_final      = edgar_ni_abs if edgar_ni_abs else fmp_ni
     ni_raw_ends_final = edgar_ni_end if edgar_ni_abs else fmp_ni_end
     if ni_yoy_final:
-        sources['ni'] = 'FMP|EDGAR|yfinance' if ni_used_yf else 'FMP|EDGAR'
+        sources['ni'] = 'FMP|EDGAR|yf' if ni_used_yf else 'FMP|EDGAR'
     else:
         sources['ni'] = 'insufficient'
 
     # ── EPS ───────────────────────────────────────────────────────────────────
     eps_yoy_final, eps_labels_final, _, eps_used_yf = _strict_lineage_yoy(
-        eps_fmp_clean, fmp_eps_end, eps_edgar_clean, edgar_eps_end,
+        eps_fmp_clean, fmp_eps_fy, fmp_eps_fp,
+        eps_edgar_clean, edgar_eps_fy, edgar_eps_fp,
         _sane_eps(yf_eps), yf_eps_end
     )
     eps_raw_final      = eps_edgar_clean if eps_edgar_clean else eps_fmp_clean
     eps_raw_ends_final = edgar_eps_end   if eps_edgar_clean else fmp_eps_end
     if eps_yoy_final:
-        sources['eps'] = 'FMP|EDGAR|yfinance' if eps_used_yf else 'FMP|EDGAR'
+        sources['eps'] = 'FMP|EDGAR|yf' if eps_used_yf else 'FMP|EDGAR'
     else:
         sources['eps'] = 'insufficient'
 
