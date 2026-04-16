@@ -914,29 +914,56 @@ def _parse_end_date(end_date: str):
         return None
 
 def _compute_yoy(vals: list, end_dates: list) -> list:
-    """Date-based YoY: match same quarter in prior year using end_date arithmetic."""
+    """
+    Date-based YoY: for each quarter, find the same quarter
+    from ~1 year ago by looking for an end_date within 45 days
+    of (this_date - 365 days). Works for all fiscal calendars.
+    """
+    if not vals or not end_dates:
+        return []
+
     n = min(len(vals), len(end_dates))
-    rates = [None] * n
-    point_map = {}
 
+    # Build lookup: date -> value
+    date_val_map = {}
     for i in range(n):
-        v = vals[i]
-        yq = _parse_end_date(end_dates[i])
-        if yq is None or v is None or _nan(v):
-            continue
-        point_map[yq] = float(v)
+        if vals[i] is not None and end_dates[i] is not None:
+            try:
+                dt = datetime.strptime(end_dates[i], '%Y-%m-%d').date()
+                date_val_map[dt] = float(vals[i])
+            except Exception:
+                pass
 
+    rates = []
     for i in range(n):
-        c = vals[i]
-        yq = _parse_end_date(end_dates[i])
-        if yq is None or c is None or _nan(c):
+        if vals[i] is None or end_dates[i] is None:
+            rates.append(None)
             continue
-        year, quarter = yq
-        prior = point_map.get((year - 1, quarter))
-        if prior is None or prior == 0:
+        try:
+            current_dt  = datetime.strptime(end_dates[i], '%Y-%m-%d').date()
+            current_val = float(vals[i])
+        except Exception:
+            rates.append(None)
             continue
-        rate = (float(c) - float(prior)) / abs(float(prior)) * 100
-        rates[i] = max(min(rate, 500.0), -500.0)
+
+        # Look for prior year quarter: end_date within 45 days of current - 365
+        target_dt  = current_dt.replace(year=current_dt.year - 1)
+        prior_val  = None
+        best_diff  = 46  # must be within 45 days
+        for dt, v in date_val_map.items():
+            diff = abs((dt - target_dt).days)
+            if diff < best_diff:
+                best_diff = diff
+                prior_val = v
+
+        if prior_val is None or prior_val == 0:
+            rates.append(None)
+            continue
+
+        rate = (current_val - prior_val) / abs(prior_val) * 100
+        # Cap at ±500% to avoid display issues
+        rates.append(max(min(rate, 500.0), -500.0))
+
     return rates
 
 def _last3_valid_with_labels(rates: list, labels: list) -> tuple:
