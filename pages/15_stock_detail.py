@@ -442,50 +442,54 @@ def get_code33_data(ticker: str) -> dict:
 
             filtered_entries.reverse()  # chronological ascending
 
-            # Attempt to derive missing recent quarter from 10-K annual filing
-            if filtered_entries:
-                most_recent = filtered_entries[-1]['_end_dt']
-                days_since = (datetime.utcnow().date() - most_recent).days
-                if days_since > 120:
-                    # Look for 10-K annual entry
-                    for e in entries:
-                        if str(e.get('form', '')).strip().upper() != '10-K':
-                            continue
-                        end_str = str(e.get('end', '')).strip()
-                        start_str = str(e.get('start', '')).strip()
-                        val = _sf(e.get('val'))
-                        if not end_str or not start_str or val is None:
-                            continue
-                        try:
-                            end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
-                            start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
-                        except Exception:
-                            continue
-                        duration = (end_dt - start_dt).days
-                        if not (350 <= duration <= 380):
-                            continue
-                        if end_dt <= most_recent:
-                            continue
-                        # Found a more recent annual filing — derive Q4
-                        # Q4 = annual - sum of Q1+Q2+Q3 within this fiscal year
-                        quarterly_sum = sum(
-                            item['_val'] for item in filtered_entries
-                            if item['_end_dt'] > start_dt and item['_end_dt'] <= end_dt
-                        )
-                        quarterly_count = sum(
-                            1 for item in filtered_entries
-                            if item['_end_dt'] > start_dt and item['_end_dt'] <= end_dt
-                        )
-                        if quarterly_count == 3:
-                            q4_val = float(val) - quarterly_sum
-                            derived = {
-                                '_end_dt': end_dt,
-                                '_filed_dt': None,
-                                '_val': q4_val,
-                                'form': '10-K-derived'
-                            }
-                            filtered_entries.append(derived)
-                        break
+            # Derive ALL missing Q4s from 10-K annual filings
+            # Collect all 10-K annual entries first
+            annual_entries = []
+            for e in entries:
+                if str(e.get('form', '')).strip().upper() != '10-K':
+                    continue
+                end_str = str(e.get('end', '')).strip()
+                start_str = str(e.get('start', '')).strip()
+                val = _sf(e.get('val'))
+                if not end_str or not start_str or val is None:
+                    continue
+                try:
+                    end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
+                    start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
+                except Exception:
+                    continue
+                duration = (end_dt - start_dt).days
+                if 350 <= duration <= 380:
+                    annual_entries.append((end_dt, start_dt, float(val)))
+            
+            # For each annual entry, check if Q4 is missing and derive it
+            existing_ends = {item['_end_dt'] for item in filtered_entries}
+            for annual_end, annual_start, annual_val in annual_entries:
+                # Check if a quarterly entry already exists near this annual end date
+                already_exists = any(
+                    abs((annual_end - existing_end).days) <= 45
+                    for existing_end in existing_ends
+                )
+                if already_exists:
+                    continue
+                # Find Q1+Q2+Q3 within this fiscal year
+                q_in_year = [
+                    item for item in filtered_entries
+                    if item['_end_dt'] > annual_start and item['_end_dt'] <= annual_end
+                ]
+                if len(q_in_year) == 3:
+                    q4_val = annual_val - sum(item['_val'] for item in q_in_year)
+                    derived = {
+                        '_end_dt': annual_end,
+                        '_filed_dt': None,
+                        '_val': q4_val,
+                        'form': '10-K-derived'
+                    }
+                    filtered_entries.append(derived)
+                    existing_ends.add(annual_end)
+            
+            # Re-sort after adding derived entries
+            filtered_entries.sort(key=lambda x: x['_end_dt'])
 
             vals = [item['_val'] for item in filtered_entries]
             ends = [item['_end_dt'].isoformat() for item in filtered_entries]
