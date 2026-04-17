@@ -166,6 +166,56 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
 
 # ── Code 33 data fetcher — FMP + Finnhub primary, EDGAR fallback ──────────────
 
+def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends):
+    """Merge FMP + EDGAR pools by date, deduplicate within 45 days (FMP wins
+    for most-recent; EDGAR preferred for historical), then compute YoY by
+    comparing position i against i-4 (same quarter, prior year).
+    Only same-source pairs are used so FMP and EDGAR are never mixed.
+    Returns (rates, labels, ends_out)."""
+    pool = []
+    for v, e in zip(fmp_vals or [], fmp_ends or []):
+        if v is not None and e:
+            pool.append({'val': float(v), 'end': e, 'src': 'FMP'})
+    for v, e in zip(edgar_vals or [], edgar_ends or []):
+        if v is not None and e:
+            pool.append({'val': float(v), 'end': e, 'src': 'EDGAR'})
+    pool.sort(key=lambda x: x['end'], reverse=True)
+    deduped = []
+    for entry in pool:
+        duplicate = False
+        for kept in deduped:
+            try:
+                d1 = datetime.strptime(entry['end'], '%Y-%m-%d').date()
+                d2 = datetime.strptime(kept['end'],  '%Y-%m-%d').date()
+                if abs((d1 - d2).days) <= 45:
+                    duplicate = True
+                    if entry['src'] == 'FMP' and kept['src'] == 'EDGAR':
+                        deduped.remove(kept)
+                        deduped.append(entry)
+                    break
+            except Exception:
+                pass
+        if not duplicate:
+            deduped.append(entry)
+    deduped = deduped[:8]
+    deduped.reverse()
+    rates, labels, ends_out = [], [], []
+    for i in range(4, len(deduped)):
+        curr, prior = deduped[i], deduped[i - 4]
+        if curr['src'] != prior['src'] or prior['val'] == 0:
+            continue
+        rate = (curr['val'] - prior['val']) / abs(prior['val']) * 100
+        try:
+            dt    = datetime.strptime(curr['end'], '%Y-%m-%d').date()
+            label = f"Q{(dt.month + 2) // 3} {dt.year}"
+        except Exception:
+            label = curr['end']
+        rates.append(max(min(rate, 500.0), -500.0))
+        labels.append(label)
+        ends_out.append(curr['end'])
+    return rates, labels, ends_out
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_code33_data(ticker: str) -> dict:
     """Fetch EPS, Revenue, Net Margin independently for Code 33 analysis.
@@ -500,8 +550,10 @@ def get_code33_data(ticker: str) -> dict:
                 if already_exists:
                     continue
                 # Find Q1+Q2+Q3 within this fiscal year
+                # Search the UNCAPPED quarterly pool so that older Q1+Q2+Q3
+                # are not missed when filtered_entries was already capped at 8.
                 q_in_year = [
-                    item for item in filtered_entries
+                    item for item in dedup_by_end.values()
                     if item['_end_dt'] > annual_start and item['_end_dt'] <= annual_end
                 ]
                 if len(q_in_year) == 3:
@@ -604,149 +656,29 @@ def get_code33_data(ticker: str) -> dict:
     except Exception:
         yf_rev = yf_rev_end = yf_ni = yf_ni_end = yf_eps = yf_eps_end = []
 
-    # ── Strict per-pair fiscal-key YoY ───────────────────────────────────────
-    def _strict_lineage_yoy(fmp_vals, fmp_fy, fmp_fp,
-                             edgar_vals, edgar_fy, edgar_fp,
-                             yf_vals=None, yf_ends=None):
-        """
-        Compute YoY rates using (fiscalYear, period) composite keys.
-        Eliminates date-proximity duplicate-quarter ambiguity universally.
-
-        Tier 1 (most recent quarter): prefer FMP pair → (fy, fp) + (fy-1, fp)
-        Tier 1 (historical quarters): prefer EDGAR pair
-        Tier 2: fallback to the other source
-        Tier 3: yfinance date-proximity (calendar-year approximation)
-
-        Returns (yoy_rates, labels, ends_out, used_yf)
-        """
-        _fp_order = {'Q1': 1, 'Q2': 2, 'Q3': 3, 'Q4': 4}
-
-        # Build FMP map: {(fy, fp): value}
-        fmp_map = {}
-        for v, fy, fp in zip(fmp_vals or [], fmp_fy or [], fmp_fp or []):
-            if v is not None and fy is not None and fp is not None:
-                fmp_map[(int(fy), str(fp).upper())] = float(v)
-
-        # Build EDGAR map: {(fy, fp): value} — exclude fp=='FY'
-        edgar_map = {}
-        for v, fy, fp in zip(edgar_vals or [], edgar_fy or [], edgar_fp or []):
-            if v is not None and fy is not None and fp is not None:
-                fp_str = str(fp).upper()
-                if fp_str != 'FY':
-                    edgar_map[(int(fy), fp_str)] = float(v)
-
-        # yfinance fallback: date-based
-        yf_map = {}
-        for v, e in zip(yf_vals or [], yf_ends or []):
-            if v is not None and e is not None:
-                try:
-                    yf_map[datetime.strptime(e, '%Y-%m-%d').date()] = float(v)
-                except Exception:
-                    pass
-
-        def _find_nearest_date(date_map, target_dt, window=45):
-            best_val, best_diff = None, window + 1
-            for dt, v in date_map.items():
-                diff = abs((dt - target_dt).days)
-                if diff < best_diff:
-                    best_diff, best_val = diff, v
-            return best_val
-
-        # All fiscal period keys, sorted chronologically
-        all_keys = sorted(
-            set(list(fmp_map.keys()) + list(edgar_map.keys())),
-            key=lambda k: (k[0], _fp_order.get(k[1], 0))
-        )[-8:]  # most recent 8
-
-        most_recent_key = all_keys[-1] if all_keys else None
-        rates, labels, ends_out = [], [], []
-        used_yf = False
-
-        _quarter_month_day = {'Q1': (3, 31), 'Q2': (6, 30), 'Q3': (9, 30), 'Q4': (12, 31)}
-
-        for key in all_keys:
-            fy, fp = key
-            prior_key = (fy - 1, fp)
-
-            # Q0 (most recent): prefer FMP; historical: prefer EDGAR
-            if key == most_recent_key:
-                tiers = [(fmp_map, fmp_map), (edgar_map, edgar_map)]
-            else:
-                tiers = [(edgar_map, edgar_map), (fmp_map, fmp_map)]
-
-            found = False
-            for cur_map, pri_map in tiers:
-                cur_val = cur_map.get(key)
-                pri_val = pri_map.get(prior_key)
-                if cur_val is not None and pri_val is not None and pri_val != 0:
-                    rate = (cur_val - pri_val) / abs(pri_val) * 100
-                    rates.append(max(min(rate, 500.0), -500.0))
-                    labels.append(f"{fp} {fy}")
-                    month, day = _quarter_month_day.get(fp, (12, 31))
-                    ends_out.append(f"{fy}-{month:02d}-{day:02d}")
-                    found = True
-                    break
-
-            if found:
-                continue
-
-            # Tier 3 — yfinance date-proximity (calendar-year approximation)
-            if yf_map:
-                month, day = _quarter_month_day.get(fp, (12, 31))
-                try:
-                    cur_date  = datetime(fy,     month, day).date()
-                    pri_date  = datetime(fy - 1, month, day).date()
-                except ValueError:
-                    continue
-                yf_cur = _find_nearest_date(yf_map, cur_date,  window=15)
-                yf_pri = _find_nearest_date(yf_map, pri_date, window=45)
-                if yf_cur is not None and yf_pri is not None and yf_pri != 0:
-                    rate = (yf_cur - yf_pri) / abs(yf_pri) * 100
-                    rates.append(max(min(rate, 500.0), -500.0))
-                    labels.append(f"{fp} {fy}")
-                    ends_out.append(f"{fy}-{month:02d}-{day:02d}")
-                    used_yf = True
-
-        return rates, labels, ends_out, used_yf
-
-    # ── Revenue ───────────────────────────────────────────────────────────────
-    rev_yoy_final, rev_labels_final, _, rev_used_yf = _strict_lineage_yoy(
-        fmp_rev, fmp_rev_fy, fmp_rev_fp,
-        edgar_rev, edgar_rev_fy, edgar_rev_fp,
-        yf_rev, yf_rev_end
+    # ── Revenue YoY ───────────────────────────────────────────────────────────
+    rev_yoy_final, rev_labels_final, _ = _date_first_yoy(
+        fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end
     )
     rev_raw_final      = edgar_rev     if edgar_rev     else fmp_rev
     rev_raw_ends_final = edgar_rev_end if edgar_rev     else fmp_rev_end
-    if rev_yoy_final:
-        sources['rev'] = 'FMP|EDGAR|yf' if rev_used_yf else 'FMP|EDGAR'
-    else:
-        sources['rev'] = 'insufficient'
+    sources['rev'] = 'FMP|EDGAR' if rev_yoy_final else 'insufficient'
 
-    # ── Net Income ────────────────────────────────────────────────────────────
-    ni_yoy_final, ni_labels_final, _, ni_used_yf = _strict_lineage_yoy(
-        fmp_ni, fmp_ni_fy, fmp_ni_fp,
-        edgar_ni_abs, edgar_ni_fy, edgar_ni_fp,
-        yf_ni, yf_ni_end
+    # ── Net Income YoY ────────────────────────────────────────────────────────
+    ni_yoy_final, ni_labels_final, _ = _date_first_yoy(
+        fmp_ni, fmp_ni_end, edgar_ni_abs, edgar_ni_end
     )
     ni_raw_final      = edgar_ni_abs if edgar_ni_abs else fmp_ni
     ni_raw_ends_final = edgar_ni_end if edgar_ni_abs else fmp_ni_end
-    if ni_yoy_final:
-        sources['ni'] = 'FMP|EDGAR|yf' if ni_used_yf else 'FMP|EDGAR'
-    else:
-        sources['ni'] = 'insufficient'
+    sources['ni'] = 'FMP|EDGAR' if ni_yoy_final else 'insufficient'
 
-    # ── EPS ───────────────────────────────────────────────────────────────────
-    eps_yoy_final, eps_labels_final, _, eps_used_yf = _strict_lineage_yoy(
-        eps_fmp_clean, fmp_eps_fy, fmp_eps_fp,
-        eps_edgar_clean, edgar_eps_fy, edgar_eps_fp,
-        _sane_eps(yf_eps), yf_eps_end
+    # ── EPS YoY ───────────────────────────────────────────────────────────────
+    eps_yoy_final, eps_labels_final, _ = _date_first_yoy(
+        eps_fmp_clean, fmp_eps_end, eps_edgar_clean, edgar_eps_end
     )
     eps_raw_final      = eps_edgar_clean if eps_edgar_clean else eps_fmp_clean
     eps_raw_ends_final = edgar_eps_end   if eps_edgar_clean else fmp_eps_end
-    if eps_yoy_final:
-        sources['eps'] = 'FMP|EDGAR|yf' if eps_used_yf else 'FMP|EDGAR'
-    else:
-        sources['eps'] = 'insufficient'
+    sources['eps'] = 'FMP|EDGAR' if eps_yoy_final else 'insufficient'
 
     # ── Recency check ─────────────────────────────────────────────────────────
     if not _is_recent(rev_raw_ends_final):
