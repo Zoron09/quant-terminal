@@ -735,17 +735,22 @@ def get_code33_data(ticker: str) -> dict:
 
             is_us = False
 
-        # Sector exclusion: REITs, Financials, Utilities, Cyclicals, Airlines
+        # Sector exclusion logic (Minervini SEPA methodology):
+        #   Hard exclusion  → NOT APPLICABLE (Utilities, Cyclicals, Airlines)
+        #   Soft warning    → runs Code 33 but shows REIT advisory
+        #   No exclusion    → Financials removed per Minervini (can be superperformance leaders)
 
         sector   = str(info.get('sector',   '') or '').strip()
 
         industry = str(info.get('industry', '') or '').strip()
 
-        _EXCL_SECTORS = {'Real Estate', 'Financial Services', 'Utilities'}
+        # Hard-excluded sectors: Utilities only at the sector level.
+        # Financial Services deliberately removed — banks/brokers/fintechs can be leaders.
+        _EXCL_SECTORS = {'Utilities'}
 
+        # Hard-excluded industry keywords: Cyclicals + Airlines.
+        # 'reit', 'bank', 'insurance', 'mortgage' removed from hard list.
         _EXCL_INDUSTRY_KEYWORDS = [
-
-            'bank', 'insurance', 'asset management', 'reit', 'mortgage',
 
             'steel', 'aluminum', 'auto manufacturer', 'automobile',
 
@@ -754,6 +759,9 @@ def get_code33_data(ticker: str) -> dict:
             'airline', 'air freight', 'airports',
 
         ]
+
+        # REIT soft-warning keywords (run Code 33, but show advisory)
+        _REIT_KEYWORDS = ['reit', 'real estate investment trust']
 
         if sector in _EXCL_SECTORS:
 
@@ -775,9 +783,17 @@ def get_code33_data(ticker: str) -> dict:
 
                     break
 
+        # Detect REIT for soft warning (sector='Real Estate' or industry keyword)
+        is_reit = (
+            sector == 'Real Estate' or
+            any(kw in industry.lower() for kw in _REIT_KEYWORDS)
+        )
+
     except Exception:
 
         is_us = True
+
+        is_reit = False
 
 
 
@@ -1766,6 +1782,8 @@ def get_code33_data(ticker: str) -> dict:
         'sources': sources, 'is_us': is_us,
 
         'sector_excluded': sector_excluded, 'excluded_sector_name': excluded_sector_name,
+
+        'is_reit': is_reit,
 
         'eps_prior_vals': eps_prior_vals if eps_yoy_final else [],
 
@@ -3632,6 +3650,8 @@ with tab4:
 
     excluded_sector_name = c33.get('excluded_sector_name', '')
 
+    is_reit              = c33.get('is_reit', False)
+
     eps_prior_vals = c33.get('eps_prior_vals', [])
 
     eps_labels = c33.get('eps_labels', [])
@@ -3878,7 +3898,7 @@ with tab4:
 
         if sector_excluded:
 
-            bn = f"Sector excluded — Code 33 does not apply to {excluded_sector_name or ticker}. REITs, Financials, Utilities, Cyclicals and Airlines are excluded."
+            bn = f"Sector excluded — Code 33 does not apply to {excluded_sector_name or ticker}. Hard exclusions: Utilities, Cyclicals (Steel, Auto, Chemicals, Paper), Airlines. Financials are evaluated normally. REITs run Code 33 with a soft advisory."
 
         elif is_preprofit:
 
@@ -4101,6 +4121,20 @@ with tab4:
                                         npm_status, labels3=npm_labels3), unsafe_allow_html=True)
 
 
+
+    # ── REIT soft warning ─────────────────────────────────────────────────
+    if is_reit and not sector_excluded:
+        _reit_html = (
+            f'<div style="background:#1a1200;border:2px solid {YELLOW};border-radius:8px;'
+            f'padding:12px 18px;margin-top:12px;margin-bottom:8px;">'
+            f'<span style="color:{YELLOW};font-weight:bold;font-size:13px;">&#9888; REIT Detected — Soft Advisory</span>'
+            f'<br><span style="color:#CCC;font-size:12px;">Standard EPS / Revenue / Net Margin metrics may not reflect true '
+            f'business performance for Real Estate Investment Trusts. '
+            f'Consider using FFO (Funds From Operations) instead of Net Income for evaluation. '
+            f'Code 33 signal shown above is indicative only.</span>'
+            f'</div>'
+        )
+        st.markdown(_reit_html, unsafe_allow_html=True)
 
     # ── Distorted Base warning (Feature 2) ───────────────────────────────────
     _eps_distorted = [v < 0 for v in (eps_prior_vals or [])][-3:] if eps_prior_vals else []
