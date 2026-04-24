@@ -1,0 +1,34 @@
+﻿3647: 
+3648:     if len(eps_raw) >= 6:
+3649: 
+3650:         last6_eps = eps_raw[-6:]
+3651: 
+3652:         if all(v is not None and v < 0 for v in last6_eps):
+3653: 
+3654:             is_preprofit = True
+3655: 
+3656: 
+3657: 
+3658:     # ΓöÇΓöÇ Pre-computed YoY rates ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+3659: 
+3660:     eps_yoy = c33.get('eps_yoy', [])
+3661: 
+3662:     rev_yoy = c33.get('rev_yoy', [])
+3663: 
+3664: 
+3665: 
+3666:     # Last 3 valid YoY points + matching labels (chronological)
+3667: 
+3668:     eps3, eps_labels3 = _last3_valid_with_labels(eps_yoy, eps_labels)
+3669: 
+3670:     rev3, rev_labels3 = _last3_valid_with_labels(rev_yoy, rev_labels)
+3671: 
+3672: 
+3673: 
+3674:     # Last 3 margin quarters
+3675: 
+3676:     npm3        = npm_raw[-3:]    if len(npm_raw)    >= 3 else []
+3677: 
+3678:     npm_labels3 = npm_labels[-3:] if len(npm_labels) >= 3 else []
+3679: 
+3680: 

@@ -524,177 +524,125 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
 
 
-def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends):
+def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp_fp=None, edgar_fy=None, edgar_fp=None):
+    """Calculate YoY growth using strict fiscal-period matching first, fallback to date matching.
+    Prevents source-mixing and historical data deletion bugs."""
+    def _yoy_for_src(vals, ends, fys, fps, src_name):
+        pool = []
+        for v, e, fy, fp in zip(vals or [], ends or [], fys or [None]*len(vals or []), fps or [None]*len(vals or [])):
+            if v is not None and e:
+                pool.append({'val': float(v), 'end': e, 'fy': fy, 'fp': str(fp).strip().upper() if fp else None})
+        pool.sort(key=lambda x: x['end'], reverse=True)
+        deduped = []
+        for entry in pool:
+            duplicate = False
+            for kept in deduped:
+                try:
+                    d1 = datetime.strptime(entry['end'], '%Y-%m-%d').date()
+                    d2 = datetime.strptime(kept['end'],  '%Y-%m-%d').date()
+                    if abs((d1 - d2).days) <= 45:
+                        duplicate = True
+                        break
+                except Exception:
+                    pass
+            if not duplicate:
+                deduped.append(entry)
+        
+        results = []
 
-    """Merge FMP + EDGAR pools by date, deduplicate within 45 days (FMP wins
-
-    for most-recent; EDGAR preferred for historical), then compute YoY using
-
-    strict date-match: for each entry find the same-source entry whose end
-
-    date is within ±31 days of exactly 365 days prior.
-
-    BUG FIX: The full deduplicated pool (up to 16 entries) is used when
-    searching for prior-year matches. Only the 8 most-recent entries are
-    used as the 'current' quarters to yield YoY rates — this ensures a
-    current Q (e.g. Q4 2025) can always find its prior-year partner
-    (Q4 2024) even when the pool has many quarters.
-
-    Returns (rates, labels, ends_out, prior_vals)."""
-
-    pool = []
-
-    for v, e in zip(fmp_vals or [], fmp_ends or []):
-
-        if v is not None and e:
-
-            pool.append({'val': float(v), 'end': e, 'src': 'FMP'})
-
-    for v, e in zip(edgar_vals or [], edgar_ends or []):
-
-        if v is not None and e:
-
-            pool.append({'val': float(v), 'end': e, 'src': 'EDGAR'})
-
-    pool.sort(key=lambda x: x['end'], reverse=True)
-
-    # Build full deduped list (no cap yet) — needed so prior-year quarters
-    # are always reachable even when there are many quarters in the pool.
-    deduped_full = []
-
-    for entry in pool:
-
-        duplicate = False
-
-        for kept in deduped_full:
-
+        seen = set()
+        for i, curr in enumerate(deduped):
+            if curr['end'] in seen: continue
             try:
-
-                d1 = datetime.strptime(entry['end'], '%Y-%m-%d').date()
-
-                d2 = datetime.strptime(kept['end'],  '%Y-%m-%d').date()
-
-                if abs((d1 - d2).days) <= 45:
-
-                    duplicate = True
-
-                    if entry['src'] == 'FMP' and kept['src'] == 'EDGAR':
-
-                        deduped_full.remove(kept)
-
-                        deduped_full.append(entry)
-
-                    break
-
+                curr_dt = datetime.strptime(curr['end'], '%Y-%m-%d').date()
             except Exception:
-
-                pass
-
-        if not duplicate:
-
-            deduped_full.append(entry)
-
-    # 'current' quarters: only 8 most-recent (what we produce YoY rates for)
-    deduped_curr = deduped_full[:8]
-
-    # Keep newest-first for prior-year search; will build rates in any order
-
-    rates, labels, ends_out, prior_vals = [], [], [], []
-
-    seen_ends = set()  # avoid duplicate rate entries for same date
-
-    for curr in deduped_curr:
-
-        try:
-
-            curr_dt = datetime.strptime(curr['end'], '%Y-%m-%d').date()
-
-        except Exception:
-
-            continue
-
-        # Target: exactly 1 year ago; handle Feb 29 edge case
-
-        try:
-
-            target_dt = curr_dt.replace(year=curr_dt.year - 1)
-
-        except ValueError:
-
-            target_dt = curr_dt - timedelta(days=365)
-
-        # Search the FULL pool for prior-year — not just the capped 8 —
-        # so older quarters (e.g. Q4 2024 when pool has 12 entries) are found.
-        prior = None
-
-        best_diff = 32
-
-        for candidate in deduped_full:
-
-            if candidate['end'] == curr['end']:
-
                 continue
-
-            if candidate['src'] != curr['src']:
-
+            
+            prior = None
+            
+            # 1. Strict Fiscal Period matching (Q4 -> Q4 of previous year)
+            if curr['fy'] is not None and curr['fp'] in ('Q1', 'Q2', 'Q3', 'Q4'):
+                target_fy = curr['fy'] - 1
+                for cand in deduped:
+                    if cand['end'] == curr['end']: continue
+                    if cand['fy'] == target_fy and cand['fp'] == curr['fp']:
+                        prior = cand
+                        break
+            
+            # 2. Fallback to Date matching (+- 31 days from 365 days ago)
+            if prior is None:
+                try:
+                    target_dt = curr_dt.replace(year=curr_dt.year - 1)
+                except ValueError:
+                    target_dt = curr_dt - timedelta(days=365)
+                best_diff = 32
+                for cand in deduped:
+                    if cand['end'] == curr['end']: continue
+                    try:
+                        cand_dt = datetime.strptime(cand['end'], '%Y-%m-%d').date()
+                        diff = abs((cand_dt - target_dt).days)
+                        if diff < best_diff:
+                            best_diff = diff
+                            prior = cand
+                    except Exception:
+                        pass
+            
+            # 3. Fallback to Sequential matching (+4 quarters)
+            if prior is None:
+                if i + 4 < len(deduped):
+                    seq_prior = deduped[i + 4]
+                    try:
+                        sq_dt = datetime.strptime(seq_prior['end'], '%Y-%m-%d').date()
+                        diff_months = (curr_dt - sq_dt).days / 30.4
+                        if 9 <= diff_months <= 15:
+                            prior = seq_prior
+                    except Exception:
+                        pass
+                        
+            if prior is None or prior['val'] == 0:
                 continue
-
+                
+            seen.add(curr['end'])
+            rate = (curr['val'] - prior['val']) / abs(prior['val']) * 100
             try:
-
-                cand_dt = datetime.strptime(candidate['end'], '%Y-%m-%d').date()
-
-                diff = abs((cand_dt - target_dt).days)
-
-                if diff < best_diff:
-
-                    best_diff = diff
-
-                    prior = candidate
-
+                label = f"Q{(curr_dt.month + 2) // 3} {curr_dt.year}"
             except Exception:
+                label = curr['end']
+            results.append({
+                'dt': curr_dt, 'end': curr['end'], 'rate': rate, 
+                'label': label, 'prior_val': prior['val'], 'curr_val': curr['val']
+            })
+        return results
 
-                pass
-
-        if prior is None or prior['val'] == 0:
-
-            continue
-
-        if curr['end'] in seen_ends:
-
-            continue
-
-        seen_ends.add(curr['end'])
-
-        rate = (curr['val'] - prior['val']) / abs(prior['val']) * 100
-
-        try:
-
-            dt    = datetime.strptime(curr['end'], '%Y-%m-%d').date()
-
-            label = f"Q{(dt.month + 2) // 3} {dt.year}"
-
-        except Exception:
-
-            label = curr['end']
-
-        rates.append(rate)
-
-        labels.append(label)
-
-        ends_out.append(curr['end'])
-
-        prior_vals.append(prior['val'])  # track prior-year value for negative-base flag
-
-    # Sort chronologically (oldest first)
-
-    combined = sorted(zip(ends_out, rates, labels, prior_vals), key=lambda x: x[0])
-
-    if combined:
-
-        ends_out, rates, labels, prior_vals = zip(*combined)
-
-        return list(rates), list(labels), list(ends_out), list(prior_vals)
-
+    f_yoy = _yoy_for_src(fmp_vals, fmp_ends, fmp_fy, fmp_fp, 'FMP')
+    e_yoy = _yoy_for_src(edgar_vals, edgar_ends, edgar_fy, edgar_fp, 'EDGAR')
+    merged = list(f_yoy)
+    for ey in e_yoy:
+        duplicate_idx = -1
+        for idx, fy in enumerate(merged):
+            if abs((ey['dt'] - fy['dt']).days) <= 45:
+                duplicate_idx = idx
+                break
+        if duplicate_idx == -1:
+            merged.append(ey)
+        else:
+            # Duplicate found. Check for >5% conflict in base or current value.
+            # If secondary source (EDGAR/FMP fallback) conflicts with primary by >5%, the fallback (which is structurally closer to SEC ground truth) takes precedence.
+            fy = merged[duplicate_idx]
+            curr_diff = abs(ey['curr_val'] - fy['curr_val']) / max(abs(ey['curr_val']), abs(fy['curr_val']), 1e-9)
+            prior_diff = abs(ey['prior_val'] - fy['prior_val']) / max(abs(ey['prior_val']), abs(fy['prior_val']), 1e-9)
+            if curr_diff > 0.01 or prior_diff > 0.01:
+                merged[duplicate_idx] = ey
+    merged.sort(key=lambda x: x['dt'])
+    if len(merged) > 8:
+        merged = merged[-8:]
+    if merged:
+        return (
+            [x['rate'] for x in merged],
+            [x['label'] for x in merged],
+            [x['end'] for x in merged],
+            [x['prior_val'] for x in merged]
+        )
     return [], [], [], []
 
 
@@ -1220,7 +1168,8 @@ def get_code33_data(ticker: str) -> dict:
 
 
             dedup_by_end = {}
-
+            ytd_6m = {}
+            ytd_9m = {}
             for e in entries:
 
                 form = str(e.get('form', '')).strip().upper()
@@ -1260,93 +1209,65 @@ def get_code33_data(ticker: str) -> dict:
 
 
                 if end_dt < cutoff_date:
-
                     continue
-
-
-
-                duration_days = (end_dt - start_dt).days
-
-                if duration_days < 80 or duration_days > 105:
-
-                    continue
-
-
 
                 try:
-
                     filed_dt = datetime.strptime(filed_str, '%Y-%m-%d').date() if filed_str else None
-
                 except Exception:
-
                     filed_dt = None
 
+                duration_days = (end_dt - start_dt).days
+                end_str = e['end']
+                
+                cloned = dict(e)
+                cloned['_end_dt'] = end_dt
+                cloned['_filed_dt'] = filed_dt
+                cloned['_val'] = float(val)
+                cloned['_fy'] = int(e['fy']) if e.get('fy') is not None else end_dt.year
+                cloned['_fp'] = str(e['fp']).strip().upper() if e.get('fp') else None
+                cloned['form'] = form
 
+                if 80 <= duration_days <= 105:
+                    if end_str not in dedup_by_end or filed_dt > dedup_by_end[end_str]['_filed_dt']:
+                        dedup_by_end[end_str] = cloned
+                elif 170 <= duration_days <= 195:
+                    if end_str not in ytd_6m or filed_dt > ytd_6m[end_str]['_filed_dt']:
+                        ytd_6m[end_str] = cloned
+                elif 260 <= duration_days <= 285:
+                    if end_str not in ytd_9m or filed_dt > ytd_9m[end_str]['_filed_dt']:
+                        ytd_9m[end_str] = cloned
+            
+            # Derive missing Q2 from YTD 6-month
+            for ytd_end, ytd_entry in ytd_6m.items():
+                # Only derive if standalone Q2 is missing
+                if not any(abs((v['_end_dt'] - ytd_entry['_end_dt']).days) <= 15 for v in dedup_by_end.values()):
+                    target_q1_end = ytd_entry['_end_dt'] - timedelta(days=90)
+                    q1_entry = next((v for v in dedup_by_end.values() if abs((v['_end_dt'] - target_q1_end).days) <= 25), None)
+                    if q1_entry:
+                        derived_q2 = dict(ytd_entry)
+                        derived_q2['_val'] = ytd_entry['_val'] - q1_entry['_val']
+                        derived_q2['form'] = '10-Q-derived'
+                        dedup_by_end[ytd_end] = derived_q2
 
-                current = dedup_by_end.get(end_dt)
+            # Derive missing Q3 from YTD 9-month
+            for ytd_end, ytd_entry in ytd_9m.items():
+                if not any(abs((v['_end_dt'] - ytd_entry['_end_dt']).days) <= 15 for v in dedup_by_end.values()):
+                    target_q2_end = ytd_entry['_end_dt'] - timedelta(days=90)
+                    # We need the 6-month YTD to subtract, not the standalone Q2!
+                    # Wait, Q3 standalone = YTD_9M - YTD_6M.
+                    ytd_6m_entry = next((v for v in ytd_6m.values() if abs((v['_end_dt'] - target_q2_end).days) <= 25), None)
+                    if ytd_6m_entry:
+                        derived_q3 = dict(ytd_entry)
+                        derived_q3['_val'] = ytd_entry['_val'] - ytd_6m_entry['_val']
+                        derived_q3['form'] = '10-Q-derived'
+                        dedup_by_end[ytd_end] = derived_q3
 
-                if current is None or (filed_dt is not None and (current.get('_filed_dt') is None or filed_dt > current.get('_filed_dt'))):
-
-                    cloned = dict(e)
-
-                    cloned['_end_dt'] = end_dt
-
-                    cloned['_filed_dt'] = filed_dt
-
-                    cloned['_val'] = float(val)
-
-                    # Normalise fp to uppercase; derive fy from end_date (not EDGAR's filing year)
-
-                    raw_fp = str(e.get('fp', '')).upper().strip()
-
-                    if raw_fp in ('Q1', 'Q2', 'Q3', 'Q4'):
-
-                        cloned['_fp'] = raw_fp
-
-                        cloned['_fy'] = end_dt.year  # use period year, not filing year
-
-                    elif raw_fp == 'FY' and 80 <= duration_days <= 105:
-
-                        cloned['_fp'] = 'Q4'  # 10-K covering only Q4 period (fiscal-year companies)
-
-                        cloned['_fy'] = end_dt.year
-
-                    else:
-
-                        cloned['_fp'] = None
-
-                        cloned['_fy'] = int(e['fy']) if e.get('fy') is not None else None
-
-                    dedup_by_end[end_dt] = cloned
-
-
-
-            # For 10-K entries, only keep if end_date is more recent than latest 10-Q
-
-            latest_10q_end = max(
-
-                (v['_end_dt'] for v in dedup_by_end.values() if str(v.get('form','')).strip().upper() == '10-Q'),
-
-                default=None
-
-            )
-
-            if latest_10q_end is not None:
-
-                dedup_by_end = {
-
-                    k: v for k, v in dedup_by_end.items()
-
-                    if str(v.get('form','')).strip().upper() == '10-Q'
-
-                    or v['_end_dt'] > latest_10q_end
-
-                }
-
-
+            # Note: all entries in dedup_by_end already passed the 80-105 day duration filter,
+            # so they are quarterly-period entries. We do NOT further filter by form type —
+            # 10-K filings often contain standalone Q4 quarterly data (Oct-Dec, ~91 days)
+            # which is valid and must be kept even if older than the latest 10-Q.
 
             filtered_entries = sorted(dedup_by_end.values(), key=lambda x: x['_end_dt'], reverse=True)
-
             filtered_entries = filtered_entries[:8]
 
 
@@ -1369,43 +1290,29 @@ def get_code33_data(ticker: str) -> dict:
 
             # Collect all 10-K annual entries first
 
-            annual_entries = []
-
+            annual_dict = {}
             for e in entries:
-
                 if str(e.get('form', '')).strip().upper() != '10-K':
-
                     continue
-
                 end_str = str(e.get('end', '')).strip()
-
                 start_str = str(e.get('start', '')).strip()
-
+                filed_str = str(e.get('filed', '')).strip()
                 val = _sf(e.get('val'))
-
                 if not end_str or not start_str or val is None:
-
                     continue
-
                 try:
-
                     end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
-
                     start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
-
+                    filed_dt = datetime.strptime(filed_str, '%Y-%m-%d').date() if filed_str else datetime.min.date()
                 except Exception:
-
                     continue
-
                 duration = (end_dt - start_dt).days
-
                 if 350 <= duration <= 380:
-
                     annual_fy = int(e['fy']) if e.get('fy') is not None else None
-
-                    annual_entries.append((end_dt, start_dt, float(val), annual_fy))
-
+                    if end_dt not in annual_dict or filed_dt > annual_dict[end_dt][4]:
+                        annual_dict[end_dt] = (end_dt, start_dt, float(val), annual_fy, filed_dt)
             
+            annual_entries = [(item[0], item[1], item[2], item[3]) for item in annual_dict.values()]
 
             # For each annual entry, check if Q4 is missing and derive it
 
@@ -1446,16 +1353,11 @@ def get_code33_data(ticker: str) -> dict:
                     q4_val = annual_val - sum(item['_val'] for item in q_in_year)
 
                     derived = {
-
                         '_end_dt': annual_end,
-
                         '_filed_dt': None,
-
                         '_val': q4_val,
-
                         'form': '10-K-derived',
-
-                        '_fy': annual_fy,
+                        '_fy': q_in_year[0]['_fy'],
 
                         '_fp': 'Q4',
 
@@ -1643,11 +1545,7 @@ def get_code33_data(ticker: str) -> dict:
 
     # ── Revenue YoY ───────────────────────────────────────────────────────────
 
-    rev_yoy_final, rev_labels_final, _, _rev_prior_vals = _date_first_yoy(
-
-        fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end
-
-    )
+    rev_yoy_final, rev_labels_final, _, _rev_prior_vals = _date_first_yoy(fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end, fmp_rev_fy, fmp_rev_fp, None, None)
 
     rev_raw_final      = edgar_rev     if edgar_rev     else fmp_rev
 
@@ -1683,21 +1581,21 @@ def get_code33_data(ticker: str) -> dict:
 
 
 
-    # Pass 1: Finnhub vs FMP (each source pairs only with itself inside the pool)
+    # Pass 1: Finnhub vs EDGAR — EDGAR has most-recently-filed (restated) values.
+    # When Finnhub returns stale pre-restatement adjusted EPS, the 5% override
+    # inside _date_first_yoy will substitute the EDGAR restated value.
 
     eps_yoy_final, eps_labels_final, eps_yoy_ends, eps_prior_vals = _date_first_yoy(
-
-        eps_fh_clean, fh_eps_end, eps_fmp_clean, fmp_eps_end
-
+        eps_fh_clean, fh_eps_end, eps_edgar_clean, edgar_eps_end, None, None, None, None
     )
 
-    # Pass 2: if < 3 YoY points, also attempt Finnhub vs EDGAR
+    # Pass 2: if < 3 YoY points, also attempt Finnhub vs FMP
 
     if len(eps_yoy_final) < 3:
 
         eps_yoy_e2, eps_labels_e2, eps_ends_e2, eps_prior_e2 = _date_first_yoy(
 
-            eps_fh_clean, fh_eps_end, eps_edgar_clean, edgar_eps_end
+            eps_fh_clean, fh_eps_end, eps_fmp_clean, fmp_eps_end, None, None, fmp_eps_fy, fmp_eps_fp
 
         )
 
@@ -2537,15 +2435,11 @@ def _parse_end_date(end_date: str):
 def _compute_yoy(vals: list, end_dates: list, srcs=None) -> list:
 
     """
-
     Date-based YoY: for each quarter, find the same quarter
-
     from ~1 year ago by looking for an end_date within 45 days
-
     of (this_date - 365 days). Works for all fiscal calendars.
 
     Prefers same-source prior-year match when srcs provided.
-
     """
 
     if not vals or not end_dates:
@@ -3730,24 +3624,17 @@ with tab4:
 
         # NOT APPLICABLE only if ALL 3 margin quarters are negative (fully pre-profit).
         # If Q0 is negative but prior quarters were positive, that is margin collapse = RED.
-        if npm3[0] < 0 and npm3[1] < 0 and npm3[2] < 0:
-
+        # Margin compressing (getting worse) is ALWAYS a failure (RED), even for pre-profit
+        if npm_d1 < 0 or npm_d2 < 0:
+            npm_status = 'red'
+        # If margins are not compressing, check if fully pre-profit
+        elif npm3[0] < 0 and npm3[1] < 0 and npm3[2] < 0:
             npm_status = 'not_applicable'
-
         else:
-
             margin_expanding = npm_d1 > 0 and npm_d2 > 0
-
             if margin_expanding:
-
                 npm_status = 'green'
-
-            elif npm_d1 < 0 or npm_d2 < 0:
-
-                npm_status = 'red'
-
             else:
-
                 npm_status = 'yellow'
 
 
@@ -3932,7 +3819,7 @@ with tab4:
         f'<div style="color:#CCC;font-size:13px;">{bn}</div>'
         f'</div>'
     )
-    st.markdown(_status_html, unsafe_allow_html=True)
+    st.html(_status_html)
 
 
 
@@ -4178,29 +4065,18 @@ with tab4:
 
     # ── Minervini note ────────────────────────────────────────────────────────
 
-    st.markdown(f"""
-
+    st.html(f"""
 <div style="background:{BG};border-left:3px solid {YELLOW};border-radius:4px;
-
             padding:12px 16px;margin-top:12px;font-size:12px;color:#CCC;line-height:1.7">
-
   <b style="color:{YELLOW}">Rules:</b>
-
   <span style="color:{GREEN}">GREEN rate</span> = positive &nbsp;|&nbsp;
-
   <span style="color:{RED}">RED rate</span> = negative &nbsp;|&nbsp;
-
   <span style="color:{GREEN}">▲ delta</span> = accelerating &nbsp;|&nbsp;
-
   <span style="color:{RED}">▼ delta</span> = decelerating → any negative Δ = <b style="color:{RED}">BROKEN</b><br>
-
   <b style="color:{YELLOW}">Minervini:</b> "Dell peaked when EPS growth decelerated from 80%→65%→28%.
-
   Each number was still high — but the shrinking delta confirmed institutional distribution was underway.
-
   Code 33 breaks the moment ANY metric decelerates, regardless of the absolute growth level."
-
-</div>""", unsafe_allow_html=True)
+</div>""")
 
 
 
