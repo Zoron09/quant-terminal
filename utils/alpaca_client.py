@@ -75,7 +75,6 @@ def _norm_bars(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
 # Valid major-exchange codes returned by Alpaca TradingClient
 _VALID_EXCHANGES = {
     'AssetExchange.NYSE', 'AssetExchange.NASDAQ',
-    'AssetExchange.ARCA', 'AssetExchange.BATS', 'AssetExchange.AMEX',
 }
 # Symbols ending in these suffixes are warrants / rights
 _WARRANT_RE = re.compile(r'(W|WS|WI|WT|WW|RT)$')

@@ -60,12 +60,12 @@ def compute_trend_template(df: pd.DataFrame) -> dict:
     # Per-criterion margin (positive = passing, shows how close to failing)
     m1 = (price / ma150 - 1) * 100
     m2 = (price / ma200 - 1) * 100
-    m3 = (ma150 / ma200 - 1) * 100
-    m4 = (ma200 / ma200_month_ago - 1) * 100
-    m5 = min((ma50 / ma150 - 1) * 100, (ma50 / ma200 - 1) * 100)
-    m6 = (price / ma50 - 1) * 100
-    m7 = (price / (lo52 * 1.30) - 1) * 100   # Minervini's actual rule: 30%
-    m8 = (price / (hi52 * 0.75) - 1) * 100
+    m3 = (price / ma50 - 1) * 100
+    m4 = (ma150 / ma200 - 1) * 100
+    m5 = (ma50 / ma150 - 1) * 100
+    m6 = (ma50 / ma200 - 1) * 100
+    m7 = (price / (lo52 * 1.30) - 1) * 100
+    m8 = (price / (hi52 * 0.70) - 1) * 100
 
     criteria = [
         {
@@ -86,34 +86,34 @@ def compute_trend_template(df: pd.DataFrame) -> dict:
         },
         {
             'id': 3,
-            'label': '150-day MA > 200-day MA',
-            'result': ma150 > ma200,
-            'value': f"MA150 {ma150:.2f} | MA200 {ma200:.2f}",
-            'note': 'Intermediate MA must be above long-term MA',
-            'proximity': _proximity(m3),
-        },
-        {
-            'id': 4,
-            'label': '200-day MA trending up (1 month)',
-            'result': ma200 > ma200_month_ago,
-            'value': f"Current {ma200:.2f} | 1M ago {ma200_month_ago:.2f}",
-            'note': 'Upward slope confirms sustained uptrend',
-            'proximity': _proximity(m4),
-        },
-        {
-            'id': 5,
-            'label': '50-day MA > 150-day MA & 200-day MA',
-            'result': ma50 > ma150 and ma50 > ma200,
-            'value': f"MA50 {ma50:.2f} | MA150 {ma150:.2f} | MA200 {ma200:.2f}",
-            'note': 'Short-term MA above both long-term MAs',
-            'proximity': _proximity(m5),
-        },
-        {
-            'id': 6,
             'label': 'Price > 50-day MA',
             'result': price > ma50,
             'value': f"Price {price:.2f} | MA50 {ma50:.2f}",
             'note': 'Must be in short-term uptrend',
+            'proximity': _proximity(m3),
+        },
+        {
+            'id': 4,
+            'label': '150-day MA > 200-day MA',
+            'result': ma150 > ma200,
+            'value': f"MA150 {ma150:.2f} | MA200 {ma200:.2f}",
+            'note': 'Intermediate MA must be above long-term MA',
+            'proximity': _proximity(m4),
+        },
+        {
+            'id': 5,
+            'label': '50-day MA > 150-day MA',
+            'result': ma50 > ma150,
+            'value': f"MA50 {ma50:.2f} | MA150 {ma150:.2f}",
+            'note': 'Short-term MA above intermediate MA',
+            'proximity': _proximity(m5),
+        },
+        {
+            'id': 6,
+            'label': '50-day MA > 200-day MA',
+            'result': ma50 > ma200,
+            'value': f"MA50 {ma50:.2f} | MA200 {ma200:.2f}",
+            'note': 'Short-term MA above long-term MA',
             'proximity': _proximity(m6),
         },
         {
@@ -121,13 +121,13 @@ def compute_trend_template(df: pd.DataFrame) -> dict:
             'label': 'Price ≥ 30% above 52-week low',
             'result': price >= lo52 * 1.30,
             'value': f"Price {price:.2f} | 52W Low {lo52:.2f} (+{(price/lo52-1)*100:.1f}%)",
-            'note': "Minervini's rule: stock has made meaningful upside progress",
+            'note': "Must have made meaningful upside progress",
             'proximity': _proximity(m7),
         },
         {
             'id': 8,
-            'label': 'Price within 25% of 52-week high',
-            'result': price >= hi52 * 0.75,
+            'label': 'Price within 30% of 52-week high',
+            'result': price >= hi52 * 0.70,
             'value': f"Price {price:.2f} | 52W High {hi52:.2f} ({(price/hi52-1)*100:.1f}%)",
             'note': 'Not extended too far from recent highs',
             'proximity': _proximity(m8),
@@ -135,7 +135,7 @@ def compute_trend_template(df: pd.DataFrame) -> dict:
     ]
 
     pass_count = sum(c['result'] for c in criteria)
-    qualified = pass_count >= 7
+    qualified = pass_count == 8
 
     return {
         'criteria': criteria,

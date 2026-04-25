@@ -13,7 +13,12 @@
       "Bash(curl -s http://localhost:8501)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(gh repo *)",
+      "Bash(gh api *)",
+      "WebFetch(domain:github.com)",
+      "Bash(claude plugin *)",
+      "PowerShell(irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex)"
     ]
   }
 }

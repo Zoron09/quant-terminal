@@ -135,6 +135,8 @@ def _compute_row(
             return None
 
         trend = compute_trend_template(df)
+        if trend.get('pass_count', 0) < 8:
+            return None
         stage = compute_stage(df)
         rs    = compute_rs(df, bench_df)
         vcp   = detect_vcp(df, lookback=90)
@@ -150,6 +152,10 @@ def _compute_row(
         lo52 = float(close.tail(252).min())
 
         vol       = df['Volume'].dropna()
+        avg_vol_30 = float(vol.tail(30).mean()) if len(vol) >= 30 else float(vol.mean())
+        if avg_vol_30 < 100000:
+            return None
+
         avg_vol   = float(vol.rolling(50).mean().iloc[-1]) if len(vol) >= 50 else float(vol.mean())
         last_vol  = int(snap['volume']) if snap and snap.get('volume') else int(vol.iloc[-1])
         vol_ratio = round(last_vol / avg_vol, 1) if avg_vol > 0 else 0.0
@@ -292,82 +298,16 @@ def _enrich_and_store(rows: list[dict], market: str, n: int = 200):
 
 
 # ── UI — Market selector and scan options ─────────────────────────────────────
-col_mkt, col_price, col_vol = st.columns([2, 1, 1])
+col_mkt, col_vcp = st.columns([2, 1])
 with col_mkt:
     market = st.selectbox("Market Universe",
                           ['US (Full Market ~6000 stocks)', 'India (Nifty 500)'], index=0)
 is_us = market.startswith('US')
 mkt_key = 'US' if is_us else 'India'
 
-with col_price:
-    min_price = st.number_input(
-        "Min Price ($)", min_value=0.0, max_value=1000.0, value=5.0, step=1.0,
-        help="Pre-filter: skip stocks below this price",
-    )
-with col_vol:
-    min_vol_k = st.number_input(
-        "Min Daily Volume (K)", min_value=0, max_value=10000, value=100, step=50,
-    )
-
-# ── Quick Scans ───────────────────────────────────────────────────────────────
-st.markdown("**Quick Scans**")
-qc = st.columns(6)
-PRESETS = {
-    0: {'f_trend': 7, 'f_rs': 80, 'f_sepa': 60, 'f_hi': 100, 'f_vol': 0.0,
-        'f_stage': [], 'f_vcp': False, 'f_mc_min': 0, 'f_mc_max': 10_000_000,
-        'f_pm': -100, 'f_revg': -100, 'f_epsg': -100},
-    1: {'f_hi': 5, 'f_vol': 1.5, 'f_trend': 0, 'f_rs': 0, 'f_sepa': 0,
-        'f_stage': [], 'f_vcp': False, 'f_mc_min': 0, 'f_mc_max': 10_000_000,
-        'f_pm': -100, 'f_revg': -100, 'f_epsg': -100},
-    2: {'f_rs': 90, 'f_stage': [2], 'f_trend': 0, 'f_sepa': 0, 'f_hi': 100,
-        'f_vol': 0.0, 'f_vcp': False, 'f_mc_min': 0, 'f_mc_max': 10_000_000,
-        'f_pm': -100, 'f_revg': -100, 'f_epsg': -100},
-    3: {'f_epsg': 25, 'f_trend': 5, 'f_rs': 0, 'f_sepa': 0, 'f_hi': 100,
-        'f_vol': 0.0, 'f_stage': [], 'f_vcp': False, 'f_mc_min': 0, 'f_mc_max': 10_000_000,
-        'f_pm': -100, 'f_revg': -100},
-    4: {'f_vol': 2.0, 'f_trend': 0, 'f_rs': 0, 'f_sepa': 0, 'f_hi': 100,
-        'f_stage': [], 'f_vcp': False, 'f_mc_min': 0, 'f_mc_max': 10_000_000,
-        'f_pm': -100, 'f_revg': -100, 'f_epsg': -100},
-    5: {'f_hi': 5, 'f_trend': 0, 'f_rs': 0, 'f_sepa': 0, 'f_vol': 0.0,
-        'f_stage': [], 'f_vcp': False, 'f_mc_min': 0, 'f_mc_max': 10_000_000,
-        'f_pm': -100, 'f_revg': -100, 'f_epsg': -100},
-}
-labels = ["SEPA Candidates", "Breakout Watch", "High RS Leaders",
-          "Earnings Momentum", "Volume Surge", "Near 52W High"]
-
-for i, (col, label) in enumerate(zip(qc, labels)):
-    if col.button(label, use_container_width=True, key=f'preset_btn_{i}'):
-        st.session_state['_pending_preset'] = PRESETS[i]
-        st.rerun()
-
-if '_pending_preset' in st.session_state:
-    for k, v in st.session_state['_pending_preset'].items():
-        st.session_state[k] = v
-    del st.session_state['_pending_preset']
-
-# ── Filter widgets ────────────────────────────────────────────────────────────
-with st.expander("FILTER SETTINGS", expanded=True):
-    fc1, fc2, fc3 = st.columns(3)
-    with fc1:
-        st.markdown("**SEPA / Technical**")
-        st.slider("Min Trend Template", 0, 8,  key='f_trend')
-        st.slider("Min RS Rank (12M)",  0, 99, key='f_rs')
-        st.multiselect("Stage filter", [1, 2, 3, 4], key='f_stage',
-                       format_func=lambda s: f"Stage {s}")
-        st.checkbox("VCP detected only", key='f_vcp')
-        st.slider("Min SEPA score",     0, 100, key='f_sepa')
-    with fc2:
-        st.markdown("**Fundamental**")
-        st.number_input("Min Market Cap ($M)", 0, 1_000_000,  step=1000,  key='f_mc_min')
-        st.number_input("Max Market Cap ($M)", 0, 10_000_000, step=10000, key='f_mc_max')
-        st.slider("Min Profit Margin %", -100, 100, key='f_pm')
-    with fc3:
-        st.markdown("**Momentum**")
-        st.slider("Min Revenue Growth %",      -100, 200,  key='f_revg')
-        st.slider("Min EPS Growth %",          -100, 500,  key='f_epsg')
-        st.slider("Min Volume Ratio (50d avg)", 0.0, 10.0, step=0.1, key='f_vol')
-        st.slider("Max % below 52W high",        1, 100,  key='f_hi',
-                  help="e.g. 10 = within 10% of 52-week high")
+with col_vcp:
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.checkbox("VCP detected only", key='f_vcp')
 
 st.markdown("---")
 
@@ -433,11 +373,12 @@ if trigger_scan and is_us and _HAS_ALPACA:
     t1        = time.time()
     snapshots = get_snapshots(tuple(all_symbols))
 
-    min_vol = min_vol_k * 1_000
+    min_price = 12.0
+    min_vol = 100000
     scan_symbols = [
         sym for sym, snap in snapshots.items()
         if snap.get('price') and snap['price'] >= min_price
-        and (min_vol == 0 or (snap.get('volume') or 0) >= min_vol)
+        and (snap.get('volume') or 0) >= min_vol
     ]
     ph1.success(
         f"Phase 1 complete — {len(snapshots):,} prices fetched in {time.time()-t1:.1f}s  "
@@ -584,39 +525,10 @@ df_res = pd.DataFrame(raw)
 # ── Apply post-scan filters ───────────────────────────────────────────────────
 m = pd.Series([True] * len(df_res))
 
-f_trend = st.session_state.get('f_trend', 0)
-f_rs    = st.session_state.get('f_rs',    0)
-f_stage = st.session_state.get('f_stage', [])
-f_vcp   = st.session_state.get('f_vcp',   False)
-f_sepa  = st.session_state.get('f_sepa',  0)
-f_vol   = st.session_state.get('f_vol',   0.0)
-f_hi    = st.session_state.get('f_hi',    100)
+f_vcp = st.session_state.get('f_vcp', False)
 
-if f_trend > 0: m &= pd.to_numeric(df_res['trend_pass'], errors='coerce').fillna(0) >= f_trend
-if f_rs    > 0: m &= pd.to_numeric(df_res['rs_12m'],     errors='coerce').fillna(0) >= f_rs
-if f_stage:     m &= pd.to_numeric(df_res['stage'],      errors='coerce').isin(f_stage)
-if f_vcp:       m &= df_res['vcp'].apply(_safe_bool)
-if f_sepa  > 0: m &= pd.to_numeric(df_res['sepa_score'], errors='coerce').fillna(0) >= f_sepa
-if f_vol   > 0: m &= pd.to_numeric(df_res['vol_ratio'],  errors='coerce').fillna(0) >= f_vol
-if f_hi   < 100:
-    m &= pd.to_numeric(df_res['pct_from_hi'], errors='coerce').fillna(-100) >= -f_hi
-
-f_mc_min = st.session_state.get('f_mc_min', 0)
-f_mc_max = st.session_state.get('f_mc_max', 10_000_000)
-f_pm     = st.session_state.get('f_pm',     -100)
-f_revg   = st.session_state.get('f_revg',   -100)
-f_epsg   = st.session_state.get('f_epsg',   -100)
-
-if f_mc_min > 0:
-    m &= pd.to_numeric(df_res['market_cap'], errors='coerce').fillna(0) >= f_mc_min * 1e6
-if f_mc_max < 10_000_000:
-    m &= pd.to_numeric(df_res['market_cap'], errors='coerce').fillna(0) <= f_mc_max * 1e6
-if f_pm   > -100:
-    m &= pd.to_numeric(df_res['profit_margin'], errors='coerce').fillna(-99) * 100 >= f_pm
-if f_revg > -100:
-    m &= pd.to_numeric(df_res['rev_growth'], errors='coerce').fillna(-99) * 100 >= f_revg
-if f_epsg > -100:
-    m &= pd.to_numeric(df_res['eps_growth'], errors='coerce').fillna(-99) * 100 >= f_epsg
+if f_vcp:
+    m &= df_res['vcp'].apply(_safe_bool)
 
 filtered = df_res[m].sort_values(
     'sepa_score', ascending=False, key=lambda s: pd.to_numeric(s, errors='coerce').fillna(0)
