@@ -24,7 +24,7 @@ except Exception:
     FINNHUB_KEY  = ''
     _HAS_FINNHUB = False
 
-CACHE_VERSION = 'v2'
+CACHE_VERSION = 'v5'
 
 # ── SEC EDGAR headers ─────────────────────────────────────────────────────────
 EDGAR_UA = {'User-Agent': 'Meet Singh singhgaganmeet09@gmail.com'}
@@ -280,9 +280,10 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
     return margins, margin_labels, margin_ends
 
-def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp_fp=None, edgar_fy=None, edgar_fp=None, fy_end_m=12):
+def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp_fp=None, edgar_fy=None, edgar_fp=None, fy_end_m=12, primary_wins=False):
     """Calculate YoY growth using strict fiscal-period matching first, fallback to date matching.
-    Prevents source-mixing and historical data deletion bugs."""
+    primary_wins=True: primary (FMP/yfinance) wins by default; EDGAR only overrides on
+    small corrections (<10% gap). Used for EPS where primary = adjusted and EDGAR = GAAP."""
 
     def _make_pool(vals, ends, fys, fps):
         pool = []
@@ -398,13 +399,21 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
         if duplicate_idx == -1:
             merged.append(ey)
         else:
-            # Duplicate found. Check for >5% conflict in base or current value.
-            # If secondary source (EDGAR/FMP fallback) conflicts with primary by >5%, the fallback (which is structurally closer to SEC ground truth) takes precedence.
             fy = merged[duplicate_idx]
-            curr_diff = abs(ey['curr_val'] - fy['curr_val']) / max(abs(ey['curr_val']), abs(fy['curr_val']), 1e-9)
+            curr_diff  = abs(ey['curr_val']  - fy['curr_val'])  / max(abs(ey['curr_val']),  abs(fy['curr_val']),  1e-9)
             prior_diff = abs(ey['prior_val'] - fy['prior_val']) / max(abs(ey['prior_val']), abs(fy['prior_val']), 1e-9)
-            if curr_diff > 0.01 or prior_diff > 0.01:
-                merged[duplicate_idx] = ey
+            if primary_wins:
+                # yfinance = adjusted EPS (FactSet-aligned); EDGAR = GAAP.
+                # Override only on small late restatements (<10% gap, filed >30d later).
+                # Pre-filtering in get_code33_data already removed large-gap EDGAR entries;
+                # here we keep the primary unless the remaining EDGAR differs by <10%.
+                if curr_diff < 0.10 or prior_diff < 0.10:
+                    merged[duplicate_idx] = ey
+                # else: primary (yfinance/Finnhub adjusted EPS) wins -- do nothing
+            else:
+                # Revenue / legacy behaviour: secondary (EDGAR) wins on any >1% diff.
+                if curr_diff > 0.01 or prior_diff > 0.01:
+                    merged[duplicate_idx] = ey
     merged.sort(key=lambda x: x['dt'])
     if len(merged) > 8:
         merged = merged[-8:]
@@ -1514,28 +1523,70 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    # -- EPS YoY (BUG 2 FIX: Finnhub=primary adjusted, FMP=secondary, EDGAR=fallback)
-
-    # _date_first_yoy enforces strict source lock: same-source YoY pairs only.
+    # -- EPS YoY: yfinance/Finnhub = adjusted EPS (FactSet/TradingView-aligned).
+    # EDGAR = GAAP EPS.  EDGAR only overrides on small (<10% gap) late restatements.
+    # See: diagnostic output in tools/diagnostic_output.txt for source comparison.
 
     eps_fh_clean = _sane_eps(fh_eps)
 
+    def _filter_edgar_eps_for_yf(e_vals, e_ends, yf_vals, yf_ends):
+        """Drop EDGAR EPS entries where yfinance has a matching quarter AND
+        gap >= 10% (concept difference: GAAP vs adjusted).  Entries with gap < 10%
+        (genuine small restatements) are kept so _date_first_yoy can apply them.
+        If no yfinance match exists for a quarter, EDGAR is kept as a gap-fill."""
+        filtered_v, filtered_e = [], []
+        for ev, ee in zip(e_vals or [], e_ends or []):
+            if ev is None or not ee:
+                continue
+            try:
+                e_dt = datetime.strptime(ee, '%Y-%m-%d').date()
+            except Exception:
+                filtered_v.append(ev); filtered_e.append(ee)
+                continue
+            # Find nearest yfinance entry (announcement date = 30-120d after period-end)
+            best_yv, best_diff = None, 9999
+            for yv, ye in zip(yf_vals or [], yf_ends or []):
+                if yv is None or not ye:
+                    continue
+                try:
+                    y_dt = datetime.strptime(ye, '%Y-%m-%d').date()
+                except Exception:
+                    continue
+                d = (y_dt - e_dt).days
+                if -30 <= d <= 120 and abs(d) < best_diff:
+                    best_diff = abs(d); best_yv = yv
+            if best_yv is None:
+                # No yfinance coverage for this quarter -- keep EDGAR as gap-fill
+                filtered_v.append(ev); filtered_e.append(ee)
+                continue
+            gap = abs(best_yv - ev) / max(abs(ev), 0.01) * 100
+            if gap < 10.0:
+                # Small gap: genuine restatement candidate -- keep EDGAR
+                filtered_v.append(ev); filtered_e.append(ee)
+            # gap >= 10%: GAAP vs adjusted concept difference -- yfinance wins, drop EDGAR
+        return filtered_v, filtered_e
 
-
-    # Pass 1: Finnhub vs EDGAR — EDGAR has most-recently-filed (restated) values.
-    # When Finnhub returns stale pre-restatement adjusted EPS, the 5% override
-    # inside _date_first_yoy will substitute the EDGAR restated value.
-
-    eps_yoy_final, eps_labels_final, eps_yoy_ends, eps_prior_vals = _date_first_yoy(
-        eps_fh_clean, fh_eps_end, eps_edgar_clean, edgar_eps_end, None, None, None, None, fy_end_m=fy_end_month
+    # Apply gap filter before both EPS passes
+    edgar_eps_filtered, edgar_eps_end_filtered = _filter_edgar_eps_for_yf(
+        eps_edgar_clean, edgar_eps_end, eps_fh_clean, fh_eps_end
+    )
+    fmp_eps_filtered, fmp_eps_end_filtered = _filter_edgar_eps_for_yf(
+        eps_fmp_clean, fmp_eps_end, eps_fh_clean, fh_eps_end
     )
 
-    # Pass 2: if < 3 YoY points, also attempt Finnhub vs FMP
+    # Pass 1: yfinance/Finnhub (primary adjusted EPS) vs EDGAR (gap-filtered GAAP)
+    eps_yoy_final, eps_labels_final, eps_yoy_ends, eps_prior_vals = _date_first_yoy(
+        eps_fh_clean, fh_eps_end, edgar_eps_filtered, edgar_eps_end_filtered,
+        None, None, None, None, fy_end_m=fy_end_month, primary_wins=True
+    )
+
+    # Pass 2: if < 3 YoY points, also attempt yfinance/Finnhub vs FMP (gap-filtered)
 
     if len(eps_yoy_final) < 3:
 
         eps_yoy_e2, eps_labels_e2, eps_ends_e2, eps_prior_e2 = _date_first_yoy(
-            eps_fh_clean, fh_eps_end, eps_fmp_clean, fmp_eps_end, None, None, fmp_eps_fy, fmp_eps_fp, fy_end_m=fy_end_month
+            eps_fh_clean, fh_eps_end, fmp_eps_filtered, fmp_eps_end_filtered,
+            None, None, fmp_eps_fy, fmp_eps_fp, fy_end_m=fy_end_month, primary_wins=True
         )
 
         if len(eps_yoy_e2) > len(eps_yoy_final):
