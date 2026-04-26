@@ -18,7 +18,9 @@
       "Bash(gh api *)",
       "WebFetch(domain:github.com)",
       "Bash(claude plugin *)",
-      "PowerShell(irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex)"
+      "PowerShell(irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex)",
+      "Bash(.\\\\run_tests.bat)",
+      "PowerShell(cd \"C:\\\\Users\\\\Meet Singh\\\\quant-terminal\"; Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd \"C:\\\\Users\\\\Meet Singh\\\\quant-terminal\"; streamlit run app.py')"
     ]
   }
 }

@@ -283,7 +283,8 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp_fp=None, edgar_fy=None, edgar_fp=None, fy_end_m=12):
     """Calculate YoY growth using strict fiscal-period matching first, fallback to date matching.
     Prevents source-mixing and historical data deletion bugs."""
-    def _yoy_for_src(vals, ends, fys, fps, src_name):
+
+    def _make_pool(vals, ends, fys, fps):
         pool = []
         for v, e, fy, fp in zip(vals or [], ends or [], fys or [None]*len(vals or []), fps or [None]*len(vals or [])):
             if v is not None and e:
@@ -303,9 +304,54 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
                     pass
             if not duplicate:
                 deduped.append(entry)
-        
-        results = []
+        return deduped
 
+    def _find_prior(curr, curr_dt, search_pool, i_hint=None):
+        """Try fiscal-period, date (±31d), then sequential matching against search_pool.
+        i_hint: index of curr in search_pool for sequential; None disables sequential."""
+        # 1. Strict Fiscal Period matching (Q4 -> Q4 of previous year)
+        if curr['fy'] is not None and curr['fp'] in ('Q1', 'Q2', 'Q3', 'Q4'):
+            target_fy = curr['fy'] - 1
+            for cand in search_pool:
+                if cand['end'] == curr['end']: continue
+                if cand['fy'] == target_fy and cand['fp'] == curr['fp']:
+                    return cand
+
+        # 2. Date matching (±31 days from 365 days ago)
+        try:
+            target_dt = curr_dt.replace(year=curr_dt.year - 1)
+        except ValueError:
+            target_dt = curr_dt - timedelta(days=365)
+        best_diff = 32
+        best_cand = None
+        for cand in search_pool:
+            if cand['end'] == curr['end']: continue
+            try:
+                cand_dt = datetime.strptime(cand['end'], '%Y-%m-%d').date()
+                diff = abs((cand_dt - target_dt).days)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_cand = cand
+            except Exception:
+                pass
+        if best_cand is not None:
+            return best_cand
+
+        # 3. Sequential matching (+4 quarters) — only for same-source pool
+        if i_hint is not None and i_hint + 4 < len(search_pool):
+            seq_prior = search_pool[i_hint + 4]
+            try:
+                sq_dt = datetime.strptime(seq_prior['end'], '%Y-%m-%d').date()
+                diff_months = (curr_dt - sq_dt).days / 30.4
+                if 9 <= diff_months <= 15:
+                    return seq_prior
+            except Exception:
+                pass
+
+        return None
+
+    def _yoy_for_src(deduped, src_name, fallback_pool=None):
+        results = []
         seen = set()
         for i, curr in enumerate(deduped):
             if curr['end'] in seen: continue
@@ -313,51 +359,17 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
                 curr_dt = datetime.strptime(curr['end'], '%Y-%m-%d').date()
             except Exception:
                 continue
-            
-            prior = None
-            
-            # 1. Strict Fiscal Period matching (Q4 -> Q4 of previous year)
-            if curr['fy'] is not None and curr['fp'] in ('Q1', 'Q2', 'Q3', 'Q4'):
-                target_fy = curr['fy'] - 1
-                for cand in deduped:
-                    if cand['end'] == curr['end']: continue
-                    if cand['fy'] == target_fy and cand['fp'] == curr['fp']:
-                        prior = cand
-                        break
-            
-            # 2. Fallback to Date matching (+- 31 days from 365 days ago)
-            if prior is None:
-                try:
-                    target_dt = curr_dt.replace(year=curr_dt.year - 1)
-                except ValueError:
-                    target_dt = curr_dt - timedelta(days=365)
-                best_diff = 32
-                for cand in deduped:
-                    if cand['end'] == curr['end']: continue
-                    try:
-                        cand_dt = datetime.strptime(cand['end'], '%Y-%m-%d').date()
-                        diff = abs((cand_dt - target_dt).days)
-                        if diff < best_diff:
-                            best_diff = diff
-                            prior = cand
-                    except Exception:
-                        pass
-            
-            # 3. Fallback to Sequential matching (+4 quarters)
-            if prior is None:
-                if i + 4 < len(deduped):
-                    seq_prior = deduped[i + 4]
-                    try:
-                        sq_dt = datetime.strptime(seq_prior['end'], '%Y-%m-%d').date()
-                        diff_months = (curr_dt - sq_dt).days / 30.4
-                        if 9 <= diff_months <= 15:
-                            prior = seq_prior
-                    except Exception:
-                        pass
-                        
+
+            # Same-source first: fiscal → date → sequential
+            prior = _find_prior(curr, curr_dt, deduped, i_hint=i)
+
+            # Cross-source fallback: only when same-source has no prior within ±31d
+            if prior is None and fallback_pool:
+                prior = _find_prior(curr, curr_dt, fallback_pool, i_hint=None)
+
             if prior is None or prior['val'] == 0:
                 continue
-                
+
             seen.add(curr['end'])
             rate = (curr['val'] - prior['val']) / abs(prior['val']) * 100
             try:
@@ -365,13 +377,17 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
             except Exception:
                 label = curr['end']
             results.append({
-                'dt': curr_dt, 'end': curr['end'], 'rate': rate, 
+                'dt': curr_dt, 'end': curr['end'], 'rate': rate,
                 'label': label, 'prior_val': prior['val'], 'curr_val': curr['val']
             })
         return results
 
-    f_yoy = _yoy_for_src(fmp_vals, fmp_ends, fmp_fy, fmp_fp, 'FMP')
-    e_yoy = _yoy_for_src(edgar_vals, edgar_ends, edgar_fy, edgar_fp, 'EDGAR')
+    fmp_pool   = _make_pool(fmp_vals, fmp_ends, fmp_fy, fmp_fp)
+    edgar_pool = _make_pool(edgar_vals, edgar_ends, edgar_fy, edgar_fp)
+
+    f_yoy = _yoy_for_src(fmp_pool,   'FMP',   fallback_pool=edgar_pool)
+    e_yoy = _yoy_for_src(edgar_pool, 'EDGAR', fallback_pool=fmp_pool)
+
     merged = list(f_yoy)
     for ey in e_yoy:
         duplicate_idx = -1
@@ -564,11 +580,91 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
+    def _yfinance_fetch_eps(symbol: str):
+
+        """Fetch adjusted EPS from yfinance earnings_dates[\"Reported EPS\"].
+
+        Returns (eps_vals, eps_lbls, eps_ends) oldest-to-newest, capped 8.
+
+        Returns ([], [], []) if fewer than 3 valid data points."""
+
+        try:
+
+            import yfinance as _yf2
+
+            ed = _yf2.Ticker(symbol.upper()).earnings_dates
+
+            if ed is None or ed.empty:
+
+                return [], [], []
+
+            if 'Reported EPS' not in ed.columns:
+
+                return [], [], []
+
+            df = ed[['Reported EPS']].dropna()
+
+            if len(df) < 3:
+
+                return [], [], []
+
+            # Sort descending, take 8 most recent
+
+            df = df.sort_index(ascending=False).head(12)
+
+            rows = []
+
+            for ts, row in df.iterrows():
+
+                try:
+
+                    # earnings_dates index is timezone-aware — normalize to date
+
+                    if hasattr(ts, 'date'):
+
+                        dt = ts.date()
+
+                    else:
+
+                        dt = datetime.strptime(str(ts)[:10], '%Y-%m-%d').date()
+
+                    val = float(row['Reported EPS'])
+
+                    rows.append((dt, val))
+
+                except Exception:
+
+                    continue
+
+            if len(rows) < 3:
+
+                return [], [], []
+
+            rows.reverse()  # oldest first
+
+            vals = [v for _, v in rows]
+
+            ends = [d.isoformat() for d, _ in rows]
+
+            lbls = [_get_fq_fy(d, fy_end_month) for d, _ in rows]
+
+            return vals, lbls, ends
+
+        except Exception:
+
+            return [], [], []
+
+
+
     def _finnhub_fetch_eps(symbol: str):
 
-        """Fetch EPS from Finnhub /stock/metric quarterly series.
+        """Fetch EPS from Finnhub /stock/earnings endpoint (actual reported EPS).
 
-        Returns (eps_vals, eps_lbls, eps_ends)."""
+        Uses the correct earnings surprises endpoint — returns adjusted reported EPS
+
+        matching TradingView's 'Reported EPS' column.
+
+        Returns (eps_vals, eps_lbls, eps_ends) oldest-to-newest, capped 12."""
 
         if not FINNHUB_KEY:
 
@@ -578,9 +674,9 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
             r = requests.get(
 
-                "https://finnhub.io/api/v1/stock/metric",
+                "https://finnhub.io/api/v1/stock/earnings",
 
-                params={'symbol': symbol.upper(), 'metric': 'all', 'token': FINNHUB_KEY},
+                params={'symbol': symbol.upper(), 'limit': 12, 'token': FINNHUB_KEY},
 
                 timeout=10
 
@@ -588,11 +684,55 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
             r.raise_for_status()
 
-            data = r.json() if isinstance(r.json(), dict) else {}
+            data = r.json() if isinstance(r.json(), list) else []
 
-            quarterly = ((data.get('series') or {}).get('quarterly') or {})
+            if not data:
 
-            return _finnhub_quarterly_series(quarterly.get('eps'))
+                return [], [], []
+
+            rows = []
+
+            for item in data:
+
+                if not isinstance(item, dict):
+
+                    continue
+
+                period = str(item.get('period', '')).strip()
+
+                actual = _sf(item.get('actual'))
+
+                if not period or actual is None:
+
+                    continue
+
+                try:
+
+                    dt = datetime.strptime(period, '%Y-%m-%d').date()
+
+                except Exception:
+
+                    continue
+
+                rows.append((dt, actual))
+
+            if not rows:
+
+                return [], [], []
+
+            # Sort descending, cap at 12, then reverse to oldest-first
+
+            rows = sorted(rows, key=lambda x: x[0], reverse=True)[:12]
+
+            rows.reverse()
+
+            vals = [v for _, v in rows]
+
+            ends = [d.isoformat() for d, _ in rows]
+
+            lbls = [_get_fq_fy(d, fy_end_month) for d, _ in rows]
+
+            return vals, lbls, ends
 
         except Exception:
 
@@ -1212,7 +1352,19 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    fh_eps, fh_eps_lbl, fh_eps_end = _finnhub_fetch_eps(ticker)
+    # ── EPS: yfinance primary → Finnhub fallback ────────────────────────────
+
+    yf_eps_adj, yf_eps_adj_lbl, yf_eps_adj_end = _yfinance_fetch_eps(ticker)
+
+    # Fall through to Finnhub if yfinance returns ≤2 usable points
+
+    if len(yf_eps_adj) >= 3:
+
+        fh_eps, fh_eps_lbl, fh_eps_end = yf_eps_adj, yf_eps_adj_lbl, yf_eps_adj_end
+
+    else:
+
+        fh_eps, fh_eps_lbl, fh_eps_end = _finnhub_fetch_eps(ticker)
 
 
 
@@ -1220,7 +1372,9 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     if fmp_rev and edgar_rev:
 
-        fmp_avg = sum(fmp_rev) / len(fmp_rev)
+        fmp_vals = [v for v in fmp_rev if v is not None]
+
+        fmp_avg = sum(fmp_vals) / len(fmp_vals) if fmp_vals else 0
 
         edgar_vals = [v for v in edgar_rev if v is not None]
 
@@ -1238,7 +1392,9 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     if fmp_ni and edgar_ni_abs:
 
-        fmp_ni_avg = sum(fmp_ni) / len(fmp_ni)
+        fmp_ni_vals = [v for v in fmp_ni if v is not None]
+
+        fmp_ni_avg = sum(fmp_ni_vals) / len(fmp_ni_vals) if fmp_ni_vals else 0
 
         edgar_ni_vals = [v for v in edgar_ni_abs if v is not None]
 
@@ -1394,7 +1550,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    # Raw EPS for pre-profit check: prefer Finnhub > FMP > EDGAR
+    # Raw EPS for pre-profit check: prefer yfinance/Finnhub (fh_eps) > FMP > EDGAR
 
     if eps_fh_clean:
 
@@ -1414,7 +1570,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
         eps_raw_ends_final = edgar_eps_end
 
-    sources['eps'] = 'Finnhub|FMP|EDGAR' if eps_yoy_final else 'insufficient'
+    sources['eps'] = 'yfinance|Finnhub|FMP|EDGAR' if eps_yoy_final else 'insufficient'
 
 
 
@@ -1477,6 +1633,8 @@ def _c33_status(rates3: list) -> tuple:
     if len(rates3) < 3: return 'insufficient', None, None
 
     g1, g2, g3 = rates3[-3], rates3[-2], rates3[-1]
+
+    if g1 is None or g2 is None or g3 is None: return 'insufficient', None, None
 
     # Any negative rate = broken immediately (pre-profit or declining)
 

@@ -1,7 +1,7 @@
 {
   "JAKK": {"signal": "BROKEN", "rev_q2": -19.9, "rev_q1": -34.3, "rev_q0": -2.8, "npm_q2": -1.9, "npm_q1": 9.4, "npm_q0": -4.2},
   "ASYS": {"signal": "BROKEN", "rev_q2": -26.9, "rev_q1": -17.7, "rev_q0": -22.2, "npm_q2": 1.0, "npm_q1": 2.6, "npm_q0": 0.6},
-  "QUIK": {"signal": "NOT_APPLICABLE", "rev_q2": -10.0, "rev_q1": -51.8, "rev_q0": -34.6},
+  "QUIK": {"signal": "BROKEN", "rev_q2": -10.0, "rev_q1": -51.8, "rev_q0": -34.6},
   "INTT": {"signal": "BROKEN", "rev_q2": -17.2, "rev_q1": -13.3, "rev_q0": -10.3, "npm_q2": -1.8, "npm_q1": -3.6, "npm_q0": 3.8},
   "ESOA": {"signal": "BROKEN", "rev_q2": 20.6, "rev_q1": 24.3, "rev_q0": 13.4, "npm_q2": 2.0, "npm_q1": 3.3, "npm_q0": 2.4},
   "UTGN": {"signal": "BROKEN", "rev_q2": -70.8, "rev_q1": -57.1, "rev_q0": -101.9, "npm_q2": 58.3, "npm_q1": -52.1, "npm_q0": 59.1},

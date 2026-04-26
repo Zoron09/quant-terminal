@@ -1,0 +1,73 @@
+
+[ASYS]
+  Asset Details: exchange=AssetExchange.NASDAQ, tradable=True, status=AssetStatus.ACTIVE
+  Snapshot: price=18.78, vol_today=12908
+  Bars fetched: 762 trading days
+  ADV(30): 6620
+  Fails ADV(30): 6620 < 100,000
+  Trend Pass Count: 8 / 8
+    PASS: Price > 150-day MA -> Price 18.78 | MA150 11.54
+    PASS: Price > 200-day MA -> Price 18.78 | MA200 10.11
+    PASS: Price > 50-day MA -> Price 18.78 | MA50 13.25
+    PASS: 150-day MA > 200-day MA -> MA150 11.54 | MA200 10.11
+    PASS: 50-day MA > 150-day MA -> MA50 13.25 | MA150 11.54
+    PASS: 50-day MA > 200-day MA -> MA50 13.25 | MA200 10.11
+    PASS: Price ≥ 30% above 52-week low -> Price 18.78 | 52W Low 3.40 (+452.4%)
+    PASS: Price within 30% of 52-week high -> Price 18.78 | 52W High 18.78 (0.0%)
+
+[OCC]
+  Asset Details: exchange=AssetExchange.NASDAQ, tradable=True, status=AssetStatus.ACTIVE
+  Snapshot: price=12.195, vol_today=3958
+  Bars fetched: 762 trading days
+  ADV(30): 2733
+  Fails ADV(30): 2733 < 100,000
+  Trend Pass Count: 8 / 8
+    PASS: Price > 150-day MA -> Price 12.20 | MA150 7.40
+    PASS: Price > 200-day MA -> Price 12.20 | MA200 7.04
+    PASS: Price > 50-day MA -> Price 12.20 | MA50 8.27
+    PASS: 150-day MA > 200-day MA -> MA150 7.40 | MA200 7.04
+    PASS: 50-day MA > 150-day MA -> MA50 8.27 | MA150 7.40
+    PASS: 50-day MA > 200-day MA -> MA50 8.27 | MA200 7.04
+    PASS: Price ≥ 30% above 52-week low -> Price 12.20 | 52W Low 2.63 (+363.7%)
+    PASS: Price within 30% of 52-week high -> Price 12.20 | 52W High 12.97 (-6.0%)
+
+[INTT]
+  Asset Details: exchange=AssetExchange.AMEX, tradable=True, status=AssetStatus.ACTIVE
+  Excluded: INTT was excluded by _is_common_stock filter! (NYSE+NASDAQ only)
+  Snapshot: price=18.525, vol_today=10512
+  Bars fetched: 762 trading days
+  ADV(30): 4722
+  Fails ADV(30): 4722 < 100,000
+  Trend Pass Count: 8 / 8
+    PASS: Price > 150-day MA -> Price 18.52 | MA150 10.04
+    PASS: Price > 200-day MA -> Price 18.52 | MA200 9.34
+    PASS: Price > 50-day MA -> Price 18.52 | MA50 13.70
+    PASS: 150-day MA > 200-day MA -> MA150 10.04 | MA200 9.34
+    PASS: 50-day MA > 150-day MA -> MA50 13.70 | MA150 10.04
+    PASS: 50-day MA > 200-day MA -> MA50 13.70 | MA200 9.34
+    PASS: Price ≥ 30% above 52-week low -> Price 18.52 | 52W Low 5.65 (+227.9%)
+    PASS: Price within 30% of 52-week high -> Price 18.52 | 52W High 18.52 (0.0%)
+
+[SODI]
+  Asset Details: exchange=AssetExchange.OTC, tradable=False, status=AssetStatus.INACTIVE
+  Excluded: SODI was excluded by _is_common_stock filter! (NYSE+NASDAQ only)
+  Snapshot: price=0, vol_today=0
+  Fails Pre-filter: Price 0 < 12.0
+  Bars fetched: 0 trading days
+  Fails History: Cannot compute SMA(200).
+
+[STRL]
+  Asset Details: exchange=AssetExchange.NASDAQ, tradable=True, status=AssetStatus.ACTIVE
+  Snapshot: price=497.07, vol_today=16769
+  Bars fetched: 762 trading days
+  ADV(30): 20589
+  Fails ADV(30): 20589 < 100,000
+  Trend Pass Count: 8 / 8
+    PASS: Price > 150-day MA -> Price 497.07 | MA150 375.66
+    PASS: Price > 200-day MA -> Price 497.07 | MA200 351.66
+    PASS: Price > 50-day MA -> Price 497.07 | MA50 430.98
+    PASS: 150-day MA > 200-day MA -> MA150 375.66 | MA200 351.66
+    PASS: 50-day MA > 150-day MA -> MA50 430.98 | MA150 375.66
+    PASS: 50-day MA > 200-day MA -> MA50 430.98 | MA200 351.66
+    PASS: Price ≥ 30% above 52-week low -> Price 497.07 | 52W Low 146.05 (+240.3%)
+    PASS: Price within 30% of 52-week high -> Price 497.07 | 52W High 497.07 (0.0%)
