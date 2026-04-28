@@ -5,6 +5,38 @@
   "INTT": {"signal": "BROKEN", "rev_q2": -17.2, "rev_q1": -13.3, "rev_q0": -10.3, "npm_q2": -1.8, "npm_q1": -3.6, "npm_q0": 3.8},
   "ESOA": {"signal": "BROKEN", "rev_q2": 20.6, "rev_q1": 24.3, "rev_q0": 13.4, "npm_q2": 2.0, "npm_q1": 3.3, "npm_q0": 2.4},
   "UTGN": {"signal": "BROKEN", "rev_q2": -70.8, "rev_q1": -57.1, "rev_q0": -101.9, "npm_q2": 58.3, "npm_q1": -52.1, "npm_q0": 59.1},
-  "WSR": {"signal": "BROKEN", "rev_q2": 0.7, "rev_q1": 6.3, "rev_q0": 7.5, "npm_q2": 13.3, "npm_q1": 44.7, "npm_q0": 52.0},
-  "SODI": {"signal": "BROKEN", "rev_q2": -31.9, "rev_q1": 11.3, "rev_q0": 49.1, "npm_q2": -12.4, "npm_q1": -5.9, "npm_q0": 13.0}
+  "WSR":  {"signal": "BROKEN", "rev_q2": 0.7,   "rev_q1": 6.3,   "rev_q0": 7.5,   "npm_q2": 13.3, "npm_q1": 44.7, "npm_q0": 52.0},
+  "SODI": {"signal": "BROKEN", "rev_q2": -31.9,  "rev_q1": 11.3,  "rev_q0": 49.1,  "npm_q2": -12.4,"npm_q1": -5.9, "npm_q0": 13.0},
+  "ADI": {
+    "signal": "ACTIVE",
+    "eps_q2": 32.74,  "eps_q1": 66.61,  "eps_q0": 115.34,
+    "rev_q2": 24.57,  "rev_q1": 25.90,  "rev_q0": 30.42,
+    "npm_q2": 18.0,   "npm_q1": 25.6,   "npm_q0": 26.3,
+    "ground_truth_date": "2026-04-26",
+    "ground_truth_source": "TradingView Financials Quarterly"
+  },
+  "META": {
+    "signal": "BROKEN",
+    "eps_q2": 38.30,  "eps_q1": -82.54, "eps_q0": 10.71,
+    "rev_q2": 21.61,  "rev_q1": 26.25,  "rev_q0": 23.78,
+    "npm_q2": 38.6,   "npm_q1": 5.3,    "npm_q0": 38.0,
+    "ground_truth_date": "2026-04-26",
+    "ground_truth_source": "TradingView Financials Quarterly"
+  },
+  "AXON": {
+    "signal": "BROKEN",
+    "eps_q2": -17.71, "eps_q1": -103.25,"eps_q0": -98.01,
+    "rev_q2": 32.85,  "rev_q1": 30.57,  "rev_q0": 38.53,
+    "npm_q2": 5.40,   "npm_q1": -0.31,  "npm_q0": 0.35,
+    "ground_truth_date": "2026-04-26",
+    "ground_truth_source": "TradingView Financials Quarterly"
+  },
+  "ANET": {
+    "signal": "ACTIVE",
+    "eps_q2": 34.46,  "eps_q1": 14.52,  "eps_q0": 20.17,
+    "rev_q2": 30.43,  "rev_q1": 27.46,  "rev_q0": 28.87,
+    "npm_q2": 40.4,   "npm_q1": 36.9,   "npm_q0": 38.4,
+    "ground_truth_date": "2026-04-26",
+    "ground_truth_source": "TradingView Financials Quarterly"
+  }
 }

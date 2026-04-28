@@ -88,7 +88,7 @@ def test_code33_regression(ticker):
             status_str = "ACTIVE"
             
     if status_str == "INSUFFICIENT" and expected.get('signal') != "INSUFFICIENT":
-        pytest.skip(f"{ticker} returned INSUFFICIENT data but expected {expected.get('signal')}.")
+        pytest.fail(f"{ticker} returned INSUFFICIENT data but expected {expected.get('signal')}.")
         
     if status_str != expected.get('signal'):
         pytest.fail(f"Signal mismatch! Actual: {status_str}, Expected: {expected.get('signal')}")
@@ -96,18 +96,26 @@ def test_code33_regression(ticker):
     if status_str in ["NOT_APPLICABLE", "INSUFFICIENT"]:
         return
 
+    actual_eps_q2 = eps_yoy[-3] if len(eps_yoy) >= 3 else None
+    actual_eps_q1 = eps_yoy[-2] if len(eps_yoy) >= 2 else None
+    actual_eps_q0 = eps_yoy[-1] if len(eps_yoy) >= 1 else None
+
     actual_rev_q2 = rev_yoy[-3] if len(rev_yoy) >= 3 else None
     actual_rev_q1 = rev_yoy[-2] if len(rev_yoy) >= 2 else None
     actual_rev_q0 = rev_yoy[-1] if len(rev_yoy) >= 1 else None
-    
+
     actual_npm_q2 = npm_vals[-3] if len(npm_vals) >= 3 else None
     actual_npm_q1 = npm_vals[-2] if len(npm_vals) >= 2 else None
     actual_npm_q0 = npm_vals[-1] if len(npm_vals) >= 1 else None
-    
+
+    if 'eps_q2' in expected: check_value("EPS Q-2", actual_eps_q2, expected['eps_q2'], tol=1.5)
+    if 'eps_q1' in expected: check_value("EPS Q-1", actual_eps_q1, expected['eps_q1'], tol=1.5)
+    if 'eps_q0' in expected: check_value("EPS Q0",  actual_eps_q0, expected['eps_q0'], tol=1.5)
+
     if 'rev_q2' in expected: check_value("Revenue Q-2", actual_rev_q2, expected['rev_q2'])
     if 'rev_q1' in expected: check_value("Revenue Q-1", actual_rev_q1, expected['rev_q1'])
-    if 'rev_q0' in expected: check_value("Revenue Q0", actual_rev_q0, expected['rev_q0'])
-    
+    if 'rev_q0' in expected: check_value("Revenue Q0",  actual_rev_q0, expected['rev_q0'])
+
     if 'npm_q2' in expected: check_value("NPM Q-2", actual_npm_q2, expected['npm_q2'])
     if 'npm_q1' in expected: check_value("NPM Q-1", actual_npm_q1, expected['npm_q1'])
-    if 'npm_q0' in expected: check_value("NPM Q0", actual_npm_q0, expected['npm_q0'])
+    if 'npm_q0' in expected: check_value("NPM Q0",  actual_npm_q0, expected['npm_q0'])

@@ -1,4 +1,4 @@
-EPS Diagnostic Output -- generated 2026-04-26 15:39:46
+EPS Diagnostic Output -- generated 2026-04-27 04:31:54
 Tickers: AXON, ANET, ADI
 ================================================================================
 
@@ -26,7 +26,7 @@ yfinance           2024-11-07       N/A               +1.4500 Q4 2024
 yfinance           2025-02-25       N/A               +2.0800 Q1 2025              
 yfinance           2025-05-07       N/A               +1.4100 Q2 2025              
 yfinance           2025-08-04       N/A               +2.1200 Q3 2025              
-yfinance           2025-11-04       N/A               -0.0300 Q4 2025              
+yfinance           2025-11-04       N/A               +1.1700 Q4 2025              
 yfinance           2026-02-24       N/A               +2.1500 Q1 2026              
 
 ================================================================================
@@ -73,7 +73,7 @@ EDGAR(override)    2024-09-30       N/A               +0.8600 Q3 2024
 yfinance           2025-02-25       N/A               +2.0800 Q1 2025              
 EDGAR(override)    2025-03-31       N/A               +1.0800 Q1 2025              
 EDGAR(override)    2025-06-30       N/A               +0.4400 Q2 2025              
-yfinance[=EDGAR]   2025-11-04       N/A               -0.0300 Q4 2025              
+EDGAR(override)    2025-09-30       N/A               -0.0300 Q3 2025              
 yfinance           2026-02-24       N/A               +2.1500 Q1 2026              
 
 
@@ -98,8 +98,8 @@ yfinance           2024-11-07       N/A               +0.6000 Q4 2024
 yfinance           2025-02-18       N/A               +0.6500 Q1 2025              
 yfinance           2025-05-06       N/A               +0.6500 Q2 2025              
 yfinance           2025-08-05       N/A               +0.7300 Q3 2025              
-yfinance           2025-11-04       N/A               +0.7500 Q4 2025              
-yfinance           2026-02-12       N/A               +0.8200 Q1 2026              
+yfinance           2025-11-04       N/A               +0.6700 Q4 2025              
+yfinance           2026-02-12       N/A               +0.7500 Q1 2026              
 
 ================================================================================
   ANET | SOURCE 2 -- Finnhub   /stock/earnings [actual]
@@ -145,8 +145,8 @@ EDGAR(override)    2024-09-30       N/A               +0.5800 Q3 2024
 yfinance           2025-02-18       N/A               +0.6500 Q1 2025              
 EDGAR(override)    2025-03-31       N/A               +0.6400 Q1 2025              
 EDGAR(override)    2025-06-30       N/A               +0.7000 Q2 2025              
-EDGAR(override)    2025-09-30       N/A               +0.6700 Q3 2025              
-yfinance           2026-02-12       N/A               +0.8200 Q1 2026              
+yfinance[=EDGAR]   2025-11-04       N/A               +0.6700 Q4 2025              
+yfinance           2026-02-12       N/A               +0.7500 Q1 2026              
 
 
 ################################################################################
@@ -171,7 +171,7 @@ yfinance           2025-02-19       N/A               +1.6300 Q1 2025
 yfinance           2025-05-22       N/A               +1.8500 Q2 2025              
 yfinance           2025-08-20       N/A               +2.0500 Q3 2025              
 yfinance           2025-11-25       N/A               +2.2600 Q4 2025              
-yfinance           2026-02-18       N/A               +1.6900 Q1 2026              
+yfinance           2026-02-18       N/A               +2.4600 Q1 2026              
 
 ================================================================================
   ADI | SOURCE 2 -- Finnhub   /stock/earnings [actual]
@@ -218,7 +218,7 @@ EDGAR(override)    2025-02-01       N/A               +0.7800 Q1 2025
 EDGAR(override)    2025-05-03       N/A               +1.1400 Q2 2025              
 EDGAR(override)    2025-08-02       N/A               +1.0400 Q3 2025              
 yfinance           2025-11-25       N/A               +2.2600 Q4 2025              
-yfinance[=EDGAR]   2026-02-18       N/A               +1.6900 Q1 2026              
+EDGAR(override)    2026-01-31       N/A               +1.6900 Q1 2026              
 
 
 ================================================================================
@@ -240,12 +240,12 @@ period_end      yfinance_eps   edgar_eps    gap_%  yf_date      edgar_filed   sa
 2024-09-30           +1.4500     +0.8600    68.6%  2024-11-07   2025-11-05    False       True 
 2025-03-31           +1.4100     +1.0800    30.6%  2025-05-07   2025-05-07    True        True 
 2025-06-30           +2.1200     +0.4400   381.8%  2025-08-04   2025-08-05    True        True 
-2025-09-30           -0.0300     -0.0300     0.0%  2025-11-04   2025-11-05    True        True 
+2025-09-30           +1.1700     -0.0300  4000.0%  2025-11-04   2025-11-05    True        False
 
   --- Summary: AXON ---
   Total overlapping quarters : 6
-  Quarters with gap > 5%    : 5
-    Of those, same_day=True  : 2  [concept diff -- GAAP vs adjusted]
+  Quarters with gap > 5%    : 6
+    Of those, same_day=True  : 3  [concept diff -- GAAP vs adjusted]
     Of those, same_day=False AND edgar_filed > yf_date : 3  [restatement signal]
 
 ################################################################################
@@ -259,13 +259,11 @@ period_end      yfinance_eps   edgar_eps    gap_%  yf_date      edgar_filed   sa
 2024-09-30           +0.6000     +0.5800     3.4%  2024-11-07   2025-11-05    False       True 
 2025-03-31           +0.6500     +0.6400     1.6%  2025-05-06   2025-05-07    True        True 
 2025-06-30           +0.7300     +0.7000     4.3%  2025-08-05   2025-08-06    True        True 
-2025-09-30           +0.7500     +0.6700    11.9%  2025-11-04   2025-11-05    True        True 
+2025-09-30           +0.6700     +0.6700     0.0%  2025-11-04   2025-11-05    True        True 
 
   --- Summary: ANET ---
   Total overlapping quarters : 6
-  Quarters with gap > 5%    : 1
-    Of those, same_day=True  : 1  [concept diff -- GAAP vs adjusted]
-    Of those, same_day=False AND edgar_filed > yf_date : 0  [restatement signal]
+  Quarters with gap > 5%    : 0
 
 ################################################################################
   COMPARISON REPORT: ADI  (yfinance vs EDGAR)
@@ -279,10 +277,10 @@ period_end      yfinance_eps   edgar_eps    gap_%  yf_date      edgar_filed   sa
 2025-02-01           +1.6300     +0.7800   109.0%  2025-02-19   2026-02-18    False       True 
 2025-05-03           +1.8500     +1.1400    62.3%  2025-05-22   2025-05-22    True        True 
 2025-08-02           +2.0500     +1.0400    97.1%  2025-08-20   2025-08-20    True        True 
-2026-01-31           +1.6900     +1.6900     0.0%  2026-02-18   2026-02-18    True        True 
+2026-01-31           +2.4600     +1.6900    45.6%  2026-02-18   2026-02-18    True        True 
 
   --- Summary: ADI ---
   Total overlapping quarters : 7
-  Quarters with gap > 5%    : 6
-    Of those, same_day=True  : 2  [concept diff -- GAAP vs adjusted]
+  Quarters with gap > 5%    : 7
+    Of those, same_day=True  : 3  [concept diff -- GAAP vs adjusted]
     Of those, same_day=False AND edgar_filed > yf_date : 4  [restatement signal]

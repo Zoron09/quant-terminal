@@ -24,7 +24,7 @@ except Exception:
     FINNHUB_KEY  = ''
     _HAS_FINNHUB = False
 
-CACHE_VERSION = 'v5'
+CACHE_VERSION = 'v15'
 
 # ── SEC EDGAR headers ─────────────────────────────────────────────────────────
 EDGAR_UA = {'User-Agent': 'Meet Singh singhgaganmeet09@gmail.com'}
@@ -138,7 +138,7 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
                 d2 = datetime.strptime(kept, '%Y-%m-%d').date()
 
-                if abs((d1 - d2).days) <= 45:
+                if abs((d1 - d2).days) <= 60:
 
                     duplicate = True
 
@@ -170,7 +170,7 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
 
 
-        # ── Source lock: FMP rev + FMP ni (same source, within 45 days) ──────
+        # ── Source lock: FMP rev + FMP ni (same source, within 60 days) ──────
 
         fmp_rev_val = None
 
@@ -180,7 +180,7 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
             try:
 
-                if abs((d_dt - datetime.strptime(fd, '%Y-%m-%d').date()).days) <= 45:
+                if abs((d_dt - datetime.strptime(fd, '%Y-%m-%d').date()).days) <= 60:
 
                     fmp_rev_val = fmp_rev_map[fd]
 
@@ -196,7 +196,7 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
                 try:
 
-                    if abs((d_dt - datetime.strptime(fd, '%Y-%m-%d').date()).days) <= 45:
+                    if abs((d_dt - datetime.strptime(fd, '%Y-%m-%d').date()).days) <= 60:
 
                         fmp_ni_val = fmp_ni_map[fd]
 
@@ -224,7 +224,7 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
                 try:
 
-                    if abs((d_dt - datetime.strptime(ed, '%Y-%m-%d').date()).days) <= 45:
+                    if abs((d_dt - datetime.strptime(ed, '%Y-%m-%d').date()).days) <= 60:
 
                         edgar_rev_val = edgar_rev_map[ed]
 
@@ -240,7 +240,7 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
                     try:
 
-                        if abs((d_dt - datetime.strptime(ed, '%Y-%m-%d').date()).days) <= 45:
+                        if abs((d_dt - datetime.strptime(ed, '%Y-%m-%d').date()).days) <= 60:
 
                             edgar_ni_val = edgar_ni_map[ed]
 
@@ -280,16 +280,15 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
     return margins, margin_labels, margin_ends
 
-def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp_fp=None, edgar_fy=None, edgar_fp=None, fy_end_m=12, primary_wins=False):
+def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp_fp=None, edgar_fy=None, edgar_fp=None, fy_end_m=12, src_primary='FMP', src_fallback='EDGAR'):
     """Calculate YoY growth using strict fiscal-period matching first, fallback to date matching.
-    primary_wins=True: primary (FMP/yfinance) wins by default; EDGAR only overrides on
-    small corrections (<10% gap). Used for EPS where primary = adjusted and EDGAR = GAAP."""
+    Prevents source-mixing and historical data deletion bugs."""
 
-    def _make_pool(vals, ends, fys, fps):
+    def _make_pool(vals, ends, fys, fps, source_name):
         pool = []
         for v, e, fy, fp in zip(vals or [], ends or [], fys or [None]*len(vals or []), fps or [None]*len(vals or [])):
             if v is not None and e:
-                pool.append({'val': float(v), 'end': e, 'fy': fy, 'fp': str(fp).strip().upper() if fp else None})
+                pool.append({'val': float(v), 'end': e, 'fy': fy, 'fp': str(fp).strip().upper() if fp else None, 'source': source_name})
         pool.sort(key=lambda x: x['end'], reverse=True)
         deduped = []
         for entry in pool:
@@ -298,7 +297,7 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
                 try:
                     d1 = datetime.strptime(entry['end'], '%Y-%m-%d').date()
                     d2 = datetime.strptime(kept['end'],  '%Y-%m-%d').date()
-                    if abs((d1 - d2).days) <= 45:
+                    if abs((d1 - d2).days) <= 60:
                         duplicate = True
                         break
                 except Exception:
@@ -308,22 +307,13 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
         return deduped
 
     def _find_prior(curr, curr_dt, search_pool, i_hint=None):
-        """Try fiscal-period, date (±31d), then sequential matching against search_pool.
-        i_hint: index of curr in search_pool for sequential; None disables sequential."""
-        # 1. Strict Fiscal Period matching (Q4 -> Q4 of previous year)
-        if curr['fy'] is not None and curr['fp'] in ('Q1', 'Q2', 'Q3', 'Q4'):
-            target_fy = curr['fy'] - 1
-            for cand in search_pool:
-                if cand['end'] == curr['end']: continue
-                if cand['fy'] == target_fy and cand['fp'] == curr['fp']:
-                    return cand
-
-        # 2. Date matching (±31 days from 365 days ago)
+        """Try date-proximity first, then fiscal-period fallback."""
+        # 1. PRIMARY: Date proximity (abs(curr_end - cand_end - 365) <= 60 days)
         try:
             target_dt = curr_dt.replace(year=curr_dt.year - 1)
         except ValueError:
             target_dt = curr_dt - timedelta(days=365)
-        best_diff = 32
+        best_diff = 61  # Max 60 days diff
         best_cand = None
         for cand in search_pool:
             if cand['end'] == curr['end']: continue
@@ -338,6 +328,14 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
         if best_cand is not None:
             return best_cand
 
+        # 2. FALLBACK: Strict Fiscal Period matching (Q4 -> Q4 of previous year)
+        if curr['fy'] is not None and curr['fp'] in ('Q1', 'Q2', 'Q3', 'Q4'):
+            target_fy = curr['fy'] - 1
+            for cand in search_pool:
+                if cand['end'] == curr['end']: continue
+                if cand['fy'] == target_fy and cand['fp'] == curr['fp']:
+                    return cand
+
         # 3. Sequential matching (+4 quarters) — only for same-source pool
         if i_hint is not None and i_hint + 4 < len(search_pool):
             seq_prior = search_pool[i_hint + 4]
@@ -351,7 +349,7 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
 
         return None
 
-    def _yoy_for_src(deduped, src_name, fallback_pool=None):
+    def _yoy_for_src(deduped, fallback_pool=None):
         results = []
         seen = set()
         for i, curr in enumerate(deduped):
@@ -379,41 +377,33 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
                 label = curr['end']
             results.append({
                 'dt': curr_dt, 'end': curr['end'], 'rate': rate,
-                'label': label, 'prior_val': prior['val'], 'curr_val': curr['val']
+                'label': label, 'prior_val': prior['val'], 'curr_val': curr['val'],
+                'source': curr.get('source', '')
             })
         return results
 
-    fmp_pool   = _make_pool(fmp_vals, fmp_ends, fmp_fy, fmp_fp)
-    edgar_pool = _make_pool(edgar_vals, edgar_ends, edgar_fy, edgar_fp)
+    fmp_pool   = _make_pool(fmp_vals, fmp_ends, fmp_fy, fmp_fp, src_primary)
+    edgar_pool = _make_pool(edgar_vals, edgar_ends, edgar_fy, edgar_fp, src_fallback)
 
-    f_yoy = _yoy_for_src(fmp_pool,   'FMP',   fallback_pool=edgar_pool)
-    e_yoy = _yoy_for_src(edgar_pool, 'EDGAR', fallback_pool=fmp_pool)
+    f_yoy = _yoy_for_src(fmp_pool, fallback_pool=edgar_pool)
+    e_yoy = _yoy_for_src(edgar_pool, fallback_pool=fmp_pool)
 
     merged = list(f_yoy)
     for ey in e_yoy:
         duplicate_idx = -1
         for idx, fy in enumerate(merged):
-            if abs((ey['dt'] - fy['dt']).days) <= 45:
+            if abs((ey['dt'] - fy['dt']).days) <= 60:
                 duplicate_idx = idx
                 break
         if duplicate_idx == -1:
             merged.append(ey)
         else:
             fy = merged[duplicate_idx]
-            curr_diff  = abs(ey['curr_val']  - fy['curr_val'])  / max(abs(ey['curr_val']),  abs(fy['curr_val']),  1e-9)
+            curr_diff = abs(ey['curr_val'] - fy['curr_val']) / max(abs(ey['curr_val']), abs(fy['curr_val']), 1e-9)
             prior_diff = abs(ey['prior_val'] - fy['prior_val']) / max(abs(ey['prior_val']), abs(fy['prior_val']), 1e-9)
-            if primary_wins:
-                # yfinance = adjusted EPS (FactSet-aligned); EDGAR = GAAP.
-                # Override only on small late restatements (<10% gap, filed >30d later).
-                # Pre-filtering in get_code33_data already removed large-gap EDGAR entries;
-                # here we keep the primary unless the remaining EDGAR differs by <10%.
-                if curr_diff < 0.10 or prior_diff < 0.10:
-                    merged[duplicate_idx] = ey
-                # else: primary (yfinance/Finnhub adjusted EPS) wins -- do nothing
-            else:
-                # Revenue / legacy behaviour: secondary (EDGAR) wins on any >1% diff.
-                if curr_diff > 0.01 or prior_diff > 0.01:
-                    merged[duplicate_idx] = ey
+            if curr_diff > 0.01 or prior_diff > 0.01:
+                merged[duplicate_idx] = ey
+
     merged.sort(key=lambda x: x['dt'])
     if len(merged) > 8:
         merged = merged[-8:]
@@ -589,163 +579,6 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    def _yfinance_fetch_eps(symbol: str):
-
-        """Fetch adjusted EPS from yfinance earnings_dates[\"Reported EPS\"].
-
-        Returns (eps_vals, eps_lbls, eps_ends) oldest-to-newest, capped 8.
-
-        Returns ([], [], []) if fewer than 3 valid data points."""
-
-        try:
-
-            import yfinance as _yf2
-
-            ed = _yf2.Ticker(symbol.upper()).earnings_dates
-
-            if ed is None or ed.empty:
-
-                return [], [], []
-
-            if 'Reported EPS' not in ed.columns:
-
-                return [], [], []
-
-            df = ed[['Reported EPS']].dropna()
-
-            if len(df) < 3:
-
-                return [], [], []
-
-            # Sort descending, take 8 most recent
-
-            df = df.sort_index(ascending=False).head(12)
-
-            rows = []
-
-            for ts, row in df.iterrows():
-
-                try:
-
-                    # earnings_dates index is timezone-aware — normalize to date
-
-                    if hasattr(ts, 'date'):
-
-                        dt = ts.date()
-
-                    else:
-
-                        dt = datetime.strptime(str(ts)[:10], '%Y-%m-%d').date()
-
-                    val = float(row['Reported EPS'])
-
-                    rows.append((dt, val))
-
-                except Exception:
-
-                    continue
-
-            if len(rows) < 3:
-
-                return [], [], []
-
-            rows.reverse()  # oldest first
-
-            vals = [v for _, v in rows]
-
-            ends = [d.isoformat() for d, _ in rows]
-
-            lbls = [_get_fq_fy(d, fy_end_month) for d, _ in rows]
-
-            return vals, lbls, ends
-
-        except Exception:
-
-            return [], [], []
-
-
-
-    def _finnhub_fetch_eps(symbol: str):
-
-        """Fetch EPS from Finnhub /stock/earnings endpoint (actual reported EPS).
-
-        Uses the correct earnings surprises endpoint — returns adjusted reported EPS
-
-        matching TradingView's 'Reported EPS' column.
-
-        Returns (eps_vals, eps_lbls, eps_ends) oldest-to-newest, capped 12."""
-
-        if not FINNHUB_KEY:
-
-            return [], [], []
-
-        try:
-
-            r = requests.get(
-
-                "https://finnhub.io/api/v1/stock/earnings",
-
-                params={'symbol': symbol.upper(), 'limit': 12, 'token': FINNHUB_KEY},
-
-                timeout=10
-
-            )
-
-            r.raise_for_status()
-
-            data = r.json() if isinstance(r.json(), list) else []
-
-            if not data:
-
-                return [], [], []
-
-            rows = []
-
-            for item in data:
-
-                if not isinstance(item, dict):
-
-                    continue
-
-                period = str(item.get('period', '')).strip()
-
-                actual = _sf(item.get('actual'))
-
-                if not period or actual is None:
-
-                    continue
-
-                try:
-
-                    dt = datetime.strptime(period, '%Y-%m-%d').date()
-
-                except Exception:
-
-                    continue
-
-                rows.append((dt, actual))
-
-            if not rows:
-
-                return [], [], []
-
-            # Sort descending, cap at 12, then reverse to oldest-first
-
-            rows = sorted(rows, key=lambda x: x[0], reverse=True)[:12]
-
-            rows.reverse()
-
-            vals = [v for _, v in rows]
-
-            ends = [d.isoformat() for d, _ in rows]
-
-            lbls = [_get_fq_fy(d, fy_end_month) for d, _ in rows]
-
-            return vals, lbls, ends
-
-        except Exception:
-
-            return [], [], []
 
 
 
@@ -961,7 +794,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
         entries_list = list of (values, end_dates, source_name) tuples.
 
-        Two entries are same quarter if end_dates within 45 days.
+        Two entries are same quarter if end_dates within 60 days.
 
         Returns (values, labels, end_dates) sorted ascending, max 8 most recent.
 
@@ -997,7 +830,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
         # Deduplicate: for each quarter window, keep entry with latest dt
 
-        # Sort by date descending, then deduplicate by 45-day proximity
+        # Sort by date descending, then deduplicate by 60-day proximity
 
         pool.sort(key=lambda x: x['dt'], reverse=True)
 
@@ -1009,7 +842,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
             for kept in deduped:
 
-                if abs((entry['dt'] - kept['dt']).days) <= 45:
+                if abs((entry['dt'] - kept['dt']).days) <= 60:
 
                     duplicate = True
 
@@ -1047,7 +880,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     # ── EDGAR fetcher (independent per metric) ────────────────────────────────
 
-    def _edgar_metric(concepts, unit='USD'):
+    def _edgar_metric(concepts, unit='USD', is_eps=False):
 
         """Return (values, labels, end_dates, fy_list, fp_list) from SEC EDGAR filings using strict quarterly filters."""
 
@@ -1153,7 +986,10 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
                 cloned['form'] = form
 
-                if 80 <= duration_days <= 105:
+                if is_eps and not (75 <= duration_days <= 105):
+                    continue
+
+                if 75 <= duration_days <= 105:
 
                     if end_key not in global_dedup:
 
@@ -1259,7 +1095,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
         for annual_end, annual_start, annual_val, annual_fy in annual_entries:
 
-            already_exists = any(abs((annual_end - existing_end).days) <= 45 for existing_end in existing_ends)
+            already_exists = any(abs((annual_end - existing_end).days) <= 60 for existing_end in existing_ends)
 
             if already_exists:
 
@@ -1311,7 +1147,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     # ── Fetch each metric independently ───────────────────────────────────────
 
-    eps_keys_edgar = ['EarningsPerShareDiluted', 'EarningsPerShareBasic']
+    eps_keys_edgar = ['EarningsPerShareDiluted']
 
     rev_keys_edgar = ['RevenueFromContractWithCustomerExcludingAssessedTax',
 
@@ -1355,25 +1191,15 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     edgar_eps, edgar_eps_lbl, edgar_eps_end, edgar_eps_fy, edgar_eps_fp = _edgar_metric(
 
-        eps_keys_edgar, unit='USD/shares'
+        eps_keys_edgar, unit='USD/shares', is_eps=True
 
     )
 
 
 
-    # ── EPS: yfinance primary → Finnhub fallback ────────────────────────────
-
-    yf_eps_adj, yf_eps_adj_lbl, yf_eps_adj_end = _yfinance_fetch_eps(ticker)
-
-    # Fall through to Finnhub if yfinance returns ≤2 usable points
-
-    if len(yf_eps_adj) >= 3:
-
-        fh_eps, fh_eps_lbl, fh_eps_end = yf_eps_adj, yf_eps_adj_lbl, yf_eps_adj_end
-
-    else:
-
-        fh_eps, fh_eps_lbl, fh_eps_end = _finnhub_fetch_eps(ticker)
+    # ── EPS: EDGAR standalone only — no yfinance/Finnhub fill ───────────────
+    fh_eps, fh_eps_lbl, fh_eps_end = [], [], []
+    fh_source = 'edgar'
 
 
 
@@ -1523,105 +1349,18 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    # -- EPS YoY: yfinance/Finnhub = adjusted EPS (FactSet/TradingView-aligned).
-    # EDGAR = GAAP EPS.  EDGAR only overrides on small (<10% gap) late restatements.
-    # See: diagnostic output in tools/diagnostic_output.txt for source comparison.
+    # -- EPS YoY: EDGAR standalone EarningsPerShareDiluted only.
+    # No yfinance/Finnhub fill — missing quarters stay null.
 
-    eps_fh_clean = _sane_eps(fh_eps)
-
-    def _filter_edgar_eps_for_yf(e_vals, e_ends, yf_vals, yf_ends):
-        """Drop EDGAR EPS entries where yfinance has a matching quarter AND
-        gap >= 10% (concept difference: GAAP vs adjusted).  Entries with gap < 10%
-        (genuine small restatements) are kept so _date_first_yoy can apply them.
-        If no yfinance match exists for a quarter, EDGAR is kept as a gap-fill."""
-        filtered_v, filtered_e = [], []
-        for ev, ee in zip(e_vals or [], e_ends or []):
-            if ev is None or not ee:
-                continue
-            try:
-                e_dt = datetime.strptime(ee, '%Y-%m-%d').date()
-            except Exception:
-                filtered_v.append(ev); filtered_e.append(ee)
-                continue
-            # Find nearest yfinance entry (announcement date = 30-120d after period-end)
-            best_yv, best_diff = None, 9999
-            for yv, ye in zip(yf_vals or [], yf_ends or []):
-                if yv is None or not ye:
-                    continue
-                try:
-                    y_dt = datetime.strptime(ye, '%Y-%m-%d').date()
-                except Exception:
-                    continue
-                d = (y_dt - e_dt).days
-                if -30 <= d <= 120 and abs(d) < best_diff:
-                    best_diff = abs(d); best_yv = yv
-            if best_yv is None:
-                # No yfinance coverage for this quarter -- keep EDGAR as gap-fill
-                filtered_v.append(ev); filtered_e.append(ee)
-                continue
-            gap = abs(best_yv - ev) / max(abs(ev), 0.01) * 100
-            if gap < 10.0:
-                # Small gap: genuine restatement candidate -- keep EDGAR
-                filtered_v.append(ev); filtered_e.append(ee)
-            # gap >= 10%: GAAP vs adjusted concept difference -- yfinance wins, drop EDGAR
-        return filtered_v, filtered_e
-
-    # Apply gap filter before both EPS passes
-    edgar_eps_filtered, edgar_eps_end_filtered = _filter_edgar_eps_for_yf(
-        eps_edgar_clean, edgar_eps_end, eps_fh_clean, fh_eps_end
-    )
-    fmp_eps_filtered, fmp_eps_end_filtered = _filter_edgar_eps_for_yf(
-        eps_fmp_clean, fmp_eps_end, eps_fh_clean, fh_eps_end
-    )
-
-    # Pass 1: yfinance/Finnhub (primary adjusted EPS) vs EDGAR (gap-filtered GAAP)
     eps_yoy_final, eps_labels_final, eps_yoy_ends, eps_prior_vals = _date_first_yoy(
-        eps_fh_clean, fh_eps_end, edgar_eps_filtered, edgar_eps_end_filtered,
-        None, None, None, None, fy_end_m=fy_end_month, primary_wins=True
+        eps_edgar_clean, edgar_eps_end, [], [], edgar_eps_fy, edgar_eps_fp, None, None,
+        fy_end_m=fy_end_month, src_primary='edgar', src_fallback='none'
     )
 
-    # Pass 2: if < 3 YoY points, also attempt yfinance/Finnhub vs FMP (gap-filtered)
+    eps_raw_final      = eps_edgar_clean
+    eps_raw_ends_final = edgar_eps_end
 
-    if len(eps_yoy_final) < 3:
-
-        eps_yoy_e2, eps_labels_e2, eps_ends_e2, eps_prior_e2 = _date_first_yoy(
-            eps_fh_clean, fh_eps_end, fmp_eps_filtered, fmp_eps_end_filtered,
-            None, None, fmp_eps_fy, fmp_eps_fp, fy_end_m=fy_end_month, primary_wins=True
-        )
-
-        if len(eps_yoy_e2) > len(eps_yoy_final):
-
-            eps_yoy_final    = eps_yoy_e2
-
-            eps_labels_final = eps_labels_e2
-
-            eps_yoy_ends     = eps_ends_e2
-
-            eps_prior_vals   = eps_prior_e2
-
-
-
-    # Raw EPS for pre-profit check: prefer yfinance/Finnhub (fh_eps) > FMP > EDGAR
-
-    if eps_fh_clean:
-
-        eps_raw_final      = eps_fh_clean
-
-        eps_raw_ends_final = fh_eps_end
-
-    elif eps_fmp_clean:
-
-        eps_raw_final      = eps_fmp_clean
-
-        eps_raw_ends_final = fmp_eps_end
-
-    else:
-
-        eps_raw_final      = eps_edgar_clean
-
-        eps_raw_ends_final = edgar_eps_end
-
-    sources['eps'] = 'yfinance|Finnhub|FMP|EDGAR' if eps_yoy_final else 'insufficient'
+    sources['eps'] = 'EDGAR' if eps_yoy_final else 'insufficient'
 
 
 
