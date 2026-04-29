@@ -1,0 +1,110 @@
+=== REVENUE ACCURACY AUDIT ===
+
+DHT    | ERROR      | No EDGAR data
+BLX    | ERROR      | No EDGAR data
+GFS    | ERROR      | No EDGAR data
+VIK    | ERROR      | No EDGAR data
+AUGO   | ERROR      | No EDGAR data
+TSAT   | ERROR      | No EDGAR data
+NEXA   | ERROR      | No EDGAR data
+TFIN   | ERROR      | No EDGAR data
+NUVL   | INSUFFICIENT | Engine returned no Rev YoY
+WSFS   | INSUFFICIENT | No matching quarters in EDGAR
+FVR    | INSUFFICIENT | No matching quarters in EDGAR
+BPOP   | INSUFFICIENT | No matching quarters in EDGAR
+EWBC   | INSUFFICIENT | No matching quarters in EDGAR
+CNTA   | INSUFFICIENT | Engine returned no Rev YoY
+BK     | INSUFFICIENT | No matching quarters in EDGAR
+ECG    | MISMATCH   | Qs: 1 | Max Diff: 23.60%
+CGNX   | MISMATCH   | Qs: 5 | Max Diff: 24.92%
+LXU    | MISMATCH   | Qs: 6 | Max Diff: 129.51%
+HUN    | MISMATCH   | Qs: 5 | Max Diff: 27.37%
+STT    | MISMATCH   | Qs: 5 | Max Diff: 30.16%
+HPE    | MISMATCH   | Qs: 5 | Max Diff: 29.77%
+RNG    | MISMATCH   | Qs: 5 | Max Diff: 5.30%
+OLN    | MISMATCH   | Qs: 5 | Max Diff: 31.47%
+IESC   | MISMATCH   | Qs: 5 | Max Diff: 28.45%
+LNTH   | MISMATCH   | Qs: 5 | Max Diff: 26.57%
+OXY    | MISMATCH   | Qs: 5 | Max Diff: 39.27%
+RMBS   | MISMATCH   | Qs: 5 | Max Diff: 44.38%
+C      | MISMATCH   | Qs: 6 | Max Diff: 15.62%
+SHBI   | MISMATCH   | Qs: 5 | Max Diff: 81.64%
+CLB    | MISMATCH   | Qs: 5 | Max Diff: 7.72%
+HE     | MISMATCH   | Qs: 4 | Max Diff: 10.46%
+NPKI   | MISMATCH   | Qs: 5 | Max Diff: 107.81%
+SNDA   | MISMATCH   | Qs: 5 | Max Diff: 27.66%
+GLRE   | MISMATCH   | Qs: 5 | Max Diff: 64.04%
+GRC    | MISMATCH   | Qs: 5 | Max Diff: 8.45%
+MTW    | MISMATCH   | Qs: 5 | Max Diff: 27.99%
+DOW    | MISMATCH   | Qs: 5 | Max Diff: 25.37%
+NE     | MISMATCH   | Qs: 5 | Max Diff: 113.24%
+DAL    | MISMATCH   | Qs: 5 | Max Diff: 10.80%
+AAOI   | MISMATCH   | Qs: 5 | Max Diff: 168.82%
+MSGS   | MISMATCH   | Qs: 5 | Max Diff: 54.86%
+FANG   | MISMATCH   | Qs: 5 | Max Diff: 65.32%
+YOU    | MISMATCH   | Qs: 5 | Max Diff: 21.29%
+TEX    | MISMATCH   | Qs: 5 | Max Diff: 31.77%
+GSAT   | MISMATCH   | Qs: 5 | Max Diff: 40.00%
+QUIK   | MISMATCH   | Qs: 5 | Max Diff: 129.53%
+ROAD   | MISMATCH   | Qs: 5 | Max Diff: 39.57%
+CBL    | MISMATCH   | Qs: 5 | Max Diff: 23.00%
+PTGX   | MISMATCH   | Qs: 1 | Max Diff: 11.11%
+MUX    | MISMATCH   | Qs: 3 | Max Diff: 56.72%
+IBKR   | MISMATCH   | Qs: 5 | Max Diff: 27.36%
+VIAV   | MISMATCH   | Qs: 5 | Max Diff: 29.97%
+APEI   | MISMATCH   | Qs: 4 | Max Diff: 72.71%
+TALO   | MISMATCH   | Qs: 5 | Max Diff: 78.81%
+AMPX   | MISMATCH   | Qs: 5 | Max Diff: 245.47%
+PRIM   | MISMATCH   | Qs: 4 | Max Diff: 21.46%
+CALY   | MISMATCH   | Qs: 4 | Max Diff: 59.33%
+AMD    | MISMATCH   | Qs: 5 | Max Diff: 33.66%
+NTCT   | MISMATCH   | Qs: 5 | Max Diff: 34.66%
+LASR   | MISMATCH   | Qs: 5 | Max Diff: 33.72%
+CSTM   | MISMATCH   | Qs: 1 | Max Diff: 19.09%
+BW     | MISMATCH   | Qs: 5 | Max Diff: 79.96%
+CAT    | MISMATCH   | Qs: 5 | Max Diff: 25.19%
+PSMT   | MISMATCH   | Qs: 5 | Max Diff: 7.54%
+AEIS   | MISMATCH   | Qs: 5 | Max Diff: 46.49%
+PLSE   | MISMATCH   | Qs: 1 | Max Diff: 200.00%
+CTRA   | MISMATCH   | Qs: 5 | Max Diff: 62.14%
+FSTR   | MISMATCH   | Qs: 5 | Max Diff: 28.99%
+ADTN   | MISMATCH   | Qs: 6 | Max Diff: 106.68%
+LRCX   | MISMATCH   | Qs: 5 | Max Diff: 45.23%
+DXPE   | MISMATCH   | Qs: 5 | Max Diff: 18.24%
+WLK    | MISMATCH   | Qs: 5 | Max Diff: 26.13%
+HLF    | MISMATCH   | Qs: 5 | Max Diff: 5.89%
+BAND   | MISMATCH   | Qs: 5 | Max Diff: 28.57%
+CFG    | MISMATCH   | Qs: 5 | Max Diff: 29.18%
+VTRS   | MISMATCH   | Qs: 5 | Max Diff: 9.16%
+PLAB   | MISMATCH   | Qs: 5 | Max Diff: 8.03%
+AMG    | MISMATCH   | Qs: 5 | Max Diff: 12.78%
+DCOM   | MISMATCH   | Qs: 5 | Max Diff: 35.07%
+JXN    | MISMATCH   | Qs: 5 | Max Diff: 801.51%
+OVV    | MISMATCH   | Qs: 5 | Max Diff: 34.64%
+HLT    | MISMATCH   | Qs: 5 | Max Diff: 7.47%
+ATI    | MISMATCH   | Qs: 5 | Max Diff: 9.27%
+WFRD   | MISMATCH   | Qs: 5 | Max Diff: 26.65%
+VICR   | MISMATCH   | Qs: 5 | Max Diff: 351.22%
+UVE    | MISMATCH   | Qs: 4 | Max Diff: 11.01%
+AXTI   | MISMATCH   | Qs: 6 | Max Diff: 73.53%
+VISN   | MISMATCH   | Qs: 4 | Max Diff: 132.03%
+SXI    | MISMATCH   | Qs: 5 | Max Diff: 35.30%
+ARWR   | MISMATCH   | Qs: 3 | Max Diff: 10561.32%
+CRC    | MISMATCH   | Qs: 5 | Max Diff: 129.74%
+MLI    | MISMATCH   | Qs: 5 | Max Diff: 26.59%
+HZO    | MISMATCH   | Qs: 5 | Max Diff: 24.83%
+KLIC   | MISMATCH   | Qs: 5 | Max Diff: 43.84%
+WULF   | MISMATCH   | Qs: 5 | Max Diff: 885.79%
+MATX   | MISMATCH   | Qs: 5 | Max Diff: 48.24%
+CVLG   | MISMATCH   | Qs: 5 | Max Diff: 18.58%
+GPRE   | MISMATCH   | Qs: 5 | Max Diff: 119.59%
+BHE    | MISMATCH   | Qs: 5 | Max Diff: 12.33%
+REX    | MISMATCH   | Qs: 5 | Max Diff: 37.13%
+
+Summary:
+- Total tickers tested: 100
+- MATCH count: 0 (0.0%)
+- MISMATCH count: 85 (100.0%)
+- INSUFFICIENT count: 7
+- ERROR count: 8
+- Average abs diff %: 59.11%
