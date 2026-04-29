@@ -24,7 +24,7 @@ except Exception:
     FINNHUB_KEY  = ''
     _HAS_FINNHUB = False
 
-CACHE_VERSION = 'v20'
+CACHE_VERSION = 'v22'
 
 # ── SEC EDGAR headers ─────────────────────────────────────────────────────────
 EDGAR_UA = {'User-Agent': 'Meet Singh singhgaganmeet09@gmail.com'}
@@ -1218,9 +1218,6 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
              'WeightedAverageNumberOfSharesOutstandingDiluted'], 'shares',
             use_first_filed=True)
 
-        if not ni_map or not sh_map:
-            return [], [], [], [], []
-
         # Split history: cumulative factor for each historical quarter =
         # product of all splits that occurred AFTER the quarter end date.
         try:
@@ -1234,35 +1231,174 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
             splits = []
 
         results = []
-        for end_s, ni in ni_map.items():
-            end_dt = ni['_end_dt']
-            # Match to nearest shares entry within ±30 days
-            best_sh = None; best_diff = 31
-            for sh in sh_map.values():
-                d = abs((sh['_end_dt'] - end_dt).days)
-                if d < best_diff:
-                    best_diff = d; best_sh = sh
-            if best_sh is None or best_sh['_val'] == 0:
-                continue
-            # Cumulative split factor = product of all splits after this quarter
-            cum = 1.0
-            for split_dt, ratio in splits:
-                if split_dt > end_dt:
-                    cum *= ratio
-            adj_shares = best_sh['_val'] * cum
-            if adj_shares == 0:
-                continue
-            results.append({
-                '_end_dt':  end_dt,
-                '_filed_dt': ni['_filed_dt'],
-                '_val':     ni['_val'] / adj_shares,
-                '_fy':      ni['_fy'],
-                '_fp':      ni['_fp'],
-                'form':     ni['form'],
-            })
+        if ni_map and sh_map:
+            for end_s, ni in ni_map.items():
+                end_dt = ni['_end_dt']
+                # Match to nearest shares entry within ±30 days
+                best_sh = None; best_diff = 31
+                for sh in sh_map.values():
+                    d = abs((sh['_end_dt'] - end_dt).days)
+                    if d < best_diff:
+                        best_diff = d; best_sh = sh
+                if best_sh is None or best_sh['_val'] == 0:
+                    continue
+                # Cumulative split factor = product of all splits after this quarter
+                cum = 1.0
+                for split_dt, ratio in splits:
+                    if split_dt > end_dt:
+                        cum *= ratio
+                adj_shares = best_sh['_val'] * cum
+                if adj_shares == 0:
+                    continue
+                results.append({
+                    '_end_dt':  end_dt,
+                    '_filed_dt': ni['_filed_dt'],
+                    '_val':     ni['_val'] / adj_shares,
+                    '_fy':      ni['_fy'],
+                    '_fp':      ni['_fp'],
+                    'form':     ni['form'],
+                })
+
+        # If NI/shares path produced only stale data (all entries older than
+        # recency cutoff), discard so the 6-K EPS fallback can run.
+        if results and max(r['_end_dt'] for r in results) < recency:
+            results = []
 
         if not results:
-            return [], [], [], [], []
+            # Fallback for foreign filers (20-F/6-K) where annual-only NI and
+            # shares produce zero standalone quarters.  These filers report
+            # EarningsPerShareDiluted directly in 6-K semi-annual reports, one
+            # entry per calendar quarter (90-day period).  EPS is already
+            # split-adjusted by the company — no additional factor applied.
+            fb_by_end = {}
+            for e in usgaap.get('EarningsPerShareDiluted', {}).get('units', {}).get('USD/shares', []):
+                form = str(e.get('form', '')).upper()
+                if form not in ('10-Q', '6-K'):
+                    continue
+                end_s   = str(e.get('end',   '')).strip()
+                start_s = str(e.get('start', '')).strip()
+                filed_s = str(e.get('filed', '')).strip()
+                val = _sf(e.get('val'))
+                if not end_s or not start_s or val is None:
+                    continue
+                try:
+                    end_dt   = datetime.strptime(end_s,   '%Y-%m-%d').date()
+                    start_dt = datetime.strptime(start_s, '%Y-%m-%d').date()
+                    filed_dt = datetime.strptime(filed_s, '%Y-%m-%d').date() if filed_s else None
+                except Exception:
+                    continue
+                if end_dt < cutoff:
+                    continue
+                # Wider duration window: 75-185 days covers standard quarters
+                # (90d) and semi-annual H1/H2 6-K reporters (180d)
+                if not (75 <= (end_dt - start_dt).days <= 185):
+                    continue
+                entry = {
+                    '_end_dt':   end_dt,
+                    '_filed_dt': filed_dt,
+                    '_val':      float(val),
+                    '_fy':       int(e['fy']) if e.get('fy') is not None else end_dt.year,
+                    '_fp':       str(e['fp']).strip().upper() if e.get('fp') else None,
+                    'form':      form,
+                    '_duration': (end_dt - start_dt).days,
+                }
+                # Latest-filed per end date
+                if end_s not in fb_by_end:
+                    fb_by_end[end_s] = entry
+                elif filed_dt and fb_by_end[end_s]['_filed_dt'] and filed_dt > fb_by_end[end_s]['_filed_dt']:
+                    fb_by_end[end_s] = entry
+            if not fb_by_end:
+                return [], [], [], [], []  # foreign_filer_no_data
+            results = list(fb_by_end.values())
+
+            # Level 3: if all level-2 results are semi-annual (duration > 105d),
+            # fetch true quarterly EPS from FMP first, then yfinance as sub-fallback.
+            if results and all(r.get('_duration', 0) > 105 for r in results):
+                fmp_key_l3 = FMP_API_KEY or '331cjm2MhPdmr04uevXTD3BKEJnOBlIB'
+                try:
+                    fr = requests.get(
+                        f'https://financialmodelingprep.com/api/v3/income-statement/{ticker}',
+                        params={'period': 'quarter', 'limit': 12, 'apikey': fmp_key_l3},
+                        timeout=10
+                    )
+                    fr.raise_for_status()
+                    fmp_data = fr.json() if isinstance(fr.json(), list) else []
+                    fmp_results = []
+                    for item in fmp_data:
+                        date_str = str(item.get('date', '')).strip()
+                        eps = _sf(item.get('epsDiluted')) or _sf(item.get('eps'))
+                        if not date_str or eps is None:
+                            continue
+                        try:
+                            end_dt = datetime.strptime(date_str, '%Y-%m-%d').date()
+                        except Exception:
+                            continue
+                        if end_dt < cutoff:
+                            continue
+                        fmp_results.append({
+                            '_end_dt':   end_dt,
+                            '_filed_dt': None,
+                            '_val':      float(eps),
+                            '_fy':       end_dt.year,
+                            '_fp':       None,
+                            'form':      'FMP',
+                            '_duration': 90,
+                        })
+                    if len(fmp_results) >= 4:
+                        results = fmp_results
+                except Exception:
+                    pass
+
+            # Level 3b: FMP unavailable — try yfinance earnings_dates (Reported EPS).
+            # earnings_dates has 8 quarters; apply ann_date-45d snap to get
+            # proper fiscal quarter-end dates for labeling and YoY matching.
+            if results and all(r.get('_duration', 0) > 105 for r in results):
+                try:
+                    import calendar as _cal
+                    _qmonths = {((fy_end_month - 1 - off) % 12) + 1 for off in [0, 3, 6, 9]}
+
+                    def _snap_qend_l3(dt):
+                        cands = []
+                        for yr in [dt.year - 1, dt.year, dt.year + 1]:
+                            for m in _qmonths:
+                                last = _cal.monthrange(yr, m)[1]
+                                cands.append(datetime(yr, m, last).date())
+                        return min(cands, key=lambda c: abs((c - dt).days))
+
+                    ed = yf.Ticker(ticker).earnings_dates
+                    if ed is not None and not ed.empty and 'Reported EPS' in ed.columns:
+                        df_ed = ed[['Reported EPS']].dropna()
+                        yf_results = []
+                        for ts, row in df_ed.sort_index(ascending=False).head(12).iterrows():
+                            try:
+                                ann_dt = ts.date() if hasattr(ts, 'date') else \
+                                         datetime.strptime(str(ts)[:10], '%Y-%m-%d').date()
+                                fiscal_end = _snap_qend_l3(ann_dt - timedelta(days=45))
+                                val = float(row['Reported EPS'])
+                            except Exception:
+                                continue
+                            if fiscal_end < cutoff:
+                                continue
+                            yf_results.append({
+                                '_end_dt':   fiscal_end,
+                                '_filed_dt': None,
+                                '_val':      val,
+                                '_fy':       fiscal_end.year,
+                                '_fp':       None,
+                                'form':      'yfinance',
+                                '_duration': 90,
+                            })
+                        # Deduplicate by fiscal_end (keep first = most recent filing)
+                        seen_ends = {}
+                        for yr in sorted(yf_results, key=lambda x: x['_end_dt'], reverse=True):
+                            k = yr['_end_dt'].isoformat()
+                            if k not in seen_ends:
+                                seen_ends[k] = yr
+                        yf_results = sorted(seen_ends.values(), key=lambda x: x['_end_dt'])
+                        if len(yf_results) >= 4:
+                            results = yf_results
+                except Exception:
+                    pass  # keep level-2 semi-annual as final fallback
 
         results.sort(key=lambda x: x['_end_dt'], reverse=True)
         results = results[:8]
