@@ -2412,7 +2412,7 @@ with tab4:
 
         'red':            (RED,    'BROKEN',          'Deceleration detected — Code 33 is NOT active'),
 
-        'insufficient':   (GRAY,   'INSUFFICIENT',    'Need 7+ quarters of raw data per metric to evaluate'),
+        'insufficient':   (GRAY,   'INSUFFICIENT',    'Need 8+ quarters of raw data per metric to evaluate'),
 
         'not_applicable': (GRAY,   'NOT APPLICABLE',  ''),
 
@@ -2448,7 +2448,7 @@ with tab4:
 
         mn_count = min(counts)
 
-        bn = f"Need 7+ quarters with EPS, Revenue, and Margin data. Best metric has {max(counts)}Q, worst has {mn_count}Q."
+        bn = f"Need 8+ quarters with EPS, Revenue, and Margin data. Best metric has {max(counts)}Q, worst has {mn_count}Q."
 
 
 
@@ -2480,7 +2480,7 @@ with tab4:
 
         if len(rates3) < 3:
 
-            body = f'<div style="color:{GRAY};padding:12px;text-align:center;">Insufficient data<br><span style="font-size:10px">Need ≥7 raw quarters</span></div>'
+            body = f'<div style="color:{GRAY};padding:12px;text-align:center;">Insufficient data<br><span style="font-size:10px">Need ≥8 raw quarters</span></div>'
 
         else:
 

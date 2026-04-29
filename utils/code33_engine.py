@@ -24,7 +24,7 @@ except Exception:
     FINNHUB_KEY  = ''
     _HAS_FINNHUB = False
 
-CACHE_VERSION = 'v19'
+CACHE_VERSION = 'v20'
 
 # ── SEC EDGAR headers ─────────────────────────────────────────────────────────
 EDGAR_UA = {'User-Agent': 'Meet Singh singhgaganmeet09@gmail.com'}
@@ -426,7 +426,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     Revenue + Net Margin: FMP quarterly income statement primary, EDGAR fallback.
 
-    Need minimum 7 raw quarters per metric to compute 3 YoY rates."""
+    Need minimum 8 raw quarters per metric to compute 4 YoY rates (3 acceleration deltas)."""
 
     import yfinance as yf
 
@@ -1491,11 +1491,13 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
     eps_yoy_final, eps_labels_final, eps_yoy_ends, eps_prior_vals = [], [], [], []
     for rate, label, end, prior in zip(
             eps_yoy_raw, eps_labels_raw, eps_yoy_ends_raw, eps_prior_vals_raw):
-        if prior is None:
-            continue
-        if abs(prior) < 0.10:          # near-zero prior → unreliable
-            continue
-        if abs(rate) > 999:            # extreme rate → skip
+        # Always keep quarter in pool — mark rate as None instead of skipping.
+        # Skipping reduces raw quarter count below 8 → false INSUFFICIENT.
+        if prior is None or abs(prior) < 0.10 or abs(rate) > 999:
+            eps_yoy_final.append(None)
+            eps_labels_final.append(label)
+            eps_yoy_ends.append(end)
+            eps_prior_vals.append(prior)
             continue
         # Sign flip: prior > 0 and went negative, or prior < 0 and went positive
         sign_flip = (prior > 0 and rate < -100) or (prior < 0 and rate > 100)
