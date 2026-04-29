@@ -20,7 +20,16 @@
       "Bash(claude plugin *)",
       "PowerShell(irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex)",
       "Bash(.\\\\run_tests.bat)",
-      "PowerShell(cd \"C:\\\\Users\\\\Meet Singh\\\\quant-terminal\"; Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd \"C:\\\\Users\\\\Meet Singh\\\\quant-terminal\"; streamlit run app.py')"
+      "PowerShell(cd \"C:\\\\Users\\\\Meet Singh\\\\quant-terminal\"; Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd \"C:\\\\Users\\\\Meet Singh\\\\quant-terminal\"; streamlit run app.py')",
+      "Bash(taskkill /F /IM streamlit.exe)",
+      "Bash(taskkill /F /IM python.exe /FI \"WINDOWTITLE eq streamlit*\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8501/healthz)",
+      "Bash(npx ruflo@latest *)",
+      "Bash(node -e ' *)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "claude-flow"
+  ]
 }

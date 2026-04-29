@@ -24,7 +24,7 @@ except Exception:
     FINNHUB_KEY  = ''
     _HAS_FINNHUB = False
 
-CACHE_VERSION = 'v19'
+CACHE_VERSION = 'v11'
 
 # ── SEC EDGAR headers ─────────────────────────────────────────────────────────
 EDGAR_UA = {'User-Agent': 'Meet Singh singhgaganmeet09@gmail.com'}
@@ -371,6 +371,7 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
 
             seen.add(curr['end'])
             rate = (curr['val'] - prior['val']) / abs(prior['val']) * 100
+            print(f"YOY_PAIR: curr_end: {curr['end']:<10} | curr_val: {curr['val']:>6.3f} | prior_end: {prior['end']:<10} | prior_val: {prior['val']:>6.3f} | calculated_rate: {rate:+.1f}%")
             try:
                 label = _get_fq_fy(curr_dt, fy_end_m)
             except Exception:
@@ -449,11 +450,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
             try:
                 from datetime import datetime, timezone
                 fy_end_dt = datetime.fromtimestamp(info['lastFiscalYearEnd'], tz=timezone.utc)
-                m = fy_end_dt.month
-                # January FY-end: treat as December so calendar-year quarters
-                # don't shift into the NEXT fiscal year label
-                # (e.g. GIII Oct 2025 → "Q3 2026" becomes "Q4 2025")
-                fy_end_month = 12 if m == 1 else m
+                fy_end_month = fy_end_dt.month
             except Exception:
                 pass
 
@@ -583,6 +580,163 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
+    def _yfinance_fetch_eps(symbol: str):
+
+        """Fetch adjusted EPS from yfinance earnings_dates[\"Reported EPS\"].
+
+        Returns (eps_vals, eps_lbls, eps_ends) oldest-to-newest, capped 8.
+
+        Returns ([], [], []) if fewer than 3 valid data points."""
+
+        try:
+
+            import yfinance as _yf2
+
+            ed = _yf2.Ticker(symbol.upper()).earnings_dates
+
+            if ed is None or ed.empty:
+
+                return [], [], []
+
+            if 'Reported EPS' not in ed.columns:
+
+                return [], [], []
+
+            df = ed[['Reported EPS']].dropna()
+
+            if len(df) < 3:
+
+                return [], [], []
+
+            # Sort descending, take 8 most recent
+
+            df = df.sort_index(ascending=False).head(12)
+
+            rows = []
+
+            for ts, row in df.iterrows():
+
+                try:
+
+                    # earnings_dates index is timezone-aware — normalize to date
+
+                    if hasattr(ts, 'date'):
+
+                        dt = ts.date()
+
+                    else:
+
+                        dt = datetime.strptime(str(ts)[:10], '%Y-%m-%d').date()
+
+                    val = float(row['Reported EPS'])
+
+                    rows.append((dt, val))
+
+                except Exception:
+
+                    continue
+
+            if len(rows) < 3:
+
+                return [], [], []
+
+            rows.reverse()  # oldest first
+
+            vals = [v for _, v in rows]
+
+            ends = [d.isoformat() for d, _ in rows]
+
+            lbls = [_get_fq_fy(d, fy_end_month) for d, _ in rows]
+
+            return vals, lbls, ends
+
+        except Exception:
+
+            return [], [], []
+
+
+
+    def _finnhub_fetch_eps(symbol: str):
+
+        """Fetch EPS from Finnhub /stock/earnings endpoint (actual reported EPS).
+
+        Uses the correct earnings surprises endpoint — returns adjusted reported EPS
+
+        matching TradingView's 'Reported EPS' column.
+
+        Returns (eps_vals, eps_lbls, eps_ends) oldest-to-newest, capped 12."""
+
+        if not FINNHUB_KEY:
+
+            return [], [], []
+
+        try:
+
+            r = requests.get(
+
+                "https://finnhub.io/api/v1/stock/earnings",
+
+                params={'symbol': symbol.upper(), 'limit': 12, 'token': FINNHUB_KEY},
+
+                timeout=10
+
+            )
+
+            r.raise_for_status()
+
+            data = r.json() if isinstance(r.json(), list) else []
+
+            if not data:
+
+                return [], [], []
+
+            rows = []
+
+            for item in data:
+
+                if not isinstance(item, dict):
+
+                    continue
+
+                period = str(item.get('period', '')).strip()
+
+                actual = _sf(item.get('actual'))
+
+                if not period or actual is None:
+
+                    continue
+
+                try:
+
+                    dt = datetime.strptime(period, '%Y-%m-%d').date()
+
+                except Exception:
+
+                    continue
+
+                rows.append((dt, actual))
+
+            if not rows:
+
+                return [], [], []
+
+            # Sort descending, cap at 12, then reverse to oldest-first
+
+            rows = sorted(rows, key=lambda x: x[0], reverse=True)[:12]
+
+            rows.reverse()
+
+            vals = [v for _, v in rows]
+
+            ends = [d.isoformat() for d, _ in rows]
+
+            lbls = [_get_fq_fy(d, fy_end_month) for d, _ in rows]
+
+            return vals, lbls, ends
+
+        except Exception:
+
+            return [], [], []
 
 
 
@@ -884,7 +1038,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     # ── EDGAR fetcher (independent per metric) ────────────────────────────────
 
-    def _edgar_metric(concepts, unit='USD', is_eps=False):
+    def _edgar_metric(concepts, unit='USD'):
 
         """Return (values, labels, end_dates, fy_list, fp_list) from SEC EDGAR filings using strict quarterly filters."""
 
@@ -990,10 +1144,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
                 cloned['form'] = form
 
-                if is_eps and not (75 <= duration_days <= 105):
-                    continue
-
-                if 75 <= duration_days <= 105:
+                if 80 <= duration_days <= 105:
 
                     if end_key not in global_dedup:
 
@@ -1149,136 +1300,9 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    # ── FactSet-style normalized EPS: NI / split-adj diluted shares ───────────
-
-    def _fetch_edgar_eps_normalized() -> tuple:
-        """Compute normalized diluted EPS = NetIncomeLoss / split-adjusted
-        WeightedAverageNumberOfDilutedSharesOutstanding.  Matches FactSet/TV."""
-        facts = get_edgar_facts(ticker)
-        if not facts:
-            return [], [], [], [], []
-
-        usgaap = facts.get('facts', {}).get('us-gaap', {})
-        cutoff   = (datetime.utcnow() - timedelta(days=365 * 5)).date()
-        recency  = (datetime.utcnow() - timedelta(days=548)).date()
-
-        def _standalone(concepts, unit, use_first_filed=False):
-            # use_first_filed=True for shares: keeps the ORIGINALLY FILED count
-            # (pre-split) so the manual split-factor is not double-applied when
-            # a company retroactively restates share counts after a stock split.
-            by_end = {}
-            for concept in concepts:
-                for e in usgaap.get(concept, {}).get('units', {}).get(unit, []):
-                    form = str(e.get('form', '')).upper()
-                    if form not in ('10-Q', '10-K', '20-F', '6-K'):
-                        continue
-                    end_s   = str(e.get('end',   '')).strip()
-                    start_s = str(e.get('start', '')).strip()
-                    filed_s = str(e.get('filed', '')).strip()
-                    val = _sf(e.get('val'))
-                    if not end_s or not start_s or val is None:
-                        continue
-                    try:
-                        end_dt   = datetime.strptime(end_s,   '%Y-%m-%d').date()
-                        start_dt = datetime.strptime(start_s, '%Y-%m-%d').date()
-                        filed_dt = datetime.strptime(filed_s, '%Y-%m-%d').date() if filed_s else None
-                    except Exception:
-                        continue
-                    if end_dt < cutoff:
-                        continue
-                    if not (75 <= (end_dt - start_dt).days <= 105):
-                        continue
-                    entry = {
-                        '_end_dt':   end_dt,
-                        '_filed_dt': filed_dt,
-                        '_val':      float(val),
-                        '_fy':       int(e['fy']) if e.get('fy') is not None else end_dt.year,
-                        '_fp':       str(e['fp']).strip().upper() if e.get('fp') else None,
-                        'form':      form,
-                    }
-                    if end_s not in by_end:
-                        by_end[end_s] = entry
-                    elif filed_dt and by_end[end_s]['_filed_dt']:
-                        if use_first_filed:
-                            if filed_dt < by_end[end_s]['_filed_dt']:
-                                by_end[end_s] = entry
-                        else:
-                            if filed_dt > by_end[end_s]['_filed_dt']:
-                                by_end[end_s] = entry
-            return by_end
-
-        # NI: latest-filed (picks up restatements/corrections)
-        ni_map = _standalone(
-            ['NetIncomeLoss', 'NetIncome', 'ProfitLoss',
-             'NetIncomeLossAvailableToCommonStockholdersBasic'], 'USD',
-            use_first_filed=False)
-        # Shares: earliest-filed (pre-split original count; split factor applied below)
-        sh_map = _standalone(
-            ['WeightedAverageNumberOfDilutedSharesOutstanding',
-             'WeightedAverageNumberOfSharesOutstandingDiluted'], 'shares',
-            use_first_filed=True)
-
-        if not ni_map or not sh_map:
-            return [], [], [], [], []
-
-        # Split history: cumulative factor for each historical quarter =
-        # product of all splits that occurred AFTER the quarter end date.
-        try:
-            splits_raw = yf.Ticker(ticker).splits
-            splits = []
-            for dt, ratio in splits_raw.items():
-                d = dt.date() if hasattr(dt, 'date') else datetime.strptime(str(dt)[:10], '%Y-%m-%d').date()
-                splits.append((d, float(ratio)))
-            splits.sort(key=lambda x: x[0])
-        except Exception:
-            splits = []
-
-        results = []
-        for end_s, ni in ni_map.items():
-            end_dt = ni['_end_dt']
-            # Match to nearest shares entry within ±30 days
-            best_sh = None; best_diff = 31
-            for sh in sh_map.values():
-                d = abs((sh['_end_dt'] - end_dt).days)
-                if d < best_diff:
-                    best_diff = d; best_sh = sh
-            if best_sh is None or best_sh['_val'] == 0:
-                continue
-            # Cumulative split factor = product of all splits after this quarter
-            cum = 1.0
-            for split_dt, ratio in splits:
-                if split_dt > end_dt:
-                    cum *= ratio
-            adj_shares = best_sh['_val'] * cum
-            if adj_shares == 0:
-                continue
-            results.append({
-                '_end_dt':  end_dt,
-                '_filed_dt': ni['_filed_dt'],
-                '_val':     ni['_val'] / adj_shares,
-                '_fy':      ni['_fy'],
-                '_fp':      ni['_fp'],
-                'form':     ni['form'],
-            })
-
-        if not results:
-            return [], [], [], [], []
-
-        results.sort(key=lambda x: x['_end_dt'], reverse=True)
-        results = results[:8]
-        if results[0]['_end_dt'] < recency:
-            return [], [], [], [], []
-        results.reverse()
-
-        return (
-            [r['_val'] for r in results],
-            [_get_fq_fy(r['_end_dt'], fy_end_month) for r in results],
-            [r['_end_dt'].isoformat() for r in results],
-            [r['_fy']  for r in results],
-            [r['_fp']  for r in results],
-        )
-
     # ── Fetch each metric independently ───────────────────────────────────────
+
+    eps_keys_edgar = ['EarningsPerShareDiluted', 'EarningsPerShareBasic']
 
     rev_keys_edgar = ['RevenueFromContractWithCustomerExcludingAssessedTax',
 
@@ -1320,14 +1344,29 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     edgar_ni_abs, edgar_ni_lbl, edgar_ni_end, edgar_ni_fy, edgar_ni_fp = _edgar_metric(ni_keys_edgar)
 
-    # Normalized EPS: NI / split-adjusted diluted shares (FactSet / TV method)
-    edgar_eps, edgar_eps_lbl, edgar_eps_end, edgar_eps_fy, edgar_eps_fp = _fetch_edgar_eps_normalized()
+    edgar_eps, edgar_eps_lbl, edgar_eps_end, edgar_eps_fy, edgar_eps_fp = _edgar_metric(
+
+        eps_keys_edgar, unit='USD/shares'
+
+    )
 
 
 
-    # ── EPS: EDGAR standalone only — no yfinance/Finnhub fill ───────────────
-    fh_eps, fh_eps_lbl, fh_eps_end = [], [], []
-    fh_source = 'edgar'
+    # ── EPS: yfinance primary → Finnhub fallback ────────────────────────────
+
+    yf_eps_adj, yf_eps_adj_lbl, yf_eps_adj_end = _yfinance_fetch_eps(ticker)
+
+    # Fall through to Finnhub if yfinance returns ≤2 usable points
+
+    if len(yf_eps_adj) >= 3:
+
+        fh_eps, fh_eps_lbl, fh_eps_end = yf_eps_adj, yf_eps_adj_lbl, yf_eps_adj_end
+        fh_source = 'yfinance'
+
+    else:
+
+        fh_eps, fh_eps_lbl, fh_eps_end = _finnhub_fetch_eps(ticker)
+        fh_source = 'finnhub'
 
 
 
@@ -1477,37 +1516,63 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    # -- EPS YoY: normalized NI/split-adj-shares from EDGAR.
-    # Step 6 N/A guards applied after pairing:
-    #   - abs(prior) < 0.03 → skip (denominator instability)
-    #   - abs(rate) > 999%  → skip (extreme / meaningless)
-    #   - sign flip         → keep but append [NM] to label
+    # -- EPS YoY (BUG 2 FIX: Finnhub=primary adjusted, FMP=secondary, EDGAR=fallback)
 
-    eps_yoy_raw, eps_labels_raw, eps_yoy_ends_raw, eps_prior_vals_raw = _date_first_yoy(
-        eps_edgar_clean, edgar_eps_end, [], [], edgar_eps_fy, edgar_eps_fp, None, None,
-        fy_end_m=fy_end_month, src_primary='edgar', src_fallback='none'
+    # _date_first_yoy enforces strict source lock: same-source YoY pairs only.
+
+    eps_fh_clean = _sane_eps(fh_eps)
+
+
+
+    # Pass 1: Finnhub vs EDGAR -- EDGAR has most-recently-filed (restated) values.
+    # When Finnhub returns stale pre-restatement adjusted EPS, the 5% override
+    # inside _date_first_yoy will substitute the EDGAR restated value.
+
+    eps_yoy_final, eps_labels_final, eps_yoy_ends, eps_prior_vals = _date_first_yoy(
+        eps_fh_clean, fh_eps_end, eps_edgar_clean, edgar_eps_end, None, None, None, None, fy_end_m=fy_end_month, src_primary=fh_source, src_fallback='edgar'
     )
 
-    eps_yoy_final, eps_labels_final, eps_yoy_ends, eps_prior_vals = [], [], [], []
-    for rate, label, end, prior in zip(
-            eps_yoy_raw, eps_labels_raw, eps_yoy_ends_raw, eps_prior_vals_raw):
-        if prior is None:
-            continue
-        if abs(prior) < 0.10:          # near-zero prior → unreliable
-            continue
-        if abs(rate) > 999:            # extreme rate → skip
-            continue
-        # Sign flip: prior > 0 and went negative, or prior < 0 and went positive
-        sign_flip = (prior > 0 and rate < -100) or (prior < 0 and rate > 100)
-        eps_yoy_final.append(rate)
-        eps_labels_final.append(f'{label} [NM]' if sign_flip else label)
-        eps_yoy_ends.append(end)
-        eps_prior_vals.append(prior)
+    # Pass 2: if < 3 YoY points, also attempt Finnhub vs FMP
 
-    eps_raw_final      = eps_edgar_clean
-    eps_raw_ends_final = edgar_eps_end
+    if len(eps_yoy_final) < 3:
 
-    sources['eps'] = 'EDGAR' if eps_yoy_final else 'insufficient'
+        eps_yoy_e2, eps_labels_e2, eps_ends_e2, eps_prior_e2 = _date_first_yoy(
+            eps_fh_clean, fh_eps_end, eps_fmp_clean, fmp_eps_end, None, None, fmp_eps_fy, fmp_eps_fp, fy_end_m=fy_end_month, src_primary=fh_source, src_fallback='fmp'
+        )
+
+        if len(eps_yoy_e2) > len(eps_yoy_final):
+
+            eps_yoy_final    = eps_yoy_e2
+
+            eps_labels_final = eps_labels_e2
+
+            eps_yoy_ends     = eps_ends_e2
+
+            eps_prior_vals   = eps_prior_e2
+
+
+
+    # Raw EPS for pre-profit check: prefer yfinance/Finnhub (fh_eps) > FMP > EDGAR
+
+    if eps_fh_clean:
+
+        eps_raw_final      = eps_fh_clean
+
+        eps_raw_ends_final = fh_eps_end
+
+    elif eps_fmp_clean:
+
+        eps_raw_final      = eps_fmp_clean
+
+        eps_raw_ends_final = fmp_eps_end
+
+    else:
+
+        eps_raw_final      = eps_edgar_clean
+
+        eps_raw_ends_final = edgar_eps_end
+
+    sources['eps'] = 'yfinance|Finnhub|FMP|EDGAR' if eps_yoy_final else 'insufficient'
 
 
 
