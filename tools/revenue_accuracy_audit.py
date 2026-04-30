@@ -3,9 +3,10 @@ import sys
 import csv
 import random
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ['STREAMLIT_SERVER_HEADLESS'] = 'true'
@@ -26,6 +27,31 @@ CONCEPTS = [
     'SalesRevenueNet',
     'SalesRevenueGoodsNet'
 ]
+
+def get_fy_end_month(ticker):
+    try:
+        info = yf.Ticker(ticker).info or {}
+        if 'lastFiscalYearEnd' in info:
+            fy_end_dt = datetime.fromtimestamp(info['lastFiscalYearEnd'], tz=timezone.utc)
+            m = fy_end_dt.month
+            return 12 if m == 1 else m
+    except Exception:
+        pass
+    return 12
+
+def _get_fq_fy(dt, fy_end_m=12):
+    try:
+        shift = 12 - fy_end_m
+        shifted_m = dt.month + shift
+        if shifted_m > 12:
+            fy = dt.year + 1
+            shifted_m -= 12
+        else:
+            fy = dt.year
+        fq = (shifted_m + 2) // 3
+        return f"Q{fq} {fy}"
+    except Exception:
+        return ""
 
 def fetch_edgar_revenue(ticker):
     cik = get_cik(ticker)
@@ -110,9 +136,9 @@ def audit_ticker(ticker):
             return {'ticker': ticker, 'status': 'ERROR', 'msg': 'Not US stock'}
             
         engine_yoy = data.get('rev_yoy', [])
-        engine_ends = data.get('rev_end_dates', [])
+        engine_labels = data.get('rev_labels', [])
         
-        if not engine_yoy or not engine_ends:
+        if not engine_yoy or not engine_labels:
             return {'ticker': ticker, 'status': 'INSUFFICIENT', 'msg': 'Engine returned no Rev YoY', 'diffs': []}
             
         edgar_entries = fetch_edgar_revenue(ticker)
@@ -121,27 +147,21 @@ def audit_ticker(ticker):
             
         edgar_yoy_map = calc_edgar_yoy(edgar_entries)
         
+        fy_end_m = get_fy_end_month(ticker)
+        edgar_label_map = {}
+        for e in edgar_entries:
+            edgar_label_map[e['end']] = _get_fq_fy(e['end_dt'], fy_end_m)
+        
         diffs = []
-        for eng_rate, eng_end in zip(engine_yoy, engine_ends):
+        for eng_rate, eng_label in zip(engine_yoy, engine_labels):
             if eng_rate is None:
                 continue
-            
-            try:
-                eng_dt = datetime.strptime(eng_end, '%Y-%m-%d').date()
-            except Exception:
-                continue
                 
-            best_diff = 61
             edgar_match_end = None
             for e_end in edgar_yoy_map.keys():
-                try:
-                    e_dt = datetime.strptime(e_end, '%Y-%m-%d').date()
-                except Exception:
-                    continue
-                diff = abs((e_dt - eng_dt).days)
-                if diff < best_diff:
-                    best_diff = diff
+                if edgar_label_map[e_end] == eng_label:
                     edgar_match_end = e_end
+                    break
                     
             if edgar_match_end:
                 edgar_rate = edgar_yoy_map[edgar_match_end]
