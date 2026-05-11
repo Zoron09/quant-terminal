@@ -24,7 +24,7 @@ except Exception:
     FINNHUB_KEY  = ''
     _HAS_FINNHUB = False
 
-CACHE_VERSION = 'v22'
+CACHE_VERSION = 'v23'
 
 # ── SEC EDGAR headers ─────────────────────────────────────────────────────────
 EDGAR_UA = {'User-Agent': 'Meet Singh singhgaganmeet09@gmail.com'}
@@ -256,21 +256,19 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
 
 
-        if margin is not None:
+        margins.append(margin)
 
-            margins.append(margin)
+        margin_ends.append(d)
 
-            margin_ends.append(d)
+        try:
 
-            try:
+            label = _get_fq_fy(d_dt, fy_end_m)
 
-                label = _get_fq_fy(d_dt, fy_end_m)
+        except Exception:
 
-            except Exception:
+            label = d
 
-                label = d
-
-            margin_labels.append(label)
+        margin_labels.append(label)
 
 
 
@@ -280,7 +278,7 @@ def _build_margin_pool(fmp_rev, fmp_rev_end, fmp_ni, fmp_ni_end,
 
     return margins, margin_labels, margin_ends
 
-def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp_fp=None, edgar_fy=None, edgar_fp=None, fy_end_m=12, src_primary='FMP', src_fallback='EDGAR'):
+def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp_fp=None, edgar_fy=None, edgar_fp=None, fy_end_m=12, src_primary='FMP', src_fallback='EDGAR', append_none=False):
     """Calculate YoY growth using strict fiscal-period matching first, fallback to date matching.
     Prevents source-mixing and historical data deletion bugs."""
 
@@ -367,6 +365,17 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
                 prior = _find_prior(curr, curr_dt, fallback_pool, i_hint=None)
 
             if prior is None or prior['val'] == 0:
+                if append_none:
+                    try:
+                        label = _get_fq_fy(curr_dt, fy_end_m)
+                    except Exception:
+                        label = curr['end']
+                    seen.add(curr['end'])
+                    results.append({
+                        'dt': curr_dt, 'end': curr['end'], 'rate': None,
+                        'label': label, 'prior_val': None, 'curr_val': curr['val'],
+                        'source': curr.get('source', '')
+                    })
                 continue
 
             seen.add(curr['end'])
@@ -1079,7 +1088,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
         filtered_entries = sorted(global_dedup.values(), key=lambda x: x['_end_dt'], reverse=True)
 
-        filtered_entries = filtered_entries[:8]
+        filtered_entries = filtered_entries[:16]
 
         if len(filtered_entries) < 3:
 
@@ -1585,7 +1594,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     # ── Revenue YoY ───────────────────────────────────────────────────────────
 
-    rev_yoy_final, rev_labels_final, _, _rev_prior_vals = _date_first_yoy(fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end, fmp_rev_fy, fmp_rev_fp, None, None, fy_end_m=fy_end_month)
+    rev_yoy_final, rev_labels_final, _, _rev_prior_vals = _date_first_yoy(fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end, fmp_rev_fy, fmp_rev_fp, None, None, fy_end_m=fy_end_month, append_none=True)
 
     rev_raw_final      = edgar_rev     if edgar_rev     else fmp_rev
 
@@ -1705,7 +1714,7 @@ def _c33_status(rates3: list) -> tuple:
 
     """(status, d1, d2) — green/yellow/red/insufficient."""
 
-    if len(rates3) < 3: return 'insufficient', None, None
+    if len(rates3) < 4: return 'insufficient', None, None
 
     g1, g2, g3 = rates3[-3], rates3[-2], rates3[-1]
 
