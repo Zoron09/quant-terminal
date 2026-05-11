@@ -45,6 +45,14 @@ def get_fy_end_month(ticker):
         pass
     return 12
 
+def is_financial_sector(ticker):
+    try:
+        info = yf.Ticker(ticker).info or {}
+        sector = info.get('sector', '')
+        return sector in ('Financial Services', 'Financial', 'Banking')
+    except Exception:
+        return False
+
 def _get_fq_fy(dt, fy_end_m=12):
     try:
         shift = 12 - fy_end_m
@@ -59,7 +67,7 @@ def _get_fq_fy(dt, fy_end_m=12):
     except Exception:
         return ""
 
-def _extract_metric(usgaap, concepts):
+def _extract_metric(usgaap, concepts, is_revenue=False):
     dedup = {}
     for concept in concepts:
         entries = usgaap.get(concept, {}).get('units', {}).get('USD', [])
@@ -88,8 +96,12 @@ def _extract_metric(usgaap, concepts):
                 if key not in dedup:
                     dedup[key] = cloned
                 else:
-                    if filed_dt > dedup[key]['filed']:
-                        dedup[key] = cloned
+                    if is_revenue:
+                        if float(e['val']) > dedup[key]['val']:
+                            dedup[key] = cloned
+                    else:
+                        if filed_dt > dedup[key]['filed']:
+                            dedup[key] = cloned
     return dedup
 
 def fetch_edgar_margin(ticker):
@@ -106,7 +118,7 @@ def fetch_edgar_margin(ticker):
     
     usgaap = facts.get('facts', {}).get('us-gaap', {})
     
-    rev_dedup = _extract_metric(usgaap, REV_CONCEPTS)
+    rev_dedup = _extract_metric(usgaap, REV_CONCEPTS, is_revenue=True)
     ni_dedup = _extract_metric(usgaap, NI_CONCEPTS)
     
     if not rev_dedup or not ni_dedup:
@@ -125,6 +137,8 @@ def fetch_edgar_margin(ticker):
                 break
                 
         if best_ni:
+            if rev_entry['val'] < 0.10 * abs(best_ni['val']):
+                continue
             margin = (best_ni['val'] / rev_entry['val']) * 100
             margin_map[rev_end] = {'end_dt': rev_entry['end_dt'], 'margin': margin}
             
@@ -132,6 +146,9 @@ def fetch_edgar_margin(ticker):
 
 def audit_ticker(ticker):
     try:
+        if is_financial_sector(ticker):
+            return {'ticker': ticker, 'status': 'SECTOR_EXCLUDED', 'msg': 'Bank/Financial excluded', 'diffs': []}
+            
         data = get_code33_data(ticker)
         
         if not data.get('is_us'):
@@ -212,7 +229,7 @@ def main():
                 t = futures[future]
                 results.append({'ticker': t, 'status': 'ERROR', 'msg': f"Timeout or Exception: {e}"})
             
-    stats = {'MATCH': 0, 'MISMATCH': 0, 'INSUFFICIENT': 0, 'ERROR': 0}
+    stats = {'MATCH': 0, 'MISMATCH': 0, 'INSUFFICIENT': 0, 'ERROR': 0, 'SECTOR_EXCLUDED': 0}
     total_diff = 0
     diff_count = 0
     
@@ -240,6 +257,7 @@ Summary:
 - Total tickers tested: {total}
 - MATCH count: {matched} ({match_pct:.1f}%)
 - MISMATCH count: {mismatched} ({mismatch_pct:.1f}%)
+- SECTOR_EXCLUDED: {stats['SECTOR_EXCLUDED']}
 - INSUFFICIENT count: {stats['INSUFFICIENT']}
 - ERROR count: {stats['ERROR']}
 - Average abs diff %: {avg_diff:.2f}%
