@@ -24,7 +24,7 @@ except Exception:
     FINNHUB_KEY  = ''
     _HAS_FINNHUB = False
 
-CACHE_VERSION = 'v23'
+CACHE_VERSION = 'v24'
 
 # ── SEC EDGAR headers ─────────────────────────────────────────────────────────
 EDGAR_UA = {'User-Agent': 'Meet Singh singhgaganmeet09@gmail.com'}
@@ -893,7 +893,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     # ── EDGAR fetcher (independent per metric) ────────────────────────────────
 
-    def _edgar_metric(concepts, unit='USD', is_eps=False):
+    def _edgar_metric(concepts, unit='USD', is_eps=False, is_revenue=False):
 
         """Return (values, labels, end_dates, fy_list, fp_list) from SEC EDGAR filings using strict quarterly filters."""
 
@@ -1008,9 +1008,14 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
                         global_dedup[end_key] = cloned
 
-                    elif filed_dt and global_dedup[end_key]['_filed_dt'] and filed_dt > global_dedup[end_key]['_filed_dt']:
+                    else:
+                        if is_revenue:
+                            if cloned['_val'] > global_dedup[end_key]['_val']:
+                                global_dedup[end_key] = cloned
+                        else:
+                            if filed_dt and global_dedup[end_key]['_filed_dt'] and filed_dt > global_dedup[end_key]['_filed_dt']:
 
-                        global_dedup[end_key] = cloned
+                                global_dedup[end_key] = cloned
 
                 elif 170 <= duration_days <= 195:
 
@@ -1018,9 +1023,14 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
                         global_ytd_6m[end_key] = cloned
 
-                    elif filed_dt and global_ytd_6m[end_key]['_filed_dt'] and filed_dt > global_ytd_6m[end_key]['_filed_dt']:
+                    else:
+                        if is_revenue:
+                            if cloned['_val'] > global_ytd_6m[end_key]['_val']:
+                                global_ytd_6m[end_key] = cloned
+                        else:
+                            if filed_dt and global_ytd_6m[end_key]['_filed_dt'] and filed_dt > global_ytd_6m[end_key]['_filed_dt']:
 
-                        global_ytd_6m[end_key] = cloned
+                                global_ytd_6m[end_key] = cloned
 
                 elif 260 <= duration_days <= 285:
 
@@ -1028,9 +1038,14 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
                         global_ytd_9m[end_key] = cloned
 
-                    elif filed_dt and global_ytd_9m[end_key]['_filed_dt'] and filed_dt > global_ytd_9m[end_key]['_filed_dt']:
+                    else:
+                        if is_revenue:
+                            if cloned['_val'] > global_ytd_9m[end_key]['_val']:
+                                global_ytd_9m[end_key] = cloned
+                        else:
+                            if filed_dt and global_ytd_9m[end_key]['_filed_dt'] and filed_dt > global_ytd_9m[end_key]['_filed_dt']:
 
-                        global_ytd_9m[end_key] = cloned
+                                global_ytd_9m[end_key] = cloned
 
                 elif 350 <= duration_days <= 380:
 
@@ -1040,9 +1055,15 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
                         f_dt = filed_dt if filed_dt else datetime.min.date()
 
-                        if end_dt not in global_annual or f_dt > global_annual[end_dt][4]:
-
+                        if end_dt not in global_annual:
                             global_annual[end_dt] = (end_dt, start_dt, float(val), annual_fy, f_dt)
+                        else:
+                            if is_revenue:
+                                if float(val) > global_annual[end_dt][2]:
+                                    global_annual[end_dt] = (end_dt, start_dt, float(val), annual_fy, f_dt)
+                            else:
+                                if f_dt > global_annual[end_dt][4]:
+                                    global_annual[end_dt] = (end_dt, start_dt, float(val), annual_fy, f_dt)
 
         # ── Post-loop: derive Q2/Q3, apply filters, derive Q4 ────────────────
 
@@ -1459,7 +1480,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp = _edgar_metric(rev_keys_edgar)
+    edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp = _edgar_metric(rev_keys_edgar, is_revenue=True)
 
 
 

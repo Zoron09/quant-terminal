@@ -7,88 +7,88 @@ RLAY   | ERROR      | unsupported operand type(s) for -: 'NoneType' and 'NoneTyp
 FLNG   | ERROR      | No EDGAR data
 AEHR   | ERROR      | unsupported operand type(s) for -: 'float' and 'NoneType'
 SRRK   | ERROR      | unsupported operand type(s) for -: 'NoneType' and 'NoneType'
-BKV    | ERROR      | unsupported operand type(s) for -: 'NoneType' and 'NoneType'
 PLSE   | ERROR      | unsupported operand type(s) for -: 'NoneType' and 'NoneType'
+BKV    | ERROR      | unsupported operand type(s) for -: 'NoneType' and 'NoneType'
 SIMO   | ERROR      | No EDGAR data
 FLOC   | ERROR      | unsupported operand type(s) for -: 'NoneType' and 'NoneType'
 TK     | INSUFFICIENT | No matching quarters in EDGAR
 PVLA   | INSUFFICIENT | No matching quarters in EDGAR
 RVMD   | INSUFFICIENT | No matching quarters in EDGAR
 RAPP   | INSUFFICIENT | No matching quarters in EDGAR
-INGM   | MATCH      | Qs: 7 | Max Diff: 0.00%
+IMXI   | MATCH      | Qs: 6 | Max Diff: 0.00%
 MUX    | MATCH      | Qs: 8 | Max Diff: 0.00%
 PHIN   | MATCH      | Qs: 6 | Max Diff: 0.00%
+INGM   | MATCH      | Qs: 7 | Max Diff: 0.00%
 SYNA   | MATCH      | Qs: 6 | Max Diff: 0.00%
+PLXS   | MATCH      | Qs: 6 | Max Diff: 0.00%
 CMP    | MATCH      | Qs: 6 | Max Diff: 0.00%
-IMXI   | MATCH      | Qs: 6 | Max Diff: 0.00%
-MUR    | MATCH      | Qs: 8 | Max Diff: 0.12%
 DOCN   | MATCH      | Qs: 7 | Max Diff: 0.00%
-MEC    | MATCH      | Qs: 6 | Max Diff: 0.00%
+MUR    | MATCH      | Qs: 8 | Max Diff: 0.06%
 VRT    | MATCH      | Qs: 6 | Max Diff: 0.00%
-TEN    | MATCH      | Qs: 4 | Max Diff: 0.00%
-CMI    | MATCH      | Qs: 6 | Max Diff: 0.44%
+MEC    | MATCH      | Qs: 6 | Max Diff: 0.00%
 LINC   | MATCH      | Qs: 6 | Max Diff: 0.00%
-ATEX   | MATCH      | Qs: 3 | Max Diff: 0.00%
-WHD    | MATCH      | Qs: 6 | Max Diff: 0.00%
 NTCT   | MATCH      | Qs: 6 | Max Diff: 0.00%
+WHD    | MATCH      | Qs: 6 | Max Diff: 0.00%
+ATEX   | MATCH      | Qs: 3 | Max Diff: 0.00%
+CMI    | MATCH      | Qs: 6 | Max Diff: 0.44%
+TEN    | MATCH      | Qs: 4 | Max Diff: 0.00%
 KRYS   | MATCH      | Qs: 6 | Max Diff: 0.00%
-GTX    | MATCH      | Qs: 8 | Max Diff: 0.00%
 AMAT   | MATCH      | Qs: 6 | Max Diff: 0.00%
 GOOG   | MATCH      | Qs: 6 | Max Diff: 0.00%
+TH     | MATCH      | Qs: 6 | Max Diff: 0.02%
 CRS    | MATCH      | Qs: 6 | Max Diff: 0.00%
+GTX    | MATCH      | Qs: 8 | Max Diff: 0.00%
 FSTR   | MATCH      | Qs: 6 | Max Diff: 0.00%
-FOR    | MATCH      | Qs: 6 | Max Diff: 0.50%
+FOR    | MATCH      | Qs: 6 | Max Diff: 0.00%
 CRUS   | MATCH      | Qs: 6 | Max Diff: 0.00%
 CASY   | MATCH      | Qs: 6 | Max Diff: 0.00%
-DY     | MATCH      | Qs: 6 | Max Diff: 0.00%
 BC     | MATCH      | Qs: 6 | Max Diff: 0.00%
-ETON   | MATCH      | Qs: 6 | Max Diff: 0.00%
+DY     | MATCH      | Qs: 6 | Max Diff: 0.00%
 AA     | MATCH      | Qs: 6 | Max Diff: 0.00%
-SNX    | MATCH      | Qs: 6 | Max Diff: 0.00%
-CIEN   | MATCH      | Qs: 6 | Max Diff: 0.00%
+ETON   | MATCH      | Qs: 6 | Max Diff: 0.00%
 GVA    | MATCH      | Qs: 6 | Max Diff: 0.00%
 EHAB   | MATCH      | Qs: 6 | Max Diff: 0.00%
+SNX    | MATCH      | Qs: 6 | Max Diff: 0.00%
+CIEN   | MATCH      | Qs: 6 | Max Diff: 0.00%
 ANAB   | MATCH      | Qs: 6 | Max Diff: 0.00%
 WFRD   | MATCH      | Qs: 6 | Max Diff: 0.75%
 WATT   | MATCH      | Qs: 3 | Max Diff: 0.00%
 ROST   | MATCH      | Qs: 6 | Max Diff: 0.00%
-ATI    | MATCH      | Qs: 6 | Max Diff: 0.00%
-BG     | MATCH      | Qs: 8 | Max Diff: 0.00%
-BURL   | MATCH      | Qs: 6 | Max Diff: 0.01%
 LITE   | MATCH      | Qs: 6 | Max Diff: 0.00%
+BG     | MATCH      | Qs: 8 | Max Diff: 0.00%
+BURL   | MATCH      | Qs: 6 | Max Diff: 0.00%
+ATI    | MATCH      | Qs: 6 | Max Diff: 0.00%
 PLOW   | MATCH      | Qs: 6 | Max Diff: 0.00%
 NSC    | MATCH      | Qs: 6 | Max Diff: 0.00%
-COP    | MATCH      | Qs: 6 | Max Diff: 1.81%
+COP    | MATCH      | Qs: 6 | Max Diff: 0.00%
 UCTT   | MATCH      | Qs: 6 | Max Diff: 0.00%
 LPTH   | MATCH      | Qs: 6 | Max Diff: 0.00%
+DCO    | MATCH      | Qs: 6 | Max Diff: 0.00%
 ATMU   | MATCH      | Qs: 6 | Max Diff: 0.02%
 SNDA   | MATCH      | Qs: 6 | Max Diff: 0.54%
-DCO    | MATCH      | Qs: 6 | Max Diff: 0.00%
+OVV    | MATCH      | Qs: 6 | Max Diff: 0.00%
 RKLB   | MATCH      | Qs: 6 | Max Diff: 0.00%
-OVV    | MATCH      | Qs: 6 | Max Diff: 1.46%
 KEX    | MATCH      | Qs: 6 | Max Diff: 0.00%
 CTRI   | MATCH      | Qs: 6 | Max Diff: 0.00%
-ASRT   | MATCH      | Qs: 6 | Max Diff: 0.00%
-TPH    | MATCH      | Qs: 6 | Max Diff: 0.00%
 CSTM   | MATCH      | Qs: 6 | Max Diff: 0.00%
+ASRT   | MATCH      | Qs: 6 | Max Diff: 0.00%
 INSW   | MATCH      | Qs: 6 | Max Diff: 0.00%
+TPH    | MATCH      | Qs: 6 | Max Diff: 0.00%
 OLN    | MATCH      | Qs: 6 | Max Diff: 0.09%
 GOLF   | MATCH      | Qs: 6 | Max Diff: 0.00%
 TOL    | MATCH      | Qs: 6 | Max Diff: 0.00%
-FLEX   | MATCH      | Qs: 8 | Max Diff: 0.00%
-DOW    | MATCH      | Qs: 6 | Max Diff: 0.00%
-JBL    | MATCH      | Qs: 6 | Max Diff: 0.00%
-PAHC   | MATCH      | Qs: 6 | Max Diff: 0.00%
 AXSM   | MATCH      | Qs: 6 | Max Diff: 0.00%
+FLEX   | MATCH      | Qs: 8 | Max Diff: 0.00%
+PAHC   | MATCH      | Qs: 6 | Max Diff: 0.00%
+JBL    | MATCH      | Qs: 6 | Max Diff: 0.00%
+DOW    | MATCH      | Qs: 6 | Max Diff: 0.00%
+HP     | MATCH      | Qs: 6 | Max Diff: 0.17%
 TDY    | MATCH      | Qs: 6 | Max Diff: 0.00%
-HP     | MATCH      | Qs: 6 | Max Diff: 0.18%
-PLXS   | MISMATCH   | Qs: 6 | Max Diff: 4275.74%
 YOU    | MISMATCH   | Qs: 6 | Max Diff: 5.99%
-XOMA   | MISMATCH   | Qs: 6 | Max Diff: 68732.41%
-TH     | MISMATCH   | Qs: 6 | Max Diff: 9.38%
+XOMA   | MISMATCH   | Qs: 6 | Max Diff: 2490.90%
 OXY    | MISMATCH   | Qs: 6 | Max Diff: 3.64%
-RSI    | MISMATCH   | Qs: 6 | Max Diff: 4.51%
 APEI   | MISMATCH   | Qs: 8 | Max Diff: 2.96%
+RSI    | MISMATCH   | Qs: 6 | Max Diff: 4.51%
 NSA    | MISMATCH   | Qs: 6 | Max Diff: 6.08%
 NEE    | MISMATCH   | Qs: 6 | Max Diff: 3.21%
 LOB    | SECTOR_EXCLUDED | Bank/Financial excluded
@@ -103,9 +103,9 @@ TFIN   | SECTOR_EXCLUDED | Bank/Financial excluded
 
 Summary:
 - Total tickers tested: 100
-- MATCH count: 67 (88.2%)
-- MISMATCH count: 9 (11.8%)
+- MATCH count: 69 (90.8%)
+- MISMATCH count: 7 (9.2%)
 - SECTOR_EXCLUDED: 9
 - INSUFFICIENT count: 4
 - ERROR count: 11
-- Average abs diff %: 170.53%
+- Average abs diff %: 5.78%
