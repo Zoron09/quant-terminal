@@ -1,0 +1,110 @@
+=== CODE 33 FULL AUDIT ===
+
+SNEX   | SECTOR_EXCLUDED | Bank/Financial excluded
+UVE    | SECTOR_EXCLUDED | Bank/Financial excluded
+GRDN   | ERROR | unsupported operand type(s) for -: 'NoneType' and 'NoneType'
+AEHR   | ERROR | unsupported operand type(s) for -: 'float' and 'NoneType'
+CNTA   | ERROR | unsupported operand type(s) for -: 'NoneType' and 'NoneType'
+CELC   | EPS: N/A      | REV: N/A      | NPM: N/A      | Sig: RED
+VRT    | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: YELLOW
+FTI    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+GFS    | ERROR | No EDGAR data
+MUX    | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+DFTX   | EPS: N/A      | REV: N/A      | NPM: N/A      | Sig: INSUFFICIENT
+CTRA   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+ESE    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+MOV    | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+NDSN   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+PKE    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+SNDR   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+CTRI   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+GOOG   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: GREEN
+ITT    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+FRST   | SECTOR_EXCLUDED | Bank/Financial excluded
+CGNX   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+NVMI   | ERROR | No EDGAR data
+JBIO   | EPS: N/A      | REV: N/A      | NPM: N/A      | Sig: GREEN
+RPRX   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+GLRE   | SECTOR_EXCLUDED | Bank/Financial excluded
+TWLO   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+ORKA   | EPS: N/A      | REV: N/A      | NPM: N/A      | Sig: RED
+XPO    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+ASTE   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+BAND   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+SBLK   | ERROR | No EDGAR data
+PHIN   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+APA    | EPS: MATCH    | REV: N/A      | NPM: N/A      | Sig: RED
+COHU   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: RED
+BFH    | SECTOR_EXCLUDED | Bank/Financial excluded
+SHBI   | SECTOR_EXCLUDED | Bank/Financial excluded
+IDCC   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+ALGN   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+ODFL   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+ASRT   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: RED
+KEX    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+PACS   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+EZPW   | SECTOR_EXCLUDED | Bank/Financial excluded
+HTLD   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+AUPH   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+TALO   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+KNX    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+MEC    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+MD     | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+OVV    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+DNTH   | ERROR | unsupported operand type(s) for -: 'NoneType' and 'NoneType'
+GTX    | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: YELLOW
+RAPP   | EPS: N/A      | REV: N/A      | NPM: N/A      | Sig: RED
+NUE    | EPS: MATCH    | REV: MISMATCH | NPM: MISMATCH | Sig: RED
+VAL    | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+NSA    | EPS: MISMATCH | REV: MATCH    | NPM: MISMATCH | Sig: RED
+DAL    | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+NVTS   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+QUIK   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+LQDA   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: RED
+GNRC   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+WDC    | EPS: MISMATCH | REV: MISMATCH | NPM: MATCH    | Sig: GREEN
+VLO    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+SLB    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+MYRG   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+LPTH   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+IESC   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+TECX   | EPS: N/A      | REV: N/A      | NPM: N/A      | Sig: RED
+BHF    | SECTOR_EXCLUDED | Bank/Financial excluded
+DCO    | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+GSAT   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+SNDA   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: RED
+GLW    | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+BBIO   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: RED
+KOP    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+ABCB   | SECTOR_EXCLUDED | Bank/Financial excluded
+CMC    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+ANDE   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+HG     | SECTOR_EXCLUDED | Bank/Financial excluded
+TXG    | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: RED
+MAR    | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+RVMD   | EPS: N/A      | REV: N/A      | NPM: N/A      | Sig: RED
+RUSHA  | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+PCVX   | EPS: N/A      | REV: N/A      | NPM: N/A      | Sig: RED
+TRDA   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: RED
+JHG    | SECTOR_EXCLUDED | Bank/Financial excluded
+PAHC   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+TRGP   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+CENX   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+LSCC   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+GLNG   | EPS: N/A      | REV: N/A      | NPM: N/A      | Sig: INSUFFICIENT
+ALHC   | EPS: N/A      | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+LQDT   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+FSTR   | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: RED
+BHE    | EPS: MATCH    | REV: MATCH    | NPM: MATCH    | Sig: INSUFFICIENT
+CHRW   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+JAZZ   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+WLK    | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+ROST   | EPS: MISMATCH | REV: MATCH    | NPM: MATCH    | Sig: RED
+
+Summary:
+- Total tickers tested: 100
+- EPS: MATCH 29/59 (49.2%) | Avg Diff: 14.26%
+- Revenue: MATCH 70/72 (97.2%) | Avg Diff: 0.23%
+- Net Margin: MATCH 70/72 (97.2%) | Avg Diff: 0.05%
+- Overall ALL THREE Match: 27
+- Signal distribution: {'RED': 54, 'YELLOW': 2, 'INSUFFICIENT': 23, 'GREEN': 3}
