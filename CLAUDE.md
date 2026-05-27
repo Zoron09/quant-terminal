@@ -15,12 +15,12 @@
 
 ## 2. What is this project
 
-A Bloomberg-style Streamlit stock research terminal built around Minervini's SEPA methodology. Runs locally on Windows PC at localhost:8501.
+A Bloomberg-style FastAPI + vanilla HTML/React stock research terminal built around Minervini's SEPA methodology. Runs locally on Windows PC.
 
 **Start the app:**
 ```bash
 cd "C:\Users\Meet Singh\quant-terminal"
-streamlit run app.py
+python run.py
 ```
 
 ---
@@ -112,19 +112,19 @@ NEVER commit .env to Git. It is in .gitignore.
 
 ## 7. What is already built
 
-### Phase 1 — Stock Research (app.py + pages 2-8)
-- app.py: Overview — top bar, company snapshot, key statistics, dividends
-- Page 2: Financial statements (IS, BS, CF) — annual/quarterly toggle
-- Page 3: Growth & margins charts — revenue, EPS, margin trends
-- Page 4: Valuation — ratio dashboard, DCF model, Piotroski F-Score
-- Page 5: Earnings — calendar, history table, surprise chart, estimates
-- Page 6: Analyst ratings — consensus, price targets, upgrades/downgrades
-- Page 7: Ownership — insider transactions (Finnhub+yfinance), institutional holders
-- Page 8: Peer comparison — sector peers, color-coded metrics table
+### Phase 1 — Stock Research
+- overview.html: Overview — top bar, company snapshot, key statistics, dividends
+- Financial statements (IS, BS, CF) — annual/quarterly toggle
+- Growth & margins charts — revenue, EPS, margin trends
+- Valuation — ratio dashboard, DCF model, Piotroski F-Score
+- Earnings — calendar, history table, surprise chart, estimates
+- Analyst ratings — consensus, price targets, upgrades/downgrades
+- Ownership — insider transactions (Finnhub+yfinance), institutional holders
+- Peer comparison — sector peers, color-coded metrics table
 
-### Phase 2 — SEPA Engine (pages 9-10)
-- Page 9: SEPA Analysis — full trend template, price chart with MAs, Weinstein stage, RS ranking, VCP detection, earnings acceleration, Code 33 detector, volume dry-up, buy trigger zone
-- Page 10: Screener — full US market scan via Alpaca (~6000-11000 stocks), SQLite cache, instant results, 6 quick scan presets, live WebSocket feed
+### Phase 2 — SEPA Engine
+- SEPA Analysis — full trend template, price chart with MAs, Weinstein stage, RS ranking, VCP detection, earnings acceleration, Code 33 detector, volume dry-up, buy trigger zone
+- screener.html: Screener — full US market scan via Alpaca (~6000-11000 stocks), SQLite cache, instant results, 6 quick scan presets, live WebSocket feed
 
 ### Phase 3 — News & Sentiment (page 11)
 - Finnhub + Alpaca news feed, SEC filings, price alerts

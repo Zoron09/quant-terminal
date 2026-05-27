@@ -1,367 +1,257 @@
 ======================================================================
 CODE 33 ENGINE ACCURACY AUDIT  (reference: SEC EDGAR CompanyFacts)
-Run date  : 2026-04-28 12:51
+Run date  : 2026-05-11 07:52
 Source    : Minervini_builder_Managed_2026-04-28.csv (593 tickers)
 Sample    : 100  seed=42
 Threshold : MATCH if abs diff < 2.0%
 ======================================================================
 Total tickers tested    : 100
-MATCH   (abs diff <2%)  :   83  (83.0%)
-MISMATCH (abs diff>=2%) :    0  (0.0%)
-INSUFFICIENT            :    8  (8.0%)
-ERROR                   :    9  (9.0%)
-Avg abs diff (matched)  : 0.00%
+MATCH   (abs diff <2%)  :   19  (19.0%)
+MISMATCH (abs diff>=2%) :    6  (6.0%)
+INSUFFICIENT            :    4  (4.0%)
+ERROR                   :   71  (71.0%)
+Avg abs diff (matched)  : 1.41%
 ======================================================================
 
 PER-TICKER DETAIL (mismatches first, largest diff):
 
-DELL     MATCH        q=2  maxdiff=0.81%
-         Q3 2026: eng=+39.02%  edgar=+38.21%  diff=0.81%  [MATCH]  curr=+1.7000@2025-08-01  prior=+1.2300@2024-08-02
-         Q2 2026: eng=+0.00%  edgar=+0.00%  diff=0.00%  [MATCH]  curr=+1.3700@2025-05-02  prior=+1.3700@2024-05-03
-VPG      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+690.00%  edgar=+690.00%  diff=0.00%  [MATCH]  curr=+0.5900@2025-09-27  prior=-0.1000@2024-09-28
-         Q2 2025: eng=-94.12%  edgar=-94.12%  diff=0.00%  [MATCH]  curr=+0.0200@2025-06-28  prior=+0.3400@2024-06-29
-         Q1 2025: eng=-115.91%  edgar=-115.91%  diff=0.00%  [MATCH]  curr=-0.0700@2025-03-29  prior=+0.4400@2024-03-30
-HP       MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=-281.48%  edgar=-281.48%  diff=0.00%  [MATCH]  curr=-0.9800@2025-12-31  prior=+0.5400@2024-12-31
-         Q3 2025: eng=-286.36%  edgar=-286.36%  diff=0.00%  [MATCH]  curr=-1.6400@2025-06-30  prior=+0.8800@2024-06-30
-         Q2 2025: eng=-98.81%  edgar=-98.81%  diff=0.00%  [MATCH]  curr=+0.0100@2025-03-31  prior=+0.8400@2024-03-31
-PWR      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+14.87%  edgar=+14.87%  diff=0.00%  [MATCH]  curr=+2.2400@2025-09-30  prior=+1.9500@2024-09-30
-         Q2 2025: eng=+20.63%  edgar=+20.63%  diff=0.00%  [MATCH]  curr=+1.5200@2025-06-30  prior=+1.2600@2024-06-30
-         Q1 2025: eng=+21.52%  edgar=+21.52%  diff=0.00%  [MATCH]  curr=+0.9600@2025-03-31  prior=+0.7900@2024-03-31
-AMAL     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-2.22%  edgar=-2.22%  diff=0.00%  [MATCH]  curr=+0.8800@2025-09-30  prior=+0.9000@2024-09-30
-         Q2 2025: eng=-3.45%  edgar=-3.45%  diff=0.00%  [MATCH]  curr=+0.8400@2025-06-30  prior=+0.8700@2024-06-30
-         Q1 2025: eng=-8.99%  edgar=-8.99%  diff=0.00%  [MATCH]  curr=+0.8100@2025-03-31  prior=+0.8900@2024-03-31
-ULS      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+11.36%  edgar=+11.36%  diff=0.00%  [MATCH]  curr=+0.4900@2025-09-30  prior=+0.4400@2024-09-30
-         Q2 2025: eng=-10.00%  edgar=-10.00%  diff=0.00%  [MATCH]  curr=+0.4500@2025-06-30  prior=+0.5000@2024-06-30
-         Q1 2025: eng=+17.86%  edgar=+17.86%  diff=0.00%  [MATCH]  curr=+0.3300@2025-03-31  prior=+0.2800@2024-03-31
-SRRK     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-36.36%  edgar=-36.36%  diff=0.00%  [MATCH]  curr=-0.9000@2025-09-30  prior=-0.6600@2024-09-30
-         Q2 2025: eng=-63.33%  edgar=-63.33%  diff=0.00%  [MATCH]  curr=-0.9800@2025-06-30  prior=-0.6000@2024-06-30
-         Q1 2025: eng=-13.56%  edgar=-13.56%  diff=0.00%  [MATCH]  curr=-0.6700@2025-03-31  prior=-0.5900@2024-03-31
-NE       MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=+11.94%  edgar=+11.94%  diff=0.00%  [MATCH]  curr=+0.7500@2026-03-31  prior=+0.6700@2025-03-31
-         Q3 2025: eng=-132.50%  edgar=-132.50%  diff=0.00%  [MATCH]  curr=-0.1300@2025-09-30  prior=+0.4000@2024-09-30
-         Q2 2025: eng=-79.85%  edgar=-79.85%  diff=0.00%  [MATCH]  curr=+0.2700@2025-06-30  prior=+1.3400@2024-06-30
-VFC      MATCH        q=3  maxdiff=0.00%
-         Q3 2026: eng=+76.74%  edgar=+76.74%  diff=0.00%  [MATCH]  curr=+0.7600@2025-12-27  prior=+0.4300@2024-12-28
-         Q2 2026: eng=+269.23%  edgar=+269.23%  diff=0.00%  [MATCH]  curr=+0.4800@2025-09-27  prior=+0.1300@2024-09-28
-         Q1 2026: eng=+55.22%  edgar=+55.22%  diff=0.00%  [MATCH]  curr=-0.3000@2025-06-28  prior=-0.6700@2024-06-29
-HUN      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+26.32%  edgar=+26.32%  diff=0.00%  [MATCH]  curr=-0.1400@2025-09-30  prior=-0.1900@2024-09-30
-         Q2 2025: eng=-807.69%  edgar=-807.69%  diff=0.00%  [MATCH]  curr=-0.9200@2025-06-30  prior=+0.1300@2024-06-30
-         Q1 2025: eng=+86.36%  edgar=+86.36%  diff=0.00%  [MATCH]  curr=-0.0300@2025-03-31  prior=-0.2200@2024-03-31
-ALNT     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+200.00%  edgar=+200.00%  diff=0.00%  [MATCH]  curr=+0.3900@2025-09-30  prior=+0.1300@2024-09-30
-         Q2 2025: eng=+385.71%  edgar=+385.71%  diff=0.00%  [MATCH]  curr=+0.3400@2025-06-30  prior=+0.0700@2024-06-30
-         Q1 2025: eng=-50.00%  edgar=-50.00%  diff=0.00%  [MATCH]  curr=+0.2100@2025-03-31  prior=+0.4200@2024-03-31
-JAZZ     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+19.30%  edgar=+19.30%  diff=0.00%  [MATCH]  curr=+4.0800@2025-09-30  prior=+3.4200@2024-09-30
-         Q2 2025: eng=-571.49%  edgar=-571.49%  diff=0.00%  [MATCH]  curr=-11.7400@2025-06-30  prior=+2.4900@2024-06-30
-         Q1 2025: eng=-560.87%  edgar=-560.87%  diff=0.00%  [MATCH]  curr=-1.5200@2025-03-31  prior=-0.2300@2024-03-31
-ARCB     MATCH        q=3  maxdiff=0.00%
+INDV     MISMATCH     q=2  maxdiff=9.42%
+         Q1 2026: eng=+83.49%  edgar=+81.58%  diff=1.91%  [MATCH]  curr=+0.6900@2026-03-31  prior=+0.3800@2025-03-31
+         Q3 2025: eng=+96.83%  edgar=+106.25%  diff=9.42%  [MISMATCH]  curr=+0.3300@2025-09-30  prior=+0.1600@2024-09-30
+         Q2 2025: engine missing  edgar=+119.44%  (edgar curr=+0.1400@2025-06-30  prior=-0.7200@2024-06-30)
+VFC      MISMATCH     q=3  maxdiff=8.35%
+         Q3 2026: eng=+77.84%  edgar=+76.74%  diff=1.10%  [MATCH]  curr=+0.7600@2025-12-27  prior=+0.4300@2024-12-28
+         Q2 2026: eng=+260.88%  edgar=+269.23%  diff=8.35%  [MISMATCH]  curr=+0.4800@2025-09-27  prior=+0.1300@2024-09-28
+         Q1 2026: eng=+55.18%  edgar=+55.22%  diff=0.04%  [MATCH]  curr=-0.3000@2025-06-28  prior=-0.6700@2024-06-29
+HE       MISMATCH     q=1  maxdiff=8.15%
+         Q1 2026: eng=+11.85%  edgar=+20.00%  diff=8.15%  [MISMATCH]  curr=+0.1800@2026-03-31  prior=+0.1500@2025-03-31
+         Q3 2025: engine missing  edgar=+119.78%  (edgar curr=+0.1800@2025-09-30  prior=-0.9100@2024-09-30)
+         Q2 2025: engine missing  edgar=+101.28%  (edgar curr=+0.1500@2025-06-30  prior=-11.7400@2024-06-30)
+ALNT     MISMATCH     q=2  maxdiff=5.07%
+         Q1 2026: eng=+48.45%  edgar=+52.38%  diff=3.93%  [MISMATCH]  curr=+0.3200@2026-03-31  prior=+0.2100@2025-03-31
+         Q3 2025: eng=+205.07%  edgar=+200.00%  diff=5.07%  [MISMATCH]  curr=+0.3900@2025-09-30  prior=+0.1300@2024-09-30
+         Q2 2025: engine null
+AAOI     MISMATCH     q=3  maxdiff=3.01%
+         Q1 2026: eng=-2.55%  edgar=-5.56%  diff=3.01%  [MISMATCH]  curr=-0.1900@2026-03-31  prior=-0.1800@2025-03-31
+         Q3 2025: eng=+32.51%  edgar=+33.33%  diff=0.82%  [MATCH]  curr=-0.2800@2025-09-30  prior=-0.4200@2024-09-30
+         Q2 2025: eng=+75.84%  edgar=+75.76%  diff=0.09%  [MATCH]  curr=-0.1600@2025-06-30  prior=-0.6600@2024-06-30
+LASR     MISMATCH     q=2  maxdiff=3.01%
+         Q1 2026: engine missing  edgar=+106.25%  (edgar curr=+0.0100@2026-03-31  prior=-0.1600@2025-03-31)
+         Q3 2025: eng=+36.34%  edgar=+33.33%  diff=3.01%  [MISMATCH]  curr=-0.1400@2025-09-30  prior=-0.2100@2024-09-30
+         Q2 2025: eng=+70.57%  edgar=+72.00%  diff=1.43%  [MATCH]  curr=-0.0700@2025-06-30  prior=-0.2500@2024-06-30
+DOW      MATCH        q=2  maxdiff=1.99%
+         Q1 2026: eng=-70.17%  edgar=-68.18%  diff=1.99%  [MATCH]  curr=-0.7400@2026-03-31  prior=-0.4400@2025-03-31
+         Q3 2025: eng=-71.42%  edgar=-73.33%  diff=1.92%  [MATCH]  curr=+0.0800@2025-09-30  prior=+0.3000@2024-09-30
+         Q2 2025: engine missing  edgar=-290.32%  (edgar curr=-1.1800@2025-06-30  prior=+0.6200@2024-06-30)
+HUN      MATCH        q=1  maxdiff=1.85%
+         Q1 2026: engine null
+         Q3 2025: eng=+24.46%  edgar=+26.32%  diff=1.85%  [MATCH]  curr=-0.1400@2025-09-30  prior=-0.1900@2024-09-30
+         Q2 2025: engine missing  edgar=-807.69%  (edgar curr=-0.9200@2025-06-30  prior=+0.1300@2024-06-30)
+ULS      MATCH        q=3  maxdiff=1.71%
+         Q1 2026: eng=+36.64%  edgar=+36.36%  diff=0.28%  [MATCH]  curr=+0.4500@2026-03-31  prior=+0.3300@2025-03-31
+         Q3 2025: eng=+13.08%  edgar=+11.36%  diff=1.71%  [MATCH]  curr=+0.4900@2025-09-30  prior=+0.4400@2024-09-30
+         Q2 2025: eng=-10.79%  edgar=-10.00%  diff=0.79%  [MATCH]  curr=+0.4500@2025-06-30  prior=+0.5000@2024-06-30
+KYMR     MATCH        q=3  maxdiff=1.62%
+         Q1 2026: eng=+13.25%  edgar=+13.41%  diff=0.16%  [MATCH]  curr=-0.7100@2026-03-31  prior=-0.8200@2025-03-31
+         Q3 2025: eng=-14.67%  edgar=-14.63%  diff=0.04%  [MATCH]  curr=-0.9400@2025-09-30  prior=-0.8200@2024-09-30
+         Q2 2025: eng=-65.41%  edgar=-63.79%  diff=1.62%  [MATCH]  curr=-0.9500@2025-06-30  prior=-0.5800@2024-06-30
+RMBS     MATCH        q=3  maxdiff=0.88%
+         Q1 2026: eng=-1.72%  edgar=-1.79%  diff=0.06%  [MATCH]  curr=+0.5500@2026-03-31  prior=+0.5600@2025-03-31
+         Q3 2025: eng=-1.35%  edgar=-2.22%  diff=0.88%  [MATCH]  curr=+0.4400@2025-09-30  prior=+0.4500@2024-09-30
+         Q2 2025: eng=+61.46%  edgar=+60.61%  diff=0.85%  [MATCH]  curr=+0.5300@2025-06-30  prior=+0.3300@2024-06-30
+AMAL     MATCH        q=3  maxdiff=0.83%
+         Q1 2026: eng=+3.44%  edgar=+3.70%  diff=0.26%  [MATCH]  curr=+0.8400@2026-03-31  prior=+0.8100@2025-03-31
+         Q3 2025: eng=-2.55%  edgar=-2.22%  diff=0.32%  [MATCH]  curr=+0.8800@2025-09-30  prior=+0.9000@2024-09-30
+         Q2 2025: eng=-2.62%  edgar=-3.45%  diff=0.83%  [MATCH]  curr=+0.8400@2025-06-30  prior=+0.8700@2024-06-30
+PWR      MATCH        q=3  maxdiff=0.77%
+         Q1 2026: eng=+51.81%  edgar=+51.04%  diff=0.77%  [MATCH]  curr=+1.4500@2026-03-31  prior=+0.9600@2025-03-31
+         Q3 2025: eng=+15.05%  edgar=+14.87%  diff=0.18%  [MATCH]  curr=+2.2400@2025-09-30  prior=+1.9500@2024-09-30
+         Q2 2025: eng=+20.78%  edgar=+20.63%  diff=0.15%  [MATCH]  curr=+1.5200@2025-06-30  prior=+1.2600@2024-06-30
+NUE      MATCH        q=3  maxdiff=0.75%
+         Q4 2025: eng=+149.73%  edgar=+150.48%  diff=0.75%  [MATCH]  curr=+2.6300@2025-10-04  prior=+1.0500@2024-09-28
+         Q3 2025: eng=-2.81%  edgar=-2.99%  diff=0.17%  [MATCH]  curr=+2.6000@2025-07-05  prior=+2.6800@2024-06-29
+         Q2 2025: eng=-80.70%  edgar=-80.64%  diff=0.06%  [MATCH]  curr=+0.6700@2025-04-05  prior=+3.4600@2024-03-30
+HLT      MATCH        q=3  maxdiff=0.71%
+         Q1 2026: eng=+34.42%  edgar=+34.96%  diff=0.54%  [MATCH]  curr=+1.6600@2026-03-31  prior=+1.2300@2025-03-31
+         Q3 2025: eng=+28.27%  edgar=+28.99%  diff=0.71%  [MATCH]  curr=+1.7800@2025-09-30  prior=+1.3800@2024-09-30
+         Q2 2025: eng=+10.20%  edgar=+10.18%  diff=0.02%  [MATCH]  curr=+1.8400@2025-06-30  prior=+1.6700@2024-06-30
+JAZZ     MATCH        q=1  maxdiff=0.58%
+         Q1 2026: engine missing  edgar=+391.45%  (edgar curr=+4.4300@2026-03-31  prior=-1.5200@2025-03-31)
+         Q3 2025: eng=+19.88%  edgar=+19.30%  diff=0.58%  [MATCH]  curr=+4.0800@2025-09-30  prior=+3.4200@2024-09-30
+         Q2 2025: engine missing  edgar=-571.49%  (edgar curr=-11.7400@2025-06-30  prior=+2.4900@2024-06-30)
+NBR      MATCH        q=1  maxdiff=0.52%
+         Q1 2026: engine missing  edgar=-170.64%  (edgar curr=-1.5400@2026-03-31  prior=+2.1800@2025-03-31)
+         Q3 2025: engine missing  edgar=+345.63%  (edgar curr=+16.8500@2025-09-30  prior=-6.8600@2024-09-30)
+         Q2 2025: eng=+37.35%  edgar=+36.83%  diff=0.52%  [MATCH]  curr=-2.7100@2025-06-30  prior=-4.2900@2024-06-30
+OSIS     MATCH        q=3  maxdiff=0.52%
+         Q3 2026: eng=-2.98%  edgar=-2.92%  diff=0.06%  [MATCH]  curr=+2.3300@2026-03-31  prior=+2.4000@2025-03-31
+         Q2 2026: eng=-0.19%  edgar=+0.00%  diff=0.19%  [MATCH]  curr=+2.2200@2025-12-31  prior=+2.2200@2024-12-31
+         Q1 2026: eng=+11.87%  edgar=+12.38%  diff=0.52%  [MATCH]  curr=+1.1800@2025-09-30  prior=+1.0500@2024-09-30
+CSX      MATCH        q=3  maxdiff=0.46%
+         Q1 2026: eng=+26.94%  edgar=+26.47%  diff=0.46%  [MATCH]  curr=+0.4300@2026-03-31  prior=+0.3400@2025-03-31
+         Q3 2025: eng=-19.34%  edgar=-19.57%  diff=0.23%  [MATCH]  curr=+0.3700@2025-09-30  prior=+0.4600@2024-09-30
+         Q2 2025: eng=-10.28%  edgar=-10.20%  diff=0.07%  [MATCH]  curr=+0.4400@2025-06-30  prior=+0.4900@2024-06-30
+VPG      MATCH        q=1  maxdiff=0.46%
+         Q3 2025: engine missing  edgar=+690.00%  (edgar curr=+0.5900@2025-09-27  prior=-0.1000@2024-09-28)
+         Q2 2025: eng=-94.58%  edgar=-94.12%  diff=0.46%  [MATCH]  curr=+0.0200@2025-06-28  prior=+0.3400@2024-06-29
+         Q1 2025: engine missing  edgar=-115.91%  (edgar curr=-0.0700@2025-03-29  prior=+0.4400@2024-03-30)
+AHCO     MATCH        q=2  maxdiff=0.42%
+         Q1 2026: engine null
+         Q3 2025: eng=+6.69%  edgar=+6.67%  diff=0.02%  [MATCH]  curr=+0.1600@2025-09-30  prior=+0.1500@2024-09-30
+         Q2 2025: eng=-23.49%  edgar=-23.08%  diff=0.42%  [MATCH]  curr=+0.1000@2025-06-30  prior=+0.1300@2024-06-30
+NE       MATCH        q=2  maxdiff=0.27%
+         Q1 2026: eng=+11.72%  edgar=+11.94%  diff=0.22%  [MATCH]  curr=+0.7500@2026-03-31  prior=+0.6700@2025-03-31
+         Q3 2025: engine missing  edgar=-132.50%  (edgar curr=-0.1300@2025-09-30  prior=+0.4000@2024-09-30)
+         Q2 2025: eng=-80.12%  edgar=-79.85%  diff=0.27%  [MATCH]  curr=+0.2700@2025-06-30  prior=+1.3400@2024-06-30
+LNTH     MATCH        q=3  maxdiff=0.12%
+         Q1 2026: eng=+76.38%  edgar=+76.47%  diff=0.09%  [MATCH]  curr=+1.8000@2026-03-31  prior=+1.0200@2025-03-31
+         Q3 2025: eng=-77.12%  edgar=-77.09%  diff=0.03%  [MATCH]  curr=+0.4100@2025-09-30  prior=+1.7900@2024-09-30
+         Q2 2025: eng=+27.40%  edgar=+27.27%  diff=0.12%  [MATCH]  curr=+1.1200@2025-06-30  prior=+0.8800@2024-06-30
+ARCB     MATCH        q=2  maxdiff=0.04%
+         Q1 2026: engine missing  edgar=-138.46%  (edgar curr=-0.0500@2026-03-31  prior=+0.1300@2025-03-31)
          Q3 2025: eng=-59.34%  edgar=-59.34%  diff=0.00%  [MATCH]  curr=+1.7200@2025-09-30  prior=+4.2300@2024-09-30
-         Q2 2025: eng=-42.86%  edgar=-42.86%  diff=0.00%  [MATCH]  curr=+1.1200@2025-06-30  prior=+1.9600@2024-06-30
-         Q1 2025: eng=+230.00%  edgar=+230.00%  diff=0.00%  [MATCH]  curr=+0.1300@2025-03-31  prior=-0.1000@2024-03-31
-HLT      MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=+34.96%  edgar=+34.96%  diff=0.00%  [MATCH]  curr=+1.6600@2026-03-31  prior=+1.2300@2025-03-31
-         Q3 2025: eng=+28.99%  edgar=+28.99%  diff=0.00%  [MATCH]  curr=+1.7800@2025-09-30  prior=+1.3800@2024-09-30
-         Q2 2025: eng=+10.18%  edgar=+10.18%  diff=0.00%  [MATCH]  curr=+1.8400@2025-06-30  prior=+1.6700@2024-06-30
-GEV      MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=+1816.48%  edgar=+1816.48%  diff=0.00%  [MATCH]  curr=+17.4400@2026-03-31  prior=+0.9100@2025-03-31
-         Q3 2025: eng=+568.57%  edgar=+568.57%  diff=0.00%  [MATCH]  curr=+1.6400@2025-09-30  prior=-0.3500@2024-09-30
-         Q2 2025: eng=-60.00%  edgar=-60.00%  diff=0.00%  [MATCH]  curr=+1.8600@2025-06-30  prior=+4.6500@2024-06-30
-AHCO     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+6.67%  edgar=+6.67%  diff=0.00%  [MATCH]  curr=+0.1600@2025-09-30  prior=+0.1500@2024-09-30
-         Q2 2025: eng=-23.08%  edgar=-23.08%  diff=0.00%  [MATCH]  curr=+0.1000@2025-06-30  prior=+0.1300@2024-06-30
-         Q1 2025: eng=-150.00%  edgar=-150.00%  diff=0.00%  [MATCH]  curr=-0.0500@2025-03-31  prior=-0.0200@2024-03-31
-HE       MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+119.78%  edgar=+119.78%  diff=0.00%  [MATCH]  curr=+0.1800@2025-09-30  prior=-0.9100@2024-09-30
-         Q2 2025: eng=+101.28%  edgar=+101.28%  diff=0.00%  [MATCH]  curr=+0.1500@2025-06-30  prior=-11.7400@2024-06-30
-         Q1 2025: eng=-60.53%  edgar=-60.53%  diff=0.00%  [MATCH]  curr=+0.1500@2025-03-31  prior=+0.3800@2024-03-31
-NUE      MATCH        q=3  maxdiff=0.00%
-         Q4 2025: eng=+150.48%  edgar=+150.48%  diff=0.00%  [MATCH]  curr=+2.6300@2025-10-04  prior=+1.0500@2024-09-28
-         Q3 2025: eng=-2.99%  edgar=-2.99%  diff=0.00%  [MATCH]  curr=+2.6000@2025-07-05  prior=+2.6800@2024-06-29
-         Q2 2025: eng=-80.64%  edgar=-80.64%  diff=0.00%  [MATCH]  curr=+0.6700@2025-04-05  prior=+3.4600@2024-03-30
-INDV     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+106.25%  edgar=+106.25%  diff=0.00%  [MATCH]  curr=+0.3300@2025-09-30  prior=+0.1600@2024-09-30
-         Q2 2025: eng=+119.44%  edgar=+119.44%  diff=0.00%  [MATCH]  curr=+0.1400@2025-06-30  prior=-0.7200@2024-06-30
-         Q1 2025: eng=-15.56%  edgar=-15.56%  diff=0.00%  [MATCH]  curr=+0.3800@2025-03-31  prior=+0.4500@2024-03-31
-LASR     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+33.33%  edgar=+33.33%  diff=0.00%  [MATCH]  curr=-0.1400@2025-09-30  prior=-0.2100@2024-09-30
-         Q2 2025: eng=+72.00%  edgar=+72.00%  diff=0.00%  [MATCH]  curr=-0.0700@2025-06-30  prior=-0.2500@2024-06-30
-         Q1 2025: eng=+44.83%  edgar=+44.83%  diff=0.00%  [MATCH]  curr=-0.1600@2025-03-31  prior=-0.2900@2024-03-31
-CSX      MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=+26.47%  edgar=+26.47%  diff=0.00%  [MATCH]  curr=+0.4300@2026-03-31  prior=+0.3400@2025-03-31
-         Q3 2025: eng=-19.57%  edgar=-19.57%  diff=0.00%  [MATCH]  curr=+0.3700@2025-09-30  prior=+0.4600@2024-09-30
-         Q2 2025: eng=-10.20%  edgar=-10.20%  diff=0.00%  [MATCH]  curr=+0.4400@2025-06-30  prior=+0.4900@2024-06-30
-AAOI     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+33.33%  edgar=+33.33%  diff=0.00%  [MATCH]  curr=-0.2800@2025-09-30  prior=-0.4200@2024-09-30
-         Q2 2025: eng=+75.76%  edgar=+75.76%  diff=0.00%  [MATCH]  curr=-0.1600@2025-06-30  prior=-0.6600@2024-06-30
-         Q1 2025: eng=+70.00%  edgar=+70.00%  diff=0.00%  [MATCH]  curr=-0.1800@2025-03-31  prior=-0.6000@2024-03-31
-OSIS     MATCH        q=3  maxdiff=0.00%
-         Q2 2026: eng=+0.00%  edgar=+0.00%  diff=0.00%  [MATCH]  curr=+2.2200@2025-12-31  prior=+2.2200@2024-12-31
-         Q1 2026: eng=+12.38%  edgar=+12.38%  diff=0.00%  [MATCH]  curr=+1.1800@2025-09-30  prior=+1.0500@2024-09-30
-         Q4 2025: eng=+18.82%  edgar=+18.82%  diff=0.00%  [MATCH]  curr=+3.0300@2025-06-30  prior=+2.5500@2024-06-30
-DOW      MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=-68.18%  edgar=-68.18%  diff=0.00%  [MATCH]  curr=-0.7400@2026-03-31  prior=-0.4400@2025-03-31
-         Q3 2025: eng=-73.33%  edgar=-73.33%  diff=0.00%  [MATCH]  curr=+0.0800@2025-09-30  prior=+0.3000@2024-09-30
-         Q2 2025: eng=-290.32%  edgar=-290.32%  diff=0.00%  [MATCH]  curr=-1.1800@2025-06-30  prior=+0.6200@2024-06-30
-LNTH     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-77.09%  edgar=-77.09%  diff=0.00%  [MATCH]  curr=+0.4100@2025-09-30  prior=+1.7900@2024-09-30
-         Q2 2025: eng=+27.27%  edgar=+27.27%  diff=0.00%  [MATCH]  curr=+1.1200@2025-06-30  prior=+0.8800@2024-06-30
-         Q1 2025: eng=-45.45%  edgar=-45.45%  diff=0.00%  [MATCH]  curr=+1.0200@2025-03-31  prior=+1.8700@2024-03-31
-RMBS     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-2.22%  edgar=-2.22%  diff=0.00%  [MATCH]  curr=+0.4400@2025-09-30  prior=+0.4500@2024-09-30
-         Q2 2025: eng=+60.61%  edgar=+60.61%  diff=0.00%  [MATCH]  curr=+0.5300@2025-06-30  prior=+0.3300@2024-06-30
-         Q1 2025: eng=+86.67%  edgar=+86.67%  diff=0.00%  [MATCH]  curr=+0.5600@2025-03-31  prior=+0.3000@2024-03-31
-NBR      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+345.63%  edgar=+345.63%  diff=0.00%  [MATCH]  curr=+16.8500@2025-09-30  prior=-6.8600@2024-09-30
-         Q2 2025: eng=+36.83%  edgar=+36.83%  diff=0.00%  [MATCH]  curr=-2.7100@2025-06-30  prior=-4.2900@2024-06-30
-         Q1 2025: eng=+148.02%  edgar=+148.02%  diff=0.00%  [MATCH]  curr=+2.1800@2025-03-31  prior=-4.5400@2024-03-31
-KYMR     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-14.63%  edgar=-14.63%  diff=0.00%  [MATCH]  curr=-0.9400@2025-09-30  prior=-0.8200@2024-09-30
-         Q2 2025: eng=-63.79%  edgar=-63.79%  diff=0.00%  [MATCH]  curr=-0.9500@2025-06-30  prior=-0.5800@2024-06-30
-         Q1 2025: eng=-18.84%  edgar=-18.84%  diff=0.00%  [MATCH]  curr=-0.8200@2025-03-31  prior=-0.6900@2024-03-31
-FITB     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+16.67%  edgar=+16.67%  diff=0.00%  [MATCH]  curr=+0.9100@2025-09-30  prior=+0.7800@2024-09-30
-         Q2 2025: eng=+8.64%  edgar=+8.64%  diff=0.00%  [MATCH]  curr=+0.8800@2025-06-30  prior=+0.8100@2024-06-30
-         Q1 2025: eng=+1.43%  edgar=+1.43%  diff=0.00%  [MATCH]  curr=+0.7100@2025-03-31  prior=+0.7000@2024-03-31
-DXPE     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+3.15%  edgar=+3.15%  diff=0.00%  [MATCH]  curr=+1.3100@2025-09-30  prior=+1.2700@2024-09-30
-         Q2 2025: eng=+43.00%  edgar=+43.00%  diff=0.00%  [MATCH]  curr=+1.4300@2025-06-30  prior=+1.0000@2024-06-30
-         Q1 2025: eng=+86.57%  edgar=+86.57%  diff=0.00%  [MATCH]  curr=+1.2500@2025-03-31  prior=+0.6700@2024-03-31
-SSSS     MATCH        q=2  maxdiff=0.00%
-         Q3 2025: eng=+221.74%  edgar=+221.74%  diff=0.00%  [MATCH]  curr=+0.2800@2025-09-30  prior=-0.2300@2024-09-30
-         Q2 2025: eng=+595.56%  edgar=+595.56%  diff=0.00%  [MATCH]  curr=+2.2300@2025-06-30  prior=-0.4500@2024-06-30
-FANG     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+10.03%  edgar=+10.03%  diff=0.00%  [MATCH]  curr=+3.5100@2025-09-30  prior=+3.1900@2024-09-30
-         Q2 2025: eng=-48.93%  edgar=-48.93%  diff=0.00%  [MATCH]  curr=+2.3800@2025-06-30  prior=+4.6600@2024-06-30
-         Q1 2025: eng=+12.85%  edgar=+12.85%  diff=0.00%  [MATCH]  curr=+4.8300@2025-03-31  prior=+4.2800@2024-03-31
-FIVE     MATCH        q=3  maxdiff=0.00%
-         Q4 2026: eng=+2100.00%  edgar=+2100.00%  diff=0.00%  [MATCH]  curr=+0.6600@2025-11-01  prior=+0.0300@2024-11-02
-         Q3 2026: eng=+28.33%  edgar=+28.33%  diff=0.00%  [MATCH]  curr=+0.7700@2025-08-02  prior=+0.6000@2024-08-03
-         Q2 2026: eng=+31.58%  edgar=+31.58%  diff=0.00%  [MATCH]  curr=+0.7500@2025-05-03  prior=+0.5700@2024-05-04
-CLDX     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-57.81%  edgar=-57.81%  diff=0.00%  [MATCH]  curr=-1.0100@2025-09-30  prior=-0.6400@2024-09-30
-         Q2 2025: eng=-57.41%  edgar=-57.41%  diff=0.00%  [MATCH]  curr=-0.8500@2025-06-30  prior=-0.5400@2024-06-30
-         Q1 2025: eng=-44.64%  edgar=-44.64%  diff=0.00%  [MATCH]  curr=-0.8100@2025-03-31  prior=-0.5600@2024-03-31
-RL       MATCH        q=3  maxdiff=0.00%
-         Q3 2026: eng=+24.89%  edgar=+24.89%  diff=0.00%  [MATCH]  curr=+5.8200@2025-12-27  prior=+4.6600@2024-12-28
-         Q2 2026: eng=+43.72%  edgar=+43.72%  diff=0.00%  [MATCH]  curr=+3.3200@2025-09-27  prior=+2.3100@2024-09-28
-         Q1 2026: eng=+34.87%  edgar=+34.87%  diff=0.00%  [MATCH]  curr=+3.5200@2025-06-28  prior=+2.6100@2024-06-29
-ZWS      MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=+34.62%  edgar=+34.62%  diff=0.00%  [MATCH]  curr=+0.3500@2026-03-31  prior=+0.2600@2025-03-31
-         Q3 2025: eng=+44.00%  edgar=+44.00%  diff=0.00%  [MATCH]  curr=+0.3600@2025-09-30  prior=+0.2500@2024-09-30
-         Q2 2025: eng=+7.41%  edgar=+7.41%  diff=0.00%  [MATCH]  curr=+0.2900@2025-06-30  prior=+0.2700@2024-06-30
-TERN     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+3.57%  edgar=+3.57%  diff=0.00%  [MATCH]  curr=-0.2700@2025-09-30  prior=-0.2800@2024-09-30
-         Q2 2025: eng=+16.13%  edgar=+16.13%  diff=0.00%  [MATCH]  curr=-0.2600@2025-06-30  prior=-0.3100@2024-06-30
-         Q1 2025: eng=+13.33%  edgar=+13.33%  diff=0.00%  [MATCH]  curr=-0.2600@2025-03-31  prior=-0.3000@2024-03-31
-MSGS     MATCH        q=3  maxdiff=0.00%
-         Q2 2026: eng=+580.00%  edgar=+580.00%  diff=0.00%  [MATCH]  curr=+0.3400@2025-12-31  prior=+0.0500@2024-12-31
-         Q1 2026: eng=-19.35%  edgar=-19.35%  diff=0.00%  [MATCH]  curr=-0.3700@2025-09-30  prior=-0.3100@2024-09-30
-         Q3 2025: eng=-137.58%  edgar=-137.58%  diff=0.00%  [MATCH]  curr=-0.5900@2025-03-31  prior=+1.5700@2024-03-31
-JBIO     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+91.03%  edgar=+91.03%  diff=0.00%  [MATCH]  curr=-0.4800@2025-09-30  prior=-5.3500@2024-09-30
-         Q2 2025: eng=+0.00%  edgar=+0.00%  diff=0.00%  [MATCH]  curr=-0.8600@2025-06-30  prior=-0.8600@2024-06-30
-         Q1 2025: eng=+89.16%  edgar=+89.16%  diff=0.00%  [MATCH]  curr=-0.0900@2025-03-31  prior=-0.8300@2024-03-31
-RNG      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+311.11%  edgar=+311.11%  diff=0.00%  [MATCH]  curr=+0.1900@2025-09-30  prior=-0.0900@2024-09-30
-         Q2 2025: eng=+187.50%  edgar=+187.50%  diff=0.00%  [MATCH]  curr=+0.1400@2025-06-30  prior=-0.1600@2024-06-30
-         Q1 2025: eng=+64.52%  edgar=+64.52%  diff=0.00%  [MATCH]  curr=-0.1100@2025-03-31  prior=-0.3100@2024-03-31
-NSA      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-5.56%  edgar=-5.56%  diff=0.00%  [MATCH]  curr=+0.1700@2025-09-30  prior=+0.1800@2024-09-30
-         Q2 2025: eng=+18.75%  edgar=+18.75%  diff=0.00%  [MATCH]  curr=+0.1900@2025-06-30  prior=+0.1600@2024-06-30
-         Q1 2025: eng=-84.62%  edgar=-84.62%  diff=0.00%  [MATCH]  curr=+0.1000@2025-03-31  prior=+0.6500@2024-03-31
-DAR      MATCH        q=3  maxdiff=0.00%
-         Q3 2026: eng=+9.09%  edgar=+9.09%  diff=0.00%  [MATCH]  curr=+0.1200@2025-09-27  prior=+0.1100@2024-09-28
-         Q2 2026: eng=-83.67%  edgar=-83.67%  diff=0.00%  [MATCH]  curr=+0.0800@2025-06-28  prior=+0.4900@2024-06-29
-         Q1 2026: eng=-132.00%  edgar=-132.00%  diff=0.00%  [MATCH]  curr=-0.1600@2025-03-29  prior=+0.5000@2024-03-30
-DGII     MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=+14.81%  edgar=+14.81%  diff=0.00%  [MATCH]  curr=+0.3100@2025-12-31  prior=+0.2700@2024-12-31
-         Q3 2025: eng=+3.85%  edgar=+3.85%  diff=0.00%  [MATCH]  curr=+0.2700@2025-06-30  prior=+0.2600@2024-06-30
-         Q2 2025: eng=+154.55%  edgar=+154.55%  diff=0.00%  [MATCH]  curr=+0.2800@2025-03-31  prior=+0.1100@2024-03-31
-ODFL     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-10.49%  edgar=-10.49%  diff=0.00%  [MATCH]  curr=+1.2800@2025-09-30  prior=+1.4300@2024-09-30
-         Q2 2025: eng=-14.19%  edgar=-14.19%  diff=0.00%  [MATCH]  curr=+1.2700@2025-06-30  prior=+1.4800@2024-06-30
-         Q1 2025: eng=-11.19%  edgar=-11.19%  diff=0.00%  [MATCH]  curr=+1.1900@2025-03-31  prior=+1.3400@2024-03-31
-MTW      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+170.00%  edgar=+170.00%  diff=0.00%  [MATCH]  curr=+0.1400@2025-09-30  prior=-0.2000@2024-09-30
-         Q2 2025: eng=+0.00%  edgar=+0.00%  diff=0.00%  [MATCH]  curr=+0.0400@2025-06-30  prior=+0.0400@2024-06-30
-         Q1 2025: eng=-250.00%  edgar=-250.00%  diff=0.00%  [MATCH]  curr=-0.1800@2025-03-31  prior=+0.1200@2024-03-31
-SDRL     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-134.69%  edgar=-134.69%  diff=0.00%  [MATCH]  curr=-0.1700@2025-09-30  prior=+0.4900@2024-09-30
-         Q2 2025: eng=-119.48%  edgar=-119.48%  diff=0.00%  [MATCH]  curr=-0.6800@2025-06-30  prior=+3.4900@2024-06-30
-         Q1 2025: eng=-128.40%  edgar=-128.40%  diff=0.00%  [MATCH]  curr=-0.2300@2025-03-31  prior=+0.8100@2024-03-31
-MATX     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-28.01%  edgar=-28.01%  diff=0.00%  [MATCH]  curr=+4.2400@2025-09-30  prior=+5.8900@2024-09-30
-         Q2 2025: eng=-11.78%  edgar=-11.78%  diff=0.00%  [MATCH]  curr=+2.9200@2025-06-30  prior=+3.3100@2024-06-30
-         Q1 2025: eng=+109.62%  edgar=+109.62%  diff=0.00%  [MATCH]  curr=+2.1800@2025-03-31  prior=+1.0400@2024-03-31
-BWXT     MATCH        q=3  maxdiff=0.00%
-         Q4 2025: eng=+31.17%  edgar=+31.17%  diff=0.00%  [MATCH]  curr=+1.0100@2025-12-31  prior=+0.7700@2024-12-31
-         Q3 2025: eng=+17.11%  edgar=+17.11%  diff=0.00%  [MATCH]  curr=+0.8900@2025-09-30  prior=+0.7600@2024-09-30
-         Q2 2025: eng=+7.59%  edgar=+7.59%  diff=0.00%  [MATCH]  curr=+0.8500@2025-06-30  prior=+0.7900@2024-06-30
-NOV      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-66.67%  edgar=-66.67%  diff=0.00%  [MATCH]  curr=+0.1100@2025-09-30  prior=+0.3300@2024-09-30
-         Q2 2025: eng=-49.12%  edgar=-49.12%  diff=0.00%  [MATCH]  curr=+0.2900@2025-06-30  prior=+0.5700@2024-06-30
-         Q1 2025: eng=-36.67%  edgar=-36.67%  diff=0.00%  [MATCH]  curr=+0.1900@2025-03-31  prior=+0.3000@2024-03-31
-AMTB     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+124.48%  edgar=+124.48%  diff=0.00%  [MATCH]  curr=+0.3500@2025-09-30  prior=-1.4300@2024-09-30
-         Q2 2025: eng=+266.67%  edgar=+266.67%  diff=0.00%  [MATCH]  curr=+0.5500@2025-06-30  prior=+0.1500@2024-06-30
-         Q1 2025: eng=-9.68%  edgar=-9.68%  diff=0.00%  [MATCH]  curr=+0.2800@2025-03-31  prior=+0.3100@2024-03-31
-HTLD     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+8.33%  edgar=+8.33%  diff=0.00%  [MATCH]  curr=-0.1100@2025-09-30  prior=-0.1200@2024-09-30
-         Q2 2025: eng=-250.00%  edgar=-250.00%  diff=0.00%  [MATCH]  curr=-0.1400@2025-06-30  prior=-0.0400@2024-06-30
-         Q1 2025: eng=+5.26%  edgar=+5.26%  diff=0.00%  [MATCH]  curr=-0.1800@2025-03-31  prior=-0.1900@2024-03-31
-MCFT     MATCH        q=3  maxdiff=0.00%
-         Q2 2026: eng=-5.88%  edgar=-5.88%  diff=0.00%  [MATCH]  curr=+0.1600@2025-12-28  prior=+0.1700@2024-12-29
-         Q1 2026: eng=+170.97%  edgar=+170.97%  diff=0.00%  [MATCH]  curr=+0.2200@2025-09-28  prior=-0.3100@2024-09-29
-         Q4 2025: eng=+172.92%  edgar=+172.92%  diff=0.00%  [MATCH]  curr=+0.3500@2025-06-30  prior=-0.4800@2024-06-30
-UFCS     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+96.05%  edgar=+96.05%  diff=0.00%  [MATCH]  curr=+1.4900@2025-09-30  prior=+0.7600@2024-09-30
-         Q2 2025: eng=+890.91%  edgar=+890.91%  diff=0.00%  [MATCH]  curr=+0.8700@2025-06-30  prior=-0.1100@2024-06-30
-         Q1 2025: eng=+28.85%  edgar=+28.85%  diff=0.00%  [MATCH]  curr=+0.6700@2025-03-31  prior=+0.5200@2024-03-31
-VTOL     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+81.05%  edgar=+81.05%  diff=0.00%  [MATCH]  curr=+1.7200@2025-09-30  prior=+0.9500@2024-09-30
-         Q2 2025: eng=+11.46%  edgar=+11.46%  diff=0.00%  [MATCH]  curr=+1.0700@2025-06-30  prior=+0.9600@2024-06-30
-         Q1 2025: eng=+300.00%  edgar=+300.00%  diff=0.00%  [MATCH]  curr=+0.9200@2025-03-31  prior=+0.2300@2024-03-31
-FORM     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-16.67%  edgar=-16.67%  diff=0.00%  [MATCH]  curr=+0.2000@2025-09-27  prior=+0.2400@2024-09-28
-         Q2 2025: eng=-52.00%  edgar=-52.00%  diff=0.00%  [MATCH]  curr=+0.1200@2025-06-28  prior=+0.2500@2024-06-29
-         Q1 2025: eng=-71.43%  edgar=-71.43%  diff=0.00%  [MATCH]  curr=+0.0800@2025-03-29  prior=+0.2800@2024-03-30
-CRUS     MATCH        q=3  maxdiff=0.00%
-         Q3 2026: eng=+26.07%  edgar=+26.07%  diff=0.00%  [MATCH]  curr=+2.6600@2025-12-27  prior=+2.1100@2024-12-28
-         Q2 2026: eng=+35.52%  edgar=+35.52%  diff=0.00%  [MATCH]  curr=+2.4800@2025-09-27  prior=+1.8300@2024-09-28
-         Q1 2026: eng=+50.00%  edgar=+50.00%  diff=0.00%  [MATCH]  curr=+1.1400@2025-06-28  prior=+0.7600@2024-06-29
-CF       MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+41.29%  edgar=+41.29%  diff=0.00%  [MATCH]  curr=+2.1900@2025-09-30  prior=+1.5500@2024-09-30
-         Q2 2025: eng=+3.04%  edgar=+3.04%  diff=0.00%  [MATCH]  curr=+2.3700@2025-06-30  prior=+2.3000@2024-06-30
-         Q1 2025: eng=+79.61%  edgar=+79.61%  diff=0.00%  [MATCH]  curr=+1.8500@2025-03-31  prior=+1.0300@2024-03-31
-RPRX     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-44.63%  edgar=-44.63%  diff=0.00%  [MATCH]  curr=+0.6700@2025-09-30  prior=+1.2100@2024-09-30
-         Q2 2025: eng=-69.57%  edgar=-69.57%  diff=0.00%  [MATCH]  curr=+0.0700@2025-06-30  prior=+0.2300@2024-06-30
-         Q1 2025: eng=+5400.00%  edgar=+5400.00%  diff=0.00%  [MATCH]  curr=+0.5500@2025-03-31  prior=+0.0100@2024-03-31
-AVBP     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-36.07%  edgar=-36.07%  diff=0.00%  [MATCH]  curr=-0.8300@2025-09-30  prior=-0.6100@2024-09-30
-         Q2 2025: eng=-38.46%  edgar=-38.46%  diff=0.00%  [MATCH]  curr=-0.9000@2025-06-30  prior=-0.6500@2024-06-30
-         Q1 2025: eng=-171.43%  edgar=-171.43%  diff=0.00%  [MATCH]  curr=-1.9000@2025-03-31  prior=-0.7000@2024-03-31
-NWE      MATCH        q=3  maxdiff=0.00%
-         Q4 2025: eng=-45.04%  edgar=-45.04%  diff=0.00%  [MATCH]  curr=+0.7200@2025-12-31  prior=+1.3100@2024-12-31
-         Q3 2025: eng=-18.42%  edgar=-18.42%  diff=0.00%  [MATCH]  curr=+0.6200@2025-09-30  prior=+0.7600@2024-09-30
-         Q2 2025: eng=-32.69%  edgar=-32.69%  diff=0.00%  [MATCH]  curr=+0.3500@2025-06-30  prior=+0.5200@2024-06-30
-ATEX     MATCH        q=3  maxdiff=0.00%
-         Q3 2026: eng=-185.37%  edgar=-185.37%  diff=0.00%  [MATCH]  curr=-0.3500@2025-12-31  prior=+0.4100@2024-12-31
-         Q2 2026: eng=+514.49%  edgar=+514.49%  diff=0.00%  [MATCH]  curr=+2.8600@2025-09-30  prior=-0.6900@2024-09-30
-         Q1 2026: eng=+260.71%  edgar=+260.71%  diff=0.00%  [MATCH]  curr=+1.3500@2025-06-30  prior=-0.8400@2024-06-30
-NPKI     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+103.52%  edgar=+103.52%  diff=0.00%  [MATCH]  curr=+0.0700@2025-09-30  prior=-1.9900@2024-09-30
-         Q2 2025: eng=+11.11%  edgar=+11.11%  diff=0.00%  [MATCH]  curr=+0.1000@2025-06-30  prior=+0.0900@2024-06-30
-         Q1 2025: eng=+37.50%  edgar=+37.50%  diff=0.00%  [MATCH]  curr=+0.1100@2025-03-31  prior=+0.0800@2024-03-31
-EHAB     MATCH        q=2  maxdiff=0.00%
-         Q3 2025: eng=+110.00%  edgar=+110.00%  diff=0.00%  [MATCH]  curr=+0.2200@2025-09-30  prior=-2.2000@2024-09-30
-         Q1 2025: eng=+3400.00%  edgar=+3400.00%  diff=0.00%  [MATCH]  curr=+0.3500@2025-03-31  prior=+0.0100@2024-03-31
-ECG      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+35.37%  edgar=+35.37%  diff=0.00%  [MATCH]  curr=+1.1100@2025-09-30  prior=+0.8200@2024-09-30
-         Q2 2025: eng=+35.53%  edgar=+35.53%  diff=0.00%  [MATCH]  curr=+1.0300@2025-06-30  prior=+0.7600@2024-06-30
-         Q1 2025: eng=+30.91%  edgar=+30.91%  diff=0.00%  [MATCH]  curr=+0.7200@2025-03-31  prior=+0.5500@2024-03-31
-BKU      MATCH        q=3  maxdiff=0.00%
-         Q4 2025: eng=-1.10%  edgar=-1.10%  diff=0.00%  [MATCH]  curr=+0.9000@2025-12-31  prior=+0.9100@2024-12-31
-         Q3 2025: eng=+17.28%  edgar=+17.28%  diff=0.00%  [MATCH]  curr=+0.9500@2025-09-30  prior=+0.8100@2024-09-30
-         Q2 2025: eng=+26.39%  edgar=+26.39%  diff=0.00%  [MATCH]  curr=+0.9100@2025-06-30  prior=+0.7200@2024-06-30
-ITT      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-17.77%  edgar=-17.77%  diff=0.00%  [MATCH]  curr=+1.6200@2025-09-27  prior=+1.9700@2024-09-28
-         Q2 2025: eng=+4.83%  edgar=+4.83%  diff=0.00%  [MATCH]  curr=+1.5200@2025-06-28  prior=+1.4500@2024-06-29
-         Q1 2025: eng=-1.48%  edgar=-1.48%  diff=0.00%  [MATCH]  curr=+1.3300@2025-03-29  prior=+1.3500@2024-03-30
-PEB      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-254.17%  edgar=-254.17%  diff=0.00%  [MATCH]  curr=-0.3700@2025-09-30  prior=+0.2400@2024-09-30
-         Q2 2025: eng=-62.50%  edgar=-62.50%  diff=0.00%  [MATCH]  curr=+0.0600@2025-06-30  prior=+0.1600@2024-06-30
-         Q1 2025: eng=-15.62%  edgar=-15.62%  diff=0.00%  [MATCH]  curr=-0.3700@2025-03-31  prior=-0.3200@2024-03-31
-PLAB     MATCH        q=3  maxdiff=0.00%
-         Q2 2026: eng=+8.82%  edgar=+8.82%  diff=0.00%  [MATCH]  curr=+0.7400@2026-02-01  prior=+0.6800@2025-02-02
-         Q4 2025: eng=-29.09%  edgar=-29.09%  diff=0.00%  [MATCH]  curr=+0.3900@2025-08-03  prior=+0.5500@2024-07-28
-         Q3 2025: eng=-74.14%  edgar=-74.14%  diff=0.00%  [MATCH]  curr=+0.1500@2025-05-04  prior=+0.5800@2024-04-28
-DAL      MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=-218.92%  edgar=-218.92%  diff=0.00%  [MATCH]  curr=-0.4400@2026-03-31  prior=+0.3700@2025-03-31
-         Q3 2025: eng=+10.15%  edgar=+10.15%  diff=0.00%  [MATCH]  curr=+2.1700@2025-09-30  prior=+1.9700@2024-09-30
-         Q2 2025: eng=+62.69%  edgar=+62.69%  diff=0.00%  [MATCH]  curr=+3.2700@2025-06-30  prior=+2.0100@2024-06-30
-DLX      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+270.00%  edgar=+270.00%  diff=0.00%  [MATCH]  curr=+0.7400@2025-09-30  prior=+0.2000@2024-09-30
-         Q2 2025: eng=+8.70%  edgar=+8.70%  diff=0.00%  [MATCH]  curr=+0.5000@2025-06-30  prior=+0.4600@2024-06-30
-         Q1 2025: eng=+29.17%  edgar=+29.17%  diff=0.00%  [MATCH]  curr=+0.3100@2025-03-31  prior=+0.2400@2024-03-31
-STT      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+23.01%  edgar=+23.01%  diff=0.00%  [MATCH]  curr=+2.7800@2025-09-30  prior=+2.2600@2024-09-30
-         Q2 2025: eng=+0.93%  edgar=+0.93%  diff=0.00%  [MATCH]  curr=+2.1700@2025-06-30  prior=+2.1500@2024-06-30
-         Q1 2025: eng=+48.91%  edgar=+48.91%  diff=0.00%  [MATCH]  curr=+2.0400@2025-03-31  prior=+1.3700@2024-03-31
-ESOA     MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=+220.00%  edgar=+220.00%  diff=0.00%  [MATCH]  curr=+0.1600@2025-12-31  prior=+0.0500@2024-12-31
-         Q3 2025: eng=-88.68%  edgar=-88.68%  diff=0.00%  [MATCH]  curr=+0.1200@2025-06-30  prior=+1.0600@2024-06-30
-         Q2 2025: eng=-485.71%  edgar=-485.71%  diff=0.00%  [MATCH]  curr=-0.4100@2025-03-31  prior=-0.0700@2024-03-31
-FERG     MATCH        q=3  maxdiff=0.00%
-         Q4 2025: eng=+23.93%  edgar=+23.93%  diff=0.00%  [MATCH]  curr=+2.9000@2025-10-31  prior=+2.3400@2024-10-31
-         Q2 2025: eng=-5.05%  edgar=-5.05%  diff=0.00%  [MATCH]  curr=+2.0700@2025-04-30  prior=+2.1800@2024-04-30
-         Q1 2025: eng=-12.66%  edgar=-12.66%  diff=0.00%  [MATCH]  curr=+1.3800@2025-01-31  prior=+1.5800@2024-01-31
-AMPX     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+70.00%  edgar=+70.00%  diff=0.00%  [MATCH]  curr=-0.0300@2025-09-30  prior=-0.1000@2024-09-30
-         Q2 2025: eng=+61.54%  edgar=+61.54%  diff=0.00%  [MATCH]  curr=-0.0500@2025-06-30  prior=-0.1300@2024-06-30
-         Q1 2025: eng=+27.27%  edgar=+27.27%  diff=0.00%  [MATCH]  curr=-0.0800@2025-03-31  prior=-0.1100@2024-03-31
-CRI      MATCH        q=3  maxdiff=0.00%
-         Q3 2026: eng=-80.25%  edgar=-80.25%  diff=0.00%  [MATCH]  curr=+0.3200@2025-09-27  prior=+1.6200@2024-09-28
-         Q2 2026: eng=-98.68%  edgar=-98.68%  diff=0.00%  [MATCH]  curr=+0.0100@2025-06-28  prior=+0.7600@2024-06-29
-         Q1 2026: eng=-58.65%  edgar=-58.65%  diff=0.00%  [MATCH]  curr=+0.4300@2025-03-29  prior=+1.0400@2024-03-30
-HLIO     MATCH        q=3  maxdiff=0.00%
-         Q3 2026: eng=-8.82%  edgar=-8.82%  diff=0.00%  [MATCH]  curr=+0.3100@2025-09-27  prior=+0.3400@2024-09-28
-         Q2 2026: eng=-17.07%  edgar=-17.07%  diff=0.00%  [MATCH]  curr=+0.3400@2025-06-28  prior=+0.4100@2024-06-29
-         Q1 2026: eng=-21.43%  edgar=-21.43%  diff=0.00%  [MATCH]  curr=+0.2200@2025-03-29  prior=+0.2800@2024-03-30
-NTRS     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+3.15%  edgar=+3.15%  diff=0.00%  [MATCH]  curr=+2.2900@2025-09-30  prior=+2.2200@2024-09-30
-         Q2 2025: eng=-50.92%  edgar=-50.92%  diff=0.00%  [MATCH]  curr=+2.1300@2025-06-30  prior=+4.3400@2024-06-30
-         Q1 2025: eng=+97.92%  edgar=+97.92%  diff=0.00%  [MATCH]  curr=+1.9000@2025-03-31  prior=+0.9600@2024-03-31
-JBL      MATCH        q=3  maxdiff=0.00%
-         Q2 2026: eng=+96.23%  edgar=+96.23%  diff=0.00%  [MATCH]  curr=+2.0800@2026-02-28  prior=+1.0600@2025-02-28
-         Q1 2026: eng=+53.41%  edgar=+53.41%  diff=0.00%  [MATCH]  curr=+1.3500@2025-11-30  prior=+0.8800@2024-11-30
-         Q3 2025: eng=+91.51%  edgar=+91.51%  diff=0.00%  [MATCH]  curr=+2.0300@2025-05-31  prior=+1.0600@2024-05-31
-FET      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=-46.67%  edgar=-46.67%  diff=0.00%  [MATCH]  curr=-1.7600@2025-09-30  prior=-1.2000@2024-09-30
-         Q2 2025: eng=+212.96%  edgar=+212.96%  diff=0.00%  [MATCH]  curr=+0.6100@2025-06-30  prior=-0.5400@2024-06-30
-         Q1 2025: eng=+110.59%  edgar=+110.59%  diff=0.00%  [MATCH]  curr=+0.0900@2025-03-31  prior=-0.8500@2024-03-31
-BLBD     MATCH        q=3  maxdiff=0.00%
-         Q1 2026: eng=+9.30%  edgar=+9.30%  diff=0.00%  [MATCH]  curr=+0.9400@2025-12-27  prior=+0.8600@2024-12-28
-         Q3 2025: eng=+31.76%  edgar=+31.76%  diff=0.00%  [MATCH]  curr=+1.1200@2025-06-28  prior=+0.8500@2024-06-29
-         Q2 2025: eng=+0.00%  edgar=+0.00%  diff=0.00%  [MATCH]  curr=+0.7900@2025-03-29  prior=+0.7900@2024-03-30
-MU       MATCH        q=3  maxdiff=0.00%
-         Q2 2026: eng=+756.03%  edgar=+756.03%  diff=0.00%  [MATCH]  curr=+12.0700@2026-02-26  prior=+1.4100@2025-02-27
-         Q1 2026: eng=+175.45%  edgar=+175.45%  diff=0.00%  [MATCH]  curr=+4.6000@2025-11-27  prior=+1.6700@2024-11-28
-         Q3 2025: eng=+460.00%  edgar=+460.00%  diff=0.00%  [MATCH]  curr=+1.6800@2025-05-29  prior=+0.3000@2024-05-30
-FRST     MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+460.00%  edgar=+460.00%  diff=0.00%  [MATCH]  curr=+0.2800@2025-09-30  prior=+0.0500@2024-09-30
-         Q2 2025: eng=-28.57%  edgar=-28.57%  diff=0.00%  [MATCH]  curr=+0.1000@2025-06-30  prior=+0.1400@2024-06-30
-         Q1 2025: eng=+820.00%  edgar=+820.00%  diff=0.00%  [MATCH]  curr=+0.9200@2025-03-31  prior=+0.1000@2024-03-31
-NPO      MATCH        q=3  maxdiff=0.00%
-         Q3 2025: eng=+7.45%  edgar=+7.45%  diff=0.00%  [MATCH]  curr=+1.0100@2025-09-30  prior=+0.9400@2024-09-30
-         Q2 2025: eng=-1.57%  edgar=-1.57%  diff=0.00%  [MATCH]  curr=+1.2500@2025-06-30  prior=+1.2700@2024-06-30
-         Q1 2025: eng=+94.92%  edgar=+94.92%  diff=0.00%  [MATCH]  curr=+1.1500@2025-03-31  prior=+0.5900@2024-03-31
+         Q2 2025: eng=-42.82%  edgar=-42.86%  diff=0.04%  [MATCH]  curr=+1.1200@2025-06-30  prior=+1.9600@2024-06-30
+GEV      MATCH        q=1  maxdiff=0.01%
+         Q1 2026: engine null
+         Q3 2025: engine missing  edgar=+568.57%  (edgar curr=+1.6400@2025-09-30  prior=-0.3500@2024-09-30)
+         Q2 2025: eng=-59.99%  edgar=-60.00%  diff=0.01%  [MATCH]  curr=+1.8600@2025-06-30  prior=+4.6500@2024-06-30
+HP       INSUFFICIENT q=0  maxdiff=N/A
+         Q2 2026: engine null
+         Q1 2026: engine missing  edgar=-281.48%  (edgar curr=-0.9800@2025-12-31  prior=+0.5400@2024-12-31)
+         Q3 2025: engine missing  edgar=-286.36%  (edgar curr=-1.6400@2025-06-30  prior=+0.8800@2024-06-30)
+         no label overlap
+AUGO     INSUFFICIENT q=0  maxdiff=N/A
+         no EarningsPerShareDiluted/USD/shares data
 SGML     INSUFFICIENT q=0  maxdiff=N/A
          no EarningsPerShareDiluted/USD/shares data
 CRGY     INSUFFICIENT q=0  maxdiff=N/A
          no EarningsPerShareDiluted/USD/shares data
-SYRE     INSUFFICIENT q=0  maxdiff=N/A
-         engine: no EPS YoY data
-TK       INSUFFICIENT q=0  maxdiff=N/A
-         only 0 standalone quarters (need >=4)
-ECO      INSUFFICIENT q=0  maxdiff=N/A
-         no EarningsPerShareDiluted/USD/shares data
-NVGS     INSUFFICIENT q=0  maxdiff=N/A
-         only 0 standalone quarters (need >=4)
-NGL      INSUFFICIENT q=0  maxdiff=N/A
-         only 0 standalone quarters (need >=4)
-TSEM     INSUFFICIENT q=0  maxdiff=N/A
-         only 0 standalone quarters (need >=4)
-AUGO     ERROR        q=0  maxdiff=N/A
-         404 Client Error: Not Found for url: https://data.sec.gov/api/xbrl/companyfacts/CIK0001468642.json
+SRRK     ERROR        q=0  maxdiff=N/A
+         TypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'
+FITB     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+DXPE     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+SSSS     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+FANG     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+FIVE     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+CLDX     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+RL       ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+ZWS      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+TERN     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+MSGS     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+JBIO     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+RNG      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+NSA      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+DELL     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+DAR      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+DGII     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+SYRE     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+ODFL     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+MTW      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+SDRL     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+MATX     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+BWXT     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+NOV      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+AMTB     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+HTLD     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+MCFT     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+TK       ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+UFCS     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+VTOL     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+FORM     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+CRUS     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+CF       ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+RPRX     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+ECO      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+AVBP     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+NWE      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+ATEX     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+NPKI     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+EHAB     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+ECG      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+BKU      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+ITT      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+NVGS     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+PEB      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+PLAB     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+NGL      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+DAL      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+DLX      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+STT      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+ESOA     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+FERG     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+AMPX     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+CRI      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+HLIO     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+TSEM     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+NTRS     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+JBL      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+FET      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+BLBD     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+MU       ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+FRST     ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
+NPO      ERROR        q=0  maxdiff=N/A
+         UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
 ATRO     ERROR        q=0  maxdiff=N/A
          UnboundLocalError: cannot access local variable 'fy_end_month' where it is not associated with a value
 DSGN     ERROR        q=0  maxdiff=N/A

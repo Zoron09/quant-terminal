@@ -9,8 +9,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.sidebar import render_sidebar
 from utils.data_fetcher import get_financials
+st.set_page_config(page_title="Quant Terminal")
+st.stop()
 
-st.set_page_config(page_title="Growth & Margins · Quant Terminal", page_icon="📈", layout="wide")
 
 _css = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'styles', 'custom.css')
 if os.path.exists(_css):

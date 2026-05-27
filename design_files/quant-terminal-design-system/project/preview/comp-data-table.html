@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #070B12; font-family: 'DM Sans', sans-serif; padding: 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #111B2E; color: #475569; font-family: 'DM Sans', sans-serif; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; padding: 8px 12px; text-align: right; border-bottom: 1px solid #243650; white-space: nowrap; }
+  th:first-child { text-align: left; }
+  td { padding: 7px 12px; text-align: right; border-bottom: 1px solid #1A2640; font-family: 'JetBrains Mono', monospace; color: #EDF2F7; white-space: nowrap; }
+  td:first-child { text-align: left; font-family: 'DM Sans', sans-serif; color: #94A3B8; }
+  tr:hover td { background: #111B2E; }
+  .ticker-link { color: #3ECFCF; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+  .pos { color: #22C55E; }
+  .neg { color: #F43F5E; }
+  .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+  <table>
+    <thead>
+      <tr>
+        <th>Ticker</th>
+        <th>Price</th>
+        <th>Change</th>
+        <th>SEPA</th>
+        <th>Stage</th>
+        <th>RS Rank</th>
+        <th>Mkt Cap</th>
+        <th>Avg Vol</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="ticker-link">NVDA</span></td>
+        <td>$875.39</td>
+        <td class="pos">+2.84%</td>
+        <td><span class="badge" style="background:rgba(34,197,94,0.12);color:#22C55E;">87</span></td>
+        <td><span class="badge" style="background:rgba(62,207,207,0.12);color:#3ECFCF;">Stage 2</span></td>
+        <td>94</td>
+        <td>$2.16T</td>
+        <td>42.3M</td>
+      </tr>
+      <tr>
+        <td><span class="ticker-link">META</span></td>
+        <td>$512.40</td>
+        <td class="pos">+1.12%</td>
+        <td><span class="badge" style="background:rgba(34,197,94,0.12);color:#22C55E;">81</span></td>
+        <td><span class="badge" style="background:rgba(62,207,207,0.12);color:#3ECFCF;">Stage 2</span></td>
+        <td>89</td>
+        <td>$1.30T</td>
+        <td>18.7M</td>
+      </tr>
+      <tr>
+        <td><span class="ticker-link">MELI</span></td>
+        <td>$1,842.30</td>
+        <td class="neg">−0.83%</td>
+        <td><span class="badge" style="background:rgba(245,158,11,0.12);color:#F59E0B;">64</span></td>
+        <td><span class="badge" style="background:rgba(62,207,207,0.12);color:#3ECFCF;">Stage 2</span></td>
+        <td>76</td>
+        <td>$93.4B</td>
+        <td>312K</td>
+      </tr>
+      <tr>
+        <td><span class="ticker-link">SOFI</span></td>
+        <td>$8.24</td>
+        <td class="neg">−2.11%</td>
+        <td><span class="badge" style="background:rgba(244,63,94,0.12);color:#F43F5E;">32</span></td>
+        <td><span class="badge" style="background:rgba(244,63,94,0.12);color:#F43F5E;">Stage 4</span></td>
+        <td>28</td>
+        <td>$8.7B</td>
+        <td>22.1M</td>
+      </tr>
+    </tbody>
+  </table>
+</body>
+</html>

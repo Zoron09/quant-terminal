@@ -1,0 +1,1057 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Screener · Quant Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-base: #0E0E10;
+    --bg-surface: #161618;
+    --bg-raised: #1E1E22;
+    --bg-overlay: #242428;
+    --bg-sidebar: #0A0A0C;
+    --border-subtle: #27272A;
+    --border: #3F3F46;
+    --border-active: #D4A843;
+    --accent: #D4A843;
+    --accent-hover: #E0B84F;
+    --accent-dim: rgba(212,168,67,0.10);
+    --positive: #34D399;
+    --positive-bg: #052e1c;
+    --positive-border: #0f5132;
+    --negative: #F87171;
+    --warning: #FBBF24;
+    --warning-bg: #3d2c00;
+    --warning-border: #7c5500;
+    --fg-1: #FAFAFA;
+    --fg-2: #A1A1AA;
+    --fg-3: #52525B;
+    --font-display: 'DM Serif Display', Georgia, serif;
+    --font-ui: 'Inter', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
+    --t-fast: 150ms ease;
+    --t-normal: 250ms ease;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #050507; }
+  body {
+    color: var(--fg-1);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    position: relative;
+    background:
+      radial-gradient(ellipse 100% 80% at 50% 0%, #0A0A0C 0%, #050507 70%),
+      #050507;
+  }
+  /* Dot-grid HUD overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image: radial-gradient(rgba(255,255,255,0.6) 1px, transparent 1px);
+    background-size: 22px 22px;
+    background-position: 0 0;
+    opacity: 0.03;
+  }
+  /* Soft gold halo at the top */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background: radial-gradient(ellipse 60% 40% at 50% -10%, rgba(212,168,67,0.06), transparent 60%);
+  }
+  .nav, .page { position: relative; z-index: 1; }
+
+  ::selection { background: var(--accent-dim); color: var(--fg-1); }
+
+  /* Nav */
+  .nav {
+    height: 48px;
+    background: rgba(10,10,12,0.72);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    backdrop-filter: blur(20px) saturate(140%);
+    border-bottom: 1px solid rgba(212,168,67,0.20);
+    box-shadow: 0 1px 0 rgba(212,168,67,0.05), 0 12px 32px rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .nav-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-display);
+    font-size: 18px;
+    color: var(--fg-1);
+    letter-spacing: 0.01em;
+  }
+  .brand-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow:
+      0 0 0 3px rgba(212,168,67,0.12),
+      0 0 14px rgba(212,168,67,0.7);
+  }
+  .nav-items {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .nav-item {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg-2);
+    background: transparent;
+    border: none;
+    padding: 8px 14px;
+    cursor: pointer;
+    position: relative;
+    transition: color var(--t-fast);
+    letter-spacing: 0.01em;
+  }
+  .nav-item:hover { color: var(--fg-1); }
+  .nav-item.active { color: var(--fg-1); }
+  .nav-item.active::after {
+    content: '';
+    position: absolute;
+    left: 14px; right: 14px;
+    bottom: -14px;
+    height: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 12px rgba(212,168,67,0.6);
+  }
+
+  /* Page */
+  .page {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+
+  .page-title {
+    font-family: var(--font-display);
+    font-size: 32px;
+    color: var(--fg-1);
+    margin: 0 0 4px;
+    font-weight: 400;
+    line-height: 1.1;
+  }
+  .page-sub {
+    color: var(--fg-2);
+    font-size: 13px;
+    margin: 0 0 24px;
+    letter-spacing: 0.01em;
+  }
+
+  /* Upload */
+  .upload {
+    background: rgba(255,255,255,0.02);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(212,168,67,0.20);
+    border-radius: 12px;
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    transition: background var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast);
+    text-align: center;
+    box-shadow: 0 0 30px rgba(212,168,67,0.08), inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+  .upload:hover {
+    border-color: rgba(212,168,67,0.55);
+    box-shadow: 0 0 36px rgba(212,168,67,0.15), inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+  .upload.dragover {
+    border-color: rgba(212,168,67,0.85);
+    background: rgba(212,168,67,0.04);
+    box-shadow: 0 0 48px rgba(212,168,67,0.25), inset 0 1px 0 rgba(255,255,255,0.05);
+  }
+  .upload.loaded {
+    border-color: rgba(212,168,67,0.5);
+    box-shadow: 0 0 30px rgba(212,168,67,0.12), inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+  .upload-icon {
+    width: 32px; height: 32px;
+    color: var(--fg-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .upload.loaded .upload-icon { color: var(--accent); }
+  .upload-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--fg-1);
+  }
+  .upload-sub {
+    font-size: 12px;
+    color: var(--fg-3);
+    letter-spacing: 0.01em;
+  }
+  .upload-loaded-line {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .upload-loaded-line .sep { color: var(--fg-3); margin: 0 8px; }
+  .upload-replace {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* Run button + progress */
+  .run-row { margin-top: 16px; }
+  .run-btn {
+    width: 100%;
+    height: 44px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #D4A843 0%, #E8C060 100%);
+    color: #0E0E10;
+    font-family: var(--font-ui);
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.01em;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: box-shadow var(--t-fast), filter var(--t-fast), transform var(--t-fast);
+    box-shadow: 0 0 0 1px rgba(212,168,67,0.4), 0 8px 24px rgba(212,168,67,0.15);
+  }
+  .run-btn:hover:not(:disabled) {
+    filter: brightness(1.05);
+    box-shadow: 0 0 30px rgba(212,168,67,0.4), 0 0 0 1px rgba(212,168,67,0.6), 0 8px 32px rgba(212,168,67,0.25);
+  }
+  .run-btn:active:not(:disabled) { transform: translateY(1px); }
+  .run-btn:disabled {
+    background: rgba(255,255,255,0.04);
+    color: var(--fg-3);
+    cursor: not-allowed;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.06);
+  }
+  .progress-wrap {
+    width: 100%;
+    height: 44px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, rgba(52,211,153,0.6), #34D399);
+    box-shadow: 0 0 24px rgba(52,211,153,0.45);
+    transition: width 120ms linear;
+  }
+  .progress-label {
+    margin-top: 8px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg-2);
+    letter-spacing: 0.02em;
+  }
+
+  /* Summary strip */
+  .summary {
+    display: flex;
+    gap: 8px;
+    margin-top: 24px;
+    flex-wrap: wrap;
+  }
+  .pill-stat {
+    background: rgba(255,255,255,0.04);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-radius: 8px;
+    padding: 10px 20px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    border: 1px solid rgba(255,255,255,0.10);
+  }
+  .pill-stat .lbl {
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .pill-stat .val {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 16px;
+  }
+  .pill-stat.passed .val {
+    color: var(--positive);
+    text-shadow: 0 0 14px rgba(52,211,153,0.6);
+  }
+  .pill-stat.scanned .val { color: var(--fg-1); }
+  .pill-stat.insuf .val { color: var(--fg-3); }
+
+  /* Sort bar */
+  .sort-row {
+    margin-top: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .sort-label {
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-right: 4px;
+  }
+  .sort-pills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .sort-pill {
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg-2);
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 999px;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: color var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast), background var(--t-fast);
+    letter-spacing: 0.01em;
+  }
+  .sort-pill:hover { color: var(--fg-1); border-color: rgba(255,255,255,0.15); }
+  .sort-pill.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(212,168,67,0.08);
+    box-shadow: 0 0 10px rgba(212,168,67,0.3);
+  }
+  .results-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.02em;
+  }
+  .results-count strong { color: var(--fg-1); font-weight: 600; }
+
+  /* Grid */
+  .grid {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+  @media (max-width: 960px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } }
+
+  /* Card */
+  .card {
+    background: rgba(255,255,255,0.03);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    backdrop-filter: blur(12px) saturate(140%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: var(--tw-card-pad, 16px);
+    cursor: pointer;
+    transition: background var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast);
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: var(--tw-row-accent, 2px);
+  }
+  .card.green::before { background: var(--positive); box-shadow: 0 0 12px rgba(52,211,153,0.5); }
+  .card.yellow::before { background: var(--warning); box-shadow: 0 0 12px rgba(251,191,36,0.5); }
+  .card.green {
+    box-shadow:
+      0 0 24px rgba(52,211,153,0.08),
+      inset 0 1px 0 rgba(52,211,153,0.10);
+  }
+  .card.yellow {
+    box-shadow:
+      0 0 24px rgba(251,191,36,0.08),
+      inset 0 1px 0 rgba(251,191,36,0.10);
+  }
+  .card:hover {
+    background: rgba(255,255,255,0.05);
+    border-color: rgba(255,255,255,0.14);
+    transform: translateY(-1px);
+  }
+  .card.green:hover {
+    box-shadow:
+      0 0 36px rgba(52,211,153,0.16),
+      inset 0 1px 0 rgba(52,211,153,0.14);
+  }
+  .card.yellow:hover {
+    box-shadow:
+      0 0 36px rgba(251,191,36,0.16),
+      inset 0 1px 0 rgba(251,191,36,0.14);
+  }
+
+  .card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .ticker {
+    font-family: var(--font-display);
+    font-size: var(--tw-ticker-size, 20px);
+    font-weight: 400;
+    color: var(--fg-1);
+    line-height: 1.1;
+    letter-spacing: 0.01em;
+    text-shadow: 0 0 20px rgba(212,168,67,0.3);
+  }
+  .company {
+    font-size: 11px;
+    font-weight: 300;
+    color: var(--fg-3);
+    opacity: var(--tw-company-opacity, 0.85);
+    margin-top: 3px;
+    letter-spacing: 0.01em;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sector-pill {
+    background: var(--tw-sector-bg, #2D2D33);
+    border: 1px solid var(--tw-sector-border, #45454D);
+    color: var(--tw-sector-fg, #D4D4D8);
+    font-size: 10px;
+    font-weight: 500;
+    padding: 4px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .metrics {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: var(--tw-metric-gap, 8px);
+  }
+  .metric-row {
+    display: grid;
+    grid-template-columns: 70px 1fr;
+    align-items: center;
+    gap: 10px;
+  }
+  .metric-label {
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .quarters {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+  }
+  .quarters .q-old { color: var(--fg-3); }
+  .quarters .arrow {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+  }
+  .quarters .arrow.pos {
+    color: var(--positive);
+    text-shadow: 0 0 8px rgba(52,211,153,0.6);
+  }
+  .quarters .arrow.warn {
+    color: var(--warning);
+    text-shadow: 0 0 8px rgba(251,191,36,0.55);
+  }
+  .quarters .arrow.neg {
+    color: var(--negative);
+    text-shadow: 0 0 8px rgba(248,113,113,0.6);
+  }
+  .quarters .q-new {
+    color: var(--fg-1);
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .quarters .sep {
+    color: var(--fg-3);
+    opacity: 0.6;
+  }
+
+  .card-bottom {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-ui);
+    font-size: 10px;
+    font-weight: 500;
+    padding: 4px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid;
+  }
+  .status .dot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .status.green {
+    background: var(--positive-bg);
+    color: var(--positive);
+    border-color: var(--positive-border);
+    box-shadow: 0 0 12px rgba(52,211,153,0.4);
+  }
+  .status.yellow {
+    background: var(--warning-bg);
+    color: var(--warning);
+    border-color: var(--warning-border);
+    box-shadow: 0 0 12px rgba(251,191,36,0.4);
+  }
+  .mcap {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.01em;
+    margin-left: auto;
+    text-align: right;
+  }
+
+  /* Empty/loading helpers */
+  .pre-run-hint {
+    margin-top: 24px;
+    padding: 14px 16px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    color: var(--fg-2);
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .pre-run-hint .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--fg-3);
+  }
+
+  /* Hidden file input */
+  input[type="file"] { display: none; }
+
+  /* Icon resets */
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel" data-presets="env,react">
+    const { useState, useRef, useEffect, useMemo, useCallback } = React;
+
+    /* ─── Tweak defaults (host-rewritable) ───────────────────── */
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "companyOpacity": 0.85,
+      "sectorContrast": "med",
+      "density": "regular",
+      "accent": "#D4A843",
+      "showRowAccent": true
+    }/*EDITMODE-END*/;
+
+    const SECTOR_PRESETS = {
+      low:  { bg: '#242428', border: '#3F3F46', fg: '#A1A1AA' },
+      med:  { bg: '#2D2D33', border: '#45454D', fg: '#D4D4D8' },
+      high: { bg: '#3A3A42', border: '#55555F', fg: '#FAFAFA' },
+    };
+    const DENSITY = {
+      compact: { cardPad: 12, gap: 6, ticker: 18 },
+      regular: { cardPad: 16, gap: 8, ticker: 20 },
+      comfy:   { cardPad: 20, gap: 10, ticker: 22 },
+    };
+
+    /* ─── Lucide helper ──────────────────────────────────────── */
+    function Icon({ name, size = 16, stroke = 1.5, color = 'currentColor', style }) {
+      const ref = useRef(null);
+      useEffect(() => {
+        if (!ref.current || !window.lucide) return;
+        ref.current.innerHTML = '';
+        const node = window.lucide.createElement(window.lucide.icons[toPascal(name)] || window.lucide.icons.Circle);
+        node.setAttribute('width', size);
+        node.setAttribute('height', size);
+        node.setAttribute('stroke-width', stroke);
+        node.setAttribute('stroke', color);
+        ref.current.appendChild(node);
+      }, [name, size, stroke, color]);
+      return <span ref={ref} style={{ display: 'inline-flex', ...style }} />;
+    }
+    function toPascal(kebab) {
+      return kebab.split('-').map(s => s[0].toUpperCase() + s.slice(1)).join('');
+    }
+
+    /* ─── Mock Code 33 winners ───────────────────────────────── */
+    const WINNERS = [
+      {
+        ticker: 'AXON', company: 'Axon Enterprise, Inc.', sector: 'Technology',
+        mcap: '$27.0B',
+        eps: [30, 42, 85], rev: [31, 34, 33], margin: [18, 21, 18],
+        status: 'green',
+      },
+      {
+        ticker: 'ANET', company: 'Arista Networks, Inc.', sector: 'Technology',
+        mcap: '$96.4B',
+        eps: [38, 32, 30], rev: [16, 15, 19], margin: [52, 54, 53],
+        status: 'green',
+      },
+      {
+        ticker: 'LLY', company: 'Eli Lilly and Company', sector: 'Healthcare',
+        mcap: '$952.1B',
+        eps: [91, 479, 169], rev: [37, 53, 42], margin: [16, 21, 18],
+        status: 'green',
+      },
+      {
+        ticker: 'AMD', company: 'Advanced Micro Devices', sector: 'Technology',
+        mcap: '$151.3B',
+        eps: [230, 60, 92], rev: [35, 34, 37], margin: [13, 14, 13],
+        status: 'yellow',
+      },
+      {
+        ticker: 'ADI', company: 'Analog Devices, Inc.', sector: 'Technology',
+        mcap: '$175.2B',
+        eps: [-50, -36, -16], rev: [-22, -33, -24], margin: [16, 19, 16],
+        status: 'green',
+      },
+    ];
+
+    function fmtPct(n) {
+      if (n === null || n === undefined) return '—';
+      const s = n > 0 ? '+' : '';
+      return `${s}${n}%`;
+    }
+    function fmtMarg(n) {
+      return `${n}%`;
+    }
+
+    /* ─── Top nav ────────────────────────────────────────────── */
+    function TopNav() {
+      const items = [
+        { id: 'screener', label: 'Screener', active: true },
+        { id: 'overview', label: 'Overview' },
+        { id: 'portfolio', label: 'Portfolio' },
+      ];
+      return (
+        <nav className="nav">
+          <div className="nav-brand">
+            <span className="brand-dot" />
+            Quant Terminal
+          </div>
+          <div className="nav-items">
+            {items.map(it => (
+              <button key={it.id} className={`nav-item ${it.active ? 'active' : ''}`}>
+                {it.label}
+              </button>
+            ))}
+          </div>
+        </nav>
+      );
+    }
+
+    /* ─── Upload zone ────────────────────────────────────────── */
+    function UploadZone({ file, onFile }) {
+      const [drag, setDrag] = useState(false);
+      const inputRef = useRef(null);
+
+      const handleFiles = useCallback((fileList) => {
+        const f = fileList && fileList[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const text = String(e.target.result || '');
+          // Count tickers = non-empty data rows (skip header)
+          const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+          const tickers = Math.max(0, lines.length - 1);
+          onFile({ name: f.name, size: f.size, tickers: tickers || 529 });
+        };
+        reader.onerror = () => onFile({ name: f.name, size: f.size, tickers: 529 });
+        reader.readAsText(f);
+      }, [onFile]);
+
+      const onDrop = (e) => {
+        e.preventDefault();
+        setDrag(false);
+        handleFiles(e.dataTransfer.files);
+      };
+
+      // Allow demo without a real CSV
+      const simulate = (e) => {
+        e.stopPropagation();
+        onFile({ name: 'tradingview-export-2026-05-23.csv', size: 87543, tickers: 529, simulated: true });
+      };
+
+      return (
+        <div
+          className={`upload ${drag ? 'dragover' : ''} ${file ? 'loaded' : ''}`}
+          onClick={() => inputRef.current && inputRef.current.click()}
+          onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={onDrop}
+        >
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => handleFiles(e.target.files)}
+          />
+          <div className="upload-icon">
+            <Icon name={file ? 'file-check-2' : 'upload-cloud'} size={32} stroke={1.5} />
+          </div>
+          {!file ? (
+            <>
+              <div className="upload-title">Drop your TradingView CSV</div>
+              <div className="upload-sub">or click to browse · 500–600 tickers expected</div>
+              <div className="upload-sub" style={{ marginTop: 4 }}>
+                <a
+                  href="#"
+                  onClick={simulate}
+                  style={{ color: 'var(--fg-2)', textDecoration: 'underline', textDecorationColor: 'var(--border)' }}
+                >
+                  use sample data
+                </a>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="upload-loaded-line">
+                {file.name}
+                <span className="sep">·</span>
+                {file.tickers.toLocaleString()} tickers
+              </div>
+              <div className="upload-replace">click to replace</div>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    /* ─── Sort bar ───────────────────────────────────────────── */
+    const SORTS = [
+      { id: 'eps', label: 'EPS momentum' },
+      { id: 'rev', label: 'Revenue' },
+      { id: 'mcap', label: 'Market cap' },
+    ];
+
+    function SortBar({ sort, setSort, count }) {
+      return (
+        <div className="sort-row">
+          <div className="sort-pills">
+            <span className="sort-label">Sort</span>
+            {SORTS.map(s => (
+              <button
+                key={s.id}
+                className={`sort-pill ${sort === s.id ? 'active' : ''}`}
+                onClick={() => setSort(s.id)}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <div className="results-count">
+            <strong>{count}</strong> winners
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Metric row ─────────────────────────────────────────── */
+    function MetricRow({ label, values, formatter = fmtPct }) {
+      const [q1, q2, q3] = values;
+      const up = q3 >= q2;
+      // Tone: red ONLY when actual value is negative.
+      //       Amber when slowing (q3 < q2). Green when accelerating.
+      let tone;
+      if (q3 < 0) tone = 'neg';
+      else if (q3 < q2) tone = 'warn';
+      else tone = 'pos';
+      return (
+        <div className="metric-row">
+          <div className="metric-label">{label}</div>
+          <div className="quarters">
+            <span className="q-old">{formatter(q1)}</span>
+            <span className="sep">→</span>
+            <span className="q-old">{formatter(q2)}</span>
+            <span className={`arrow ${up ? 'up' : 'dn'} ${tone}`}>{up ? '↑' : '↓'}</span>
+            <span className="q-new">{formatter(q3)}</span>
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Card ───────────────────────────────────────────────── */
+    function WinnerCard({ w }) {
+      return (
+        <div className={`card ${w.status}`}>
+          <div className="card-top">
+            <div>
+              <div className="ticker">{w.ticker}</div>
+              <div className="company">{w.company}</div>
+            </div>
+            <div className="sector-pill">{w.sector}</div>
+          </div>
+
+          <div className="metrics">
+            <MetricRow label="EPS YoY" values={w.eps} />
+            <MetricRow label="Revenue YoY" values={w.rev} />
+            <MetricRow label="Net margin" values={w.margin} formatter={fmtMarg} />
+          </div>
+
+          <div className="card-bottom">
+            <span className={`status ${w.status}`}>
+              <span className="dot" />
+              {w.status === 'green' ? 'Green' : 'Yellow'}
+            </span>
+            <span className="mcap">{w.mcap}</span>
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── App ────────────────────────────────────────────────── */
+    function App() {
+      const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+      const [file, setFile] = useState(null);
+      const [phase, setPhase] = useState('idle'); // idle | running | done
+      const [progress, setProgress] = useState(0); // 0..1
+      const [scanned, setScanned] = useState(0);
+      const [sort, setSort] = useState('eps');
+
+      // Apply tweaks via CSS variables on :root
+      useEffect(() => {
+        const r = document.documentElement;
+        const sec = SECTOR_PRESETS[t.sectorContrast] || SECTOR_PRESETS.med;
+        const d = DENSITY[t.density] || DENSITY.regular;
+        r.style.setProperty('--accent', t.accent);
+        r.style.setProperty('--accent-dim', t.accent + '1a');
+        r.style.setProperty('--tw-company-opacity', t.companyOpacity);
+        r.style.setProperty('--tw-sector-bg', sec.bg);
+        r.style.setProperty('--tw-sector-border', sec.border);
+        r.style.setProperty('--tw-sector-fg', sec.fg);
+        r.style.setProperty('--tw-card-pad', d.cardPad + 'px');
+        r.style.setProperty('--tw-metric-gap', d.gap + 'px');
+        r.style.setProperty('--tw-ticker-size', d.ticker + 'px');
+        r.style.setProperty('--tw-row-accent', t.showRowAccent ? '2px' : '0px');
+      }, [t]);
+
+      const total = file ? file.tickers : 0;
+
+      // Run animation
+      useEffect(() => {
+        if (phase !== 'running') return;
+        const start = performance.now();
+        const dur = 2600; // ms
+        let raf;
+        const tick = (t) => {
+          const p = Math.min(1, (t - start) / dur);
+          setProgress(p);
+          setScanned(Math.floor(p * total));
+          if (p < 1) {
+            raf = requestAnimationFrame(tick);
+          } else {
+            setPhase('done');
+            setScanned(total);
+          }
+        };
+        raf = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(raf);
+      }, [phase, total]);
+
+      const onRun = () => {
+        if (!file) return;
+        setPhase('running');
+        setProgress(0);
+        setScanned(0);
+      };
+
+      const sorted = useMemo(() => {
+        const arr = [...WINNERS];
+        if (sort === 'eps') {
+          arr.sort((a, b) => b.eps[2] - a.eps[2]);
+        } else if (sort === 'rev') {
+          arr.sort((a, b) => b.rev[2] - a.rev[2]);
+        } else if (sort === 'mcap') {
+          const parse = (s) => {
+            const m = s.match(/([\d.]+)([BMK])/);
+            if (!m) return 0;
+            const n = parseFloat(m[1]);
+            return n * (m[2] === 'B' ? 1e9 : m[2] === 'M' ? 1e6 : 1e3);
+          };
+          arr.sort((a, b) => parse(b.mcap) - parse(a.mcap));
+        }
+        return arr;
+      }, [sort]);
+
+      // Compute summary numbers
+      const passed = WINNERS.length;
+      const insuf = file ? Math.round(total * 0.07) : 0; // ~7% insufficient
+
+      return (
+        <>
+          <TopNav />
+          <main className="page">
+            <h1 className="page-title">Screener</h1>
+            <p className="page-sub">Code 33 — EPS, revenue and margin acceleration over three quarters.</p>
+
+            <UploadZone
+              file={file}
+              onFile={(f) => { setFile(f); setPhase('idle'); setProgress(0); setScanned(0); }}
+            />
+
+            <div className="run-row">
+              {phase !== 'running' ? (
+                <button
+                  className="run-btn"
+                  disabled={!file}
+                  onClick={onRun}
+                >
+                  {phase === 'done' ? 'Re-run Code 33' : 'Run Code 33'}
+                  <Icon name="arrow-right" size={16} stroke={1.75} color="#0E0E10" />
+                </button>
+              ) : (
+                <>
+                  <div className="progress-wrap">
+                    <div className="progress-fill" style={{ width: `${progress * 100}%` }} />
+                  </div>
+                  <div className="progress-label">
+                    Analysing {scanned.toLocaleString()} of {total.toLocaleString()}...
+                  </div>
+                </>
+              )}
+            </div>
+
+            {phase === 'done' && (
+              <div className="summary">
+                <div className="pill-stat scanned">
+                  <span className="lbl">Scanned</span>
+                  <span className="val">{total.toLocaleString()}</span>
+                </div>
+                <div className="pill-stat passed">
+                  <span className="lbl">Passed</span>
+                  <span className="val">{passed}</span>
+                </div>
+                <div className="pill-stat insuf">
+                  <span className="lbl">Insufficient data</span>
+                  <span className="val">{insuf}</span>
+                </div>
+              </div>
+            )}
+
+            {phase === 'idle' && !file && (
+              <div className="pre-run-hint">
+                <span className="dot" />
+                Waiting for CSV — export Symbol, Description, Sector, EPS &amp; Revenue growth columns from TradingView.
+              </div>
+            )}
+
+            {phase === 'done' && (
+              <>
+                <SortBar sort={sort} setSort={setSort} count={sorted.length} />
+                <div className="grid">
+                  {sorted.map(w => <WinnerCard key={w.ticker} w={w} />)}
+                </div>
+              </>
+            )}
+          </main>
+
+          <TweaksPanel>
+            <TweakSection label="Card" />
+            <TweakRadio
+              label="Density"
+              value={t.density}
+              options={['compact','regular','comfy']}
+              onChange={(v) => setTweak('density', v)}
+            />
+            <TweakToggle
+              label="Left accent bar"
+              value={t.showRowAccent}
+              onChange={(v) => setTweak('showRowAccent', v)}
+            />
+            <TweakSection label="Typography" />
+            <TweakSlider
+              label="Company name opacity"
+              value={t.companyOpacity}
+              min={0.3} max={1} step={0.05}
+              onChange={(v) => setTweak('companyOpacity', v)}
+            />
+            <TweakSection label="Sector pill" />
+            <TweakRadio
+              label="Contrast"
+              value={t.sectorContrast}
+              options={['low','med','high']}
+              onChange={(v) => setTweak('sectorContrast', v)}
+            />
+            <TweakSection label="Theme" />
+            <TweakColor
+              label="Accent"
+              value={t.accent}
+              options={['#D4A843', '#5B8EFF', '#34D399', '#F87171']}
+              onChange={(v) => setTweak('accent', v)}
+            />
+          </TweaksPanel>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

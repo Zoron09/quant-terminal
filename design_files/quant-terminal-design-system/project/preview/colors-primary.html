@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0B0B0D; font-family:'Inter',sans-serif; padding:24px; }
+  .cap { font-size:10px; font-weight:600; letter-spacing:0.09em; text-transform:uppercase; color:#44444F; margin-bottom:10px; }
+  .group { margin-bottom:22px; }
+  .swatches { display:flex; gap:6px; }
+  .swatch { flex:1; border-radius:8px; padding:12px; display:flex; flex-direction:column; justify-content:flex-end; min-height:72px; }
+  .swatch-name { font-size:12px; font-weight:600; margin-bottom:2px; }
+  .swatch-token { font-family:'IBM Plex Mono',monospace; font-size:10px; opacity:0.5; }
+</style>
+</head>
+<body>
+
+  <div class="group">
+    <div class="cap">Background Scale</div>
+    <div class="swatches">
+      <div class="swatch" style="background:#0B0B0D;border:1px solid #222228;">
+        <div class="swatch-name" style="color:#EFEFEF;">Base</div>
+        <div class="swatch-token" style="color:#EFEFEF;">--bg · #0B0B0D</div>
+      </div>
+      <div class="swatch" style="background:#131316;border:1px solid #222228;">
+        <div class="swatch-name" style="color:#EFEFEF;">Surface</div>
+        <div class="swatch-token" style="color:#EFEFEF;">--surface · #131316</div>
+      </div>
+      <div class="swatch" style="background:#1A1A1F;border:1px solid #222228;">
+        <div class="swatch-name" style="color:#EFEFEF;">Raised</div>
+        <div class="swatch-token" style="color:#EFEFEF;">--raised · #1A1A1F</div>
+      </div>
+      <div class="swatch" style="background:#222229;border:1px solid #2E2E38;">
+        <div class="swatch-name" style="color:#EFEFEF;">High</div>
+        <div class="swatch-token" style="color:#EFEFEF;">--hi · #222229</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="cap">Accent — Electric Lime (used sparingly)</div>
+    <div class="swatches">
+      <div class="swatch" style="background:#C8FF57;min-height:60px;">
+        <div class="swatch-name" style="color:#0B0B0D;">Accent</div>
+        <div class="swatch-token" style="color:#0B0B0D;">--accent · #C8FF57</div>
+      </div>
+      <div class="swatch" style="background:rgba(200,255,87,0.08);border:1px solid rgba(200,255,87,0.2);min-height:60px;">
+        <div class="swatch-name" style="color:#C8FF57;">Accent Dim</div>
+        <div class="swatch-token" style="color:#C8FF57;">--accent-dim</div>
+      </div>
+      <div class="swatch" style="background:#0B0B0D;border:1px solid rgba(200,255,87,0.3);min-height:60px;">
+        <div class="swatch-name" style="color:#C8FF57;">Accent Border</div>
+        <div class="swatch-token" style="color:#C8FF57;">rgba(200,255,87,0.3)</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="cap">Semantic</div>
+    <div class="swatches">
+      <div class="swatch" style="background:#4ADE80;min-height:56px;">
+        <div class="swatch-name" style="color:#0B0B0D;">Positive</div>
+        <div class="swatch-token" style="color:#0B0B0D;">--pos · #4ADE80</div>
+      </div>
+      <div class="swatch" style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);min-height:56px;">
+        <div class="swatch-name" style="color:#4ADE80;">Pos Dim</div>
+        <div class="swatch-token" style="color:#4ADE80;">--pos-dim</div>
+      </div>
+      <div class="swatch" style="background:#F87171;min-height:56px;">
+        <div class="swatch-name" style="color:#0B0B0D;">Negative</div>
+        <div class="swatch-token" style="color:#0B0B0D;">--neg · #F87171</div>
+      </div>
+      <div class="swatch" style="background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.2);min-height:56px;">
+        <div class="swatch-name" style="color:#F87171;">Neg Dim</div>
+        <div class="swatch-token" style="color:#F87171;">--neg-dim</div>
+      </div>
+      <div class="swatch" style="background:#FCD34D;min-height:56px;">
+        <div class="swatch-name" style="color:#0B0B0D;">Warning</div>
+        <div class="swatch-token" style="color:#0B0B0D;">--warn · #FCD34D</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="cap">Text Scale</div>
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#131316;border-radius:6px;">
+        <span style="font-size:14px;color:#EFEFEF;">Primary text — values and headings</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#44444F;">--fg1 · #EFEFEF</span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#131316;border-radius:6px;">
+        <span style="font-size:14px;color:#8888A0;">Secondary — labels, captions</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#44444F;">--fg2 · #8888A0</span>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#131316;border-radius:6px;">
+        <span style="font-size:14px;color:#44444F;">Muted — section headers, caps</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#44444F;">--fg3 · #44444F</span>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

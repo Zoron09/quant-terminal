@@ -1,0 +1,999 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AMD · Overview · Quant Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-base: #0E0E10;
+    --bg-nav: #0A0A0C;
+    --bg-panel: #1A1A1E;
+    --bg-card: #141416;
+    --bg-row-alt: #0E0E10;
+    --border-subtle: #1F1F23;
+    --border: #2A2A2E;
+    --accent: #D4A843;
+    --accent-hover: #E0B84F;
+    --accent-bg-soft: #1F1A0E;
+    --positive: #34D399;
+    --positive-bg: #052e1c;
+    --positive-border: #0f5132;
+    --negative: #F87171;
+    --warning: #FBBF24;
+    --fg-1: #FAFAFA;
+    --fg-2: #71717A;
+    --fg-3: #3F3F46;
+    --font-display: 'DM Serif Display', Georgia, serif;
+    --font-ui: 'Inter', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
+    --t-fast: 150ms ease;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    color: var(--fg-1);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(212,168,67,0.08) 0%, transparent 70%),
+      var(--bg-base);
+    background-attachment: fixed;
+  }
+
+  ::selection { background: rgba(212,168,67,0.18); color: var(--fg-1); }
+
+  /* ─── NAV ─────────────────────────────────────────── */
+  .nav {
+    height: 48px;
+    background: var(--bg-nav);
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px;
+    position: sticky; top: 0; z-index: 50;
+  }
+  .nav-brand {
+    display: flex; align-items: center; gap: 12px;
+    font-family: var(--font-display); font-size: 18px; color: var(--fg-1);
+  }
+  .brand-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(212,168,67,0.12), 0 0 12px rgba(212,168,67,0.6);
+  }
+  .nav-items { display: flex; align-items: center; gap: 4px; }
+  .nav-item {
+    font-size: 13px; font-weight: 500; color: var(--fg-2);
+    background: transparent; border: none;
+    padding: 8px 14px; cursor: pointer; position: relative;
+    transition: color var(--t-fast);
+  }
+  .nav-item:hover { color: var(--fg-1); }
+  .nav-item.active { color: var(--fg-1); }
+  .nav-item.active::after {
+    content: '';
+    position: absolute; left: 14px; right: 14px; bottom: -14px;
+    height: 2px; background: var(--accent);
+    box-shadow: 0 0 12px rgba(212,168,67,0.5);
+  }
+
+  /* ─── IDENTITY BAR ────────────────────────────────── */
+  .identity {
+    background: var(--bg-nav);
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 18px 24px;
+    position: sticky; top: 48px; z-index: 40;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 20px; flex-wrap: wrap;
+  }
+  .ident-left { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .ident-name {
+    font-family: var(--font-display);
+    font-size: 28px; font-weight: 400;
+    color: var(--fg-1);
+    line-height: 1.1; letter-spacing: 0.01em;
+  }
+  .ident-meta {
+    font-size: 12px; color: var(--fg-2);
+    display: flex; align-items: center; gap: 8px;
+    letter-spacing: 0.02em;
+  }
+  .ident-meta .sep { color: var(--fg-3); }
+
+  .ident-right {
+    display: flex; align-items: center; gap: 16px;
+  }
+  .ident-price-block {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  }
+  .ident-price {
+    font-family: var(--font-mono);
+    font-size: 32px; font-weight: 600;
+    color: var(--fg-1);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .ident-change {
+    font-family: var(--font-mono);
+    font-size: 14px; font-weight: 500;
+    color: var(--positive);
+    letter-spacing: 0.01em;
+  }
+  .ident-change.down { color: var(--negative); }
+
+  .code33-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--positive-bg);
+    border: 1px solid var(--positive);
+    color: var(--positive);
+    font-family: var(--font-ui);
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    padding: 6px 14px;
+    border-radius: 6px;
+    box-shadow: 0 0 14px rgba(52,211,153,0.30);
+    white-space: nowrap;
+  }
+  .code33-badge .dot {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+  }
+
+  /* ─── PAGE ────────────────────────────────────────── */
+  .page {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 24px 24px 80px;
+  }
+
+  /* ─── SHARED SECTION ──────────────────────────────── */
+  .section { margin-top: 32px; }
+  .section:first-child { margin-top: 0; }
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .section-label {
+    font-family: var(--font-ui);
+    font-size: 11px; font-weight: 500;
+    color: var(--fg-2);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    display: inline-flex; align-items: center; gap: 10px;
+    padding-bottom: 4px;
+  }
+  .section-label::after {
+    content: '';
+    display: block;
+    width: 40px; height: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 8px rgba(212,168,67,0.4);
+  }
+
+  /* ─── CHART ───────────────────────────────────────── */
+  .chart-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px 12px;
+    position: relative;
+  }
+  .chart-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .chart-title {
+    font-size: 11px; color: var(--fg-2);
+    letter-spacing: 0.14em; text-transform: uppercase;
+    font-weight: 500;
+  }
+  .timeframes { display: flex; gap: 2px; }
+  .tf-btn {
+    font-family: var(--font-ui);
+    font-size: 12px; font-weight: 500;
+    color: var(--fg-2);
+    background: transparent; border: none;
+    padding: 6px 10px; cursor: pointer;
+    transition: color var(--t-fast);
+    position: relative;
+  }
+  .tf-btn:hover { color: var(--fg-1); }
+  .tf-btn.active { color: var(--accent); }
+  .tf-btn.active::after {
+    content: '';
+    position: absolute; left: 10px; right: 10px; bottom: -2px;
+    height: 1px; background: var(--accent);
+  }
+  .chart-svg-wrap {
+    height: 200px;
+    position: relative;
+  }
+  .chart-svg-wrap svg { width: 100%; height: 100%; }
+
+  /* ─── KEY STATS ───────────────────────────────────── */
+  .stats-grid {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px;
+  }
+  @media (max-width: 1000px) { .stats-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 560px)  { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stat-pill {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-lbl {
+    font-size: 10px; font-weight: 500;
+    color: var(--fg-2);
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+  }
+  .stat-val {
+    font-family: var(--font-mono);
+    font-size: 15px; font-weight: 600;
+    color: var(--fg-1);
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ─── FINANCIALS ──────────────────────────────────── */
+  .tabs {
+    display: flex; gap: 2px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+  }
+  .tab {
+    font-family: var(--font-ui);
+    font-size: 13px; font-weight: 500;
+    color: var(--fg-2);
+    background: transparent; border: none;
+    padding: 10px 16px;
+    cursor: pointer;
+    transition: color var(--t-fast);
+    position: relative;
+    margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--fg-1); }
+  .tab.active { color: var(--accent); }
+  .tab.active::after {
+    content: '';
+    position: absolute; left: 0; right: 0; bottom: -1px;
+    height: 1px; background: var(--accent);
+  }
+
+  .table-wrap {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: auto;
+  }
+  table.fin {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 880px;
+  }
+  table.fin th,
+  table.fin td {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  table.fin thead th {
+    background: var(--bg-nav);
+    font-family: var(--font-ui);
+    font-size: 11px; font-weight: 500;
+    color: var(--fg-2);
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    text-align: right;
+    white-space: nowrap;
+    position: sticky; top: 0;
+  }
+  table.fin thead th:first-child { text-align: left; }
+  table.fin tbody tr:nth-child(odd)  { background: var(--bg-card); }
+  table.fin tbody tr:nth-child(even) { background: var(--bg-row-alt); }
+  table.fin tbody tr:hover { background: rgba(255,255,255,0.02); }
+  table.fin tbody tr:last-child td { border-bottom: none; }
+
+  td.metric {
+    font-family: var(--font-ui);
+    font-size: 13px; font-weight: 500;
+    color: var(--fg-1);
+    text-align: left;
+    white-space: nowrap;
+  }
+  td.num {
+    font-family: var(--font-mono);
+    font-size: 13px; font-weight: 500;
+    color: var(--fg-1);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  /* YoY rows */
+  tr.yoy td.metric {
+    color: var(--fg-2);
+    font-weight: 400;
+    padding-left: 26px;
+    font-size: 12px;
+  }
+  tr.yoy td.num {
+    font-size: 11px;
+    font-weight: 500;
+  }
+  tr.yoy td.num.pos { color: var(--positive); }
+  tr.yoy td.num.neg { color: var(--negative); }
+  tr.yoy td.num.mut { color: var(--fg-3); }
+
+  /* ─── LIVE NEWS ───────────────────────────────────── */
+  .news-head { display: flex; align-items: center; gap: 12px; }
+  .live-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-ui);
+    font-size: 10px; font-weight: 600;
+    color: var(--positive);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+  .live-pill .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--positive);
+    box-shadow: 0 0 8px var(--positive);
+    animation: pulse-live 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse-live {
+    0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--positive); }
+    50%      { opacity: 0.35; box-shadow: 0 0 14px var(--positive); }
+  }
+  .news-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+  @media (max-width: 920px) { .news-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .news-grid { grid-template-columns: 1fr; } }
+  .news-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: background var(--t-fast), border-color var(--t-fast);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .news-card:hover { background: #18181C; border-color: #34343A; }
+  .news-meta {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 11px;
+    color: var(--fg-2);
+  }
+  .news-time {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-2);
+  }
+  .news-src { letter-spacing: 0.01em; }
+  .news-meta .sep { color: var(--fg-3); }
+  .news-headline {
+    font-size: 13px; font-weight: 500;
+    color: var(--fg-1);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* ─── BOTTOM ROW ─────────────────────────────────── */
+  .bottom-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 920px) { .bottom-row { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .panel-label {
+    font-family: var(--font-ui);
+    font-size: 11px; font-weight: 500;
+    color: var(--fg-2);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .panel-label::after {
+    content: '';
+    display: block;
+    width: 28px; height: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 8px rgba(212,168,67,0.4);
+  }
+
+  /* Ownership */
+  .holder-row {
+    display: grid;
+    grid-template-columns: 140px 1fr 56px;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .holder-row:last-of-type { border-bottom: none; }
+  .holder-name {
+    font-size: 12px;
+    color: var(--fg-1);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .holder-bar {
+    position: relative;
+    height: 6px;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .holder-bar-fill {
+    position: absolute; inset: 0;
+    background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+    box-shadow: 0 0 10px rgba(212,168,67,0.35);
+    border-radius: 999px;
+    width: var(--w, 0%);
+  }
+  .holder-pct {
+    font-family: var(--font-mono);
+    font-size: 12px; font-weight: 500;
+    color: var(--fg-1);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .insider-block {
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .insider-block .panel-label { margin-bottom: 10px; }
+  .insider-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 4px 0;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 14px;
+    transition: border-color var(--t-fast), background var(--t-fast);
+  }
+  .insider-card:hover { background: #18181C; border-color: #34343A; }
+  .ins-left { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ins-name {
+    font-family: var(--font-ui);
+    font-size: 13px; font-weight: 500;
+    color: var(--fg-1);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ins-meta {
+    font-size: 11px;
+    color: var(--fg-2);
+    display: inline-flex; align-items: baseline; gap: 6px;
+    letter-spacing: 0.01em;
+  }
+  .ins-meta .ins-role { font-family: var(--font-ui); }
+  .ins-meta .ins-date {
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .ins-meta .sep { color: var(--fg-3); }
+  .ins-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+  .side-pill {
+    font-family: var(--font-ui);
+    font-size: 9px; font-weight: 600;
+    letter-spacing: 0.14em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid;
+    text-transform: uppercase;
+    line-height: 1.4;
+  }
+  .side-pill.sell {
+    background: rgba(248,113,113,0.10);
+    border-color: rgba(248,113,113,0.30);
+    color: var(--negative);
+  }
+  .side-pill.buy {
+    background: rgba(52,211,153,0.10);
+    border-color: rgba(52,211,153,0.30);
+    color: var(--positive);
+  }
+  .ins-amount {
+    font-family: var(--font-mono);
+    font-size: 14px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .ins-amount.sell { color: var(--negative); }
+  .ins-amount.buy  { color: var(--positive); }
+
+  /* Peers */
+  table.peers {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  table.peers th, table.peers td {
+    padding: 11px 8px;
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  table.peers th {
+    font-family: var(--font-ui);
+    font-size: 10px; font-weight: 500;
+    color: var(--fg-2);
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+  }
+  table.peers th:first-child, table.peers td.tk {
+    text-align: left;
+    padding-left: 14px;
+  }
+  table.peers td.tk {
+    font-family: var(--font-display);
+    font-size: 15px;
+    color: var(--fg-1);
+    font-weight: 400;
+  }
+  table.peers td.pos { color: var(--positive); }
+  table.peers td.neg { color: var(--negative); }
+  table.peers td.neutral { color: var(--fg-1); }
+  table.peers tr.self {
+    background: var(--accent-bg-soft);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  table.peers tr.self td.tk { color: var(--accent); }
+  table.peers tr:last-child td { border-bottom: none; }
+  table.peers tr:hover:not(.self) { background: rgba(255,255,255,0.02); }
+
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <script type="text/babel" data-presets="env,react">
+    const { useState, useRef, useEffect, useMemo } = React;
+
+    /* ─── Icon helper ─────────────────────────────────────── */
+    function Icon({ name, size = 16, stroke = 1.5, color = 'currentColor' }) {
+      const ref = useRef(null);
+      useEffect(() => {
+        if (!ref.current || !window.lucide) return;
+        ref.current.innerHTML = '';
+        const node = window.lucide.createElement(window.lucide.icons[toPascal(name)] || window.lucide.icons.Circle);
+        node.setAttribute('width', size);
+        node.setAttribute('height', size);
+        node.setAttribute('stroke-width', stroke);
+        node.setAttribute('stroke', color);
+        ref.current.appendChild(node);
+      }, [name, size, stroke, color]);
+      return <span ref={ref} style={{ display: 'inline-flex' }} />;
+    }
+    const toPascal = (k) => k.split('-').map(s => s[0].toUpperCase() + s.slice(1)).join('');
+
+    /* ─── Top nav ─────────────────────────────────────────── */
+    function TopNav() {
+      const items = [
+        { id: 'screener',  label: 'Screener' },
+        { id: 'overview',  label: 'Overview', active: true },
+        { id: 'portfolio', label: 'Portfolio' },
+      ];
+      return (
+        <nav className="nav">
+          <div className="nav-brand">
+            <span className="brand-dot" />
+            Quant Terminal
+          </div>
+          <div className="nav-items">
+            {items.map(it => (
+              <button key={it.id} className={`nav-item ${it.active ? 'active' : ''}`}>
+                {it.label}
+              </button>
+            ))}
+          </div>
+        </nav>
+      );
+    }
+
+    /* ─── Identity bar ────────────────────────────────────── */
+    function IdentityBar() {
+      return (
+        <section className="identity">
+          <div className="ident-left">
+            <div className="ident-name">Advanced Micro Devices</div>
+            <div className="ident-meta">
+              <span>AMD</span><span className="sep">·</span>
+              <span>Nasdaq</span><span className="sep">·</span>
+              <span>USD</span>
+            </div>
+          </div>
+          <div className="ident-right">
+            <div className="ident-price-block">
+              <div className="ident-price">$467.51</div>
+              <div className="ident-change">+17.92 (+3.99%)</div>
+            </div>
+            <span className="code33-badge">
+              <span className="dot" />
+              Code 33 Green
+            </span>
+          </div>
+        </section>
+      );
+    }
+
+    /* ─── Chart ───────────────────────────────────────────── */
+    const TFS = ['1D', '1W', '1M', '3M', '1Y'];
+
+    // AMD-ish price walk — low-left to high-right with volatility
+    function generatePath(tf, w, h) {
+      const samples = tf === '1D' ? 78 : tf === '1W' ? 84 : tf === '1M' ? 90 : tf === '3M' ? 96 : 120;
+      // Seeded pseudo-random so the curve is stable per timeframe
+      let seed = { '1D': 11, '1W': 23, '1M': 47, '3M': 71, '1Y': 113 }[tf] || 47;
+      const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+      const trend = tf === '1D' ? 0.3 : tf === '1W' ? 0.4 : tf === '1M' ? 0.55 : tf === '3M' ? 0.70 : 0.85;
+      const noise = tf === '1D' ? 0.08 : 0.14;
+      const pts = [];
+      let y = 0.85; // start low (high y in svg coords)
+      for (let i = 0; i < samples; i++) {
+        const t = i / (samples - 1);
+        // pull toward (1 - trend)
+        const target = 0.85 - trend * t;
+        y = y * 0.85 + target * 0.15 + (rnd() - 0.5) * noise * 0.4;
+        // clamp
+        y = Math.max(0.05, Math.min(0.95, y));
+        pts.push([t, y]);
+      }
+      const padL = 8, padR = 8, padT = 8, padB = 14;
+      const X = (t) => padL + t * (w - padL - padR);
+      const Y = (v) => padT + v * (h - padT - padB);
+      const linePts = pts.map(([t, v]) => `${X(t).toFixed(1)},${Y(v).toFixed(1)}`);
+      const lineD = 'M' + linePts.join(' L');
+      const areaD = `M${X(0).toFixed(1)},${(h - padB).toFixed(1)} L` + linePts.join(' L') + ` L${X(1).toFixed(1)},${(h - padB).toFixed(1)} Z`;
+      const lastX = X(1), lastY = Y(pts[pts.length - 1][1]);
+      return { lineD, areaD, lastX, lastY };
+    }
+
+    function ChartPanel() {
+      const [tf, setTf] = useState('3M');
+      const wrapRef = useRef(null);
+      const [size, setSize] = useState({ w: 800, h: 200 });
+
+      useEffect(() => {
+        if (!wrapRef.current) return;
+        const ro = new ResizeObserver(entries => {
+          for (const e of entries) {
+            setSize({ w: Math.max(200, e.contentRect.width), h: 200 });
+          }
+        });
+        ro.observe(wrapRef.current);
+        return () => ro.disconnect();
+      }, []);
+
+      const path = useMemo(() => generatePath(tf, size.w, size.h), [tf, size.w, size.h]);
+
+      return (
+        <div className="chart-panel">
+          <div className="chart-head">
+            <span className="chart-title">Price · {tf}</span>
+            <div className="timeframes">
+              {TFS.map(t => (
+                <button key={t} className={`tf-btn ${tf === t ? 'active' : ''}`} onClick={() => setTf(t)}>
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="chart-svg-wrap" ref={wrapRef}>
+            <svg viewBox={`0 0 ${size.w} ${size.h}`} preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="g-area" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%"   stopColor="#34D399" stopOpacity="0.18" />
+                  <stop offset="100%" stopColor="#34D399" stopOpacity="0" />
+                </linearGradient>
+                {/* Horizontal grid */}
+              </defs>
+              {/* faint grid */}
+              {[0.25, 0.5, 0.75].map((p, i) => (
+                <line key={i}
+                  x1="0" x2={size.w}
+                  y1={size.h * p} y2={size.h * p}
+                  stroke="#2A2A2E" strokeWidth="1" strokeDasharray="2 4"
+                  opacity="0.5"
+                />
+              ))}
+              <path d={path.areaD} fill="url(#g-area)" />
+              <path d={path.lineD} fill="none" stroke="#34D399" strokeWidth="2"
+                strokeLinejoin="round" strokeLinecap="round"
+                style={{ filter: 'drop-shadow(0 0 6px rgba(52,211,153,0.45))' }}
+              />
+              {/* last point */}
+              <circle cx={path.lastX} cy={path.lastY} r="4" fill="#34D399" />
+              <circle cx={path.lastX} cy={path.lastY} r="8" fill="#34D399" opacity="0.18" />
+            </svg>
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Key stats ──────────────────────────────────────── */
+    const KEY_STATS = [
+      ['Market cap', '$151.3B'],
+      ['P/E ratio', '47.2x'],
+      ['Revenue TTM', '$37.4B'],
+      ['52w high', '$187.28'],
+      ['52w low', '$76.32'],
+      ['Avg vol', '43.2M'],
+    ];
+    function KeyStats() {
+      return (
+        <div className="stats-grid">
+          {KEY_STATS.map(([lbl, val]) => (
+            <div className="stat-pill" key={lbl}>
+              <div className="stat-lbl">{lbl}</div>
+              <div className="stat-val">{val}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    /* ─── Financials ─────────────────────────────────────── */
+    const FIN_TABS = ['Income Statement', 'Balance Sheet', 'Cash Flow', 'Valuation', 'Earnings'];
+
+    const QUARTERS = ['Q1 \u201924', 'Q2 \u201924', 'Q3 \u201924', 'Q4 \u201924', 'Q1 \u201925', 'Q2 \u201925', 'Q3 \u201925'];
+
+    const FIN_ROWS = [
+      { metric: 'Total revenue',     vals: ['5.47B', '5.83B', '6.82B', '7.66B', '7.44B', '7.68B', '9.25B'] },
+      { metric: 'YoY growth', yoy: true, vals: ['+2.2%','+8.9%','+17.6%','+24.2%','+35.9%','+31.7%','+35.6%'] },
+      { metric: 'Gross profit',      vals: ['2.17B', '2.49B', '3.07B', '3.55B', '3.42B', '2.75B', '4.48B'] },
+      { metric: 'YoY growth', yoy: true, vals: ['+17.8%','+27.0%','+33.5%','+42.5%','+57.8%','+10.4%','+46.0%'] },
+      { metric: 'Operating income',  vals: ['62M', '259M', '765M', '1.09B', '806M', '-134M', '1.27B'] },
+      { metric: 'Net income',        vals: ['123M', '265M', '771M', '482M', '709M', '872M', '1.24B'] },
+      { metric: 'YoY growth', yoy: true, vals: ['—', '+881%', '+157%', '-28%', '+476%', '+229%', '+61%'] },
+      { metric: 'EPS diluted',       vals: ['0.07', '0.16', '0.47', '0.29', '0.44', '0.54', '0.76'] },
+      { metric: 'YoY growth', yoy: true, vals: ['—', '+875%', '+157%', '-28%', '+481%', '+230%', '+61%'] },
+    ];
+
+    function yoyTone(v) {
+      if (v === '—') return 'mut';
+      if (v.startsWith('-')) return 'neg';
+      return 'pos';
+    }
+
+    function Financials() {
+      const [tab, setTab] = useState('Income Statement');
+      return (
+        <>
+          <div className="tabs">
+            {FIN_TABS.map(t => (
+              <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>
+                {t}
+              </button>
+            ))}
+          </div>
+          <div className="table-wrap">
+            <table className="fin">
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  {QUARTERS.map(q => <th key={q}>{q}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {tab === 'Income Statement' ? FIN_ROWS.map((row, i) => (
+                  <tr key={i} className={row.yoy ? 'yoy' : ''}>
+                    <td className="metric">{row.metric}</td>
+                    {row.vals.map((v, j) => (
+                      <td key={j} className={`num ${row.yoy ? yoyTone(v) : ''}`}>{v}</td>
+                    ))}
+                  </tr>
+                )) : (
+                  <tr><td className="metric" colSpan={QUARTERS.length + 1}
+                    style={{ color: 'var(--fg-2)', textAlign: 'center', padding: '40px 0', fontStyle: 'italic' }}>
+                    {tab} — no data
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      );
+    }
+
+    /* ─── News ───────────────────────────────────────────── */
+    const NEWS = [
+      { time: '32s ago',  src: 'Reuters',     head: 'AMD ramps 2nm EPYC production; CEO projects 35% CAGR' },
+      { time: '4m ago',   src: 'Bloomberg',   head: 'AMD market cap surpasses $150B milestone' },
+      { time: '12m ago',  src: 'CNBC',        head: 'Lisa Su: CPU market to grow 35% annually over 5 years' },
+      { time: '28m ago',  src: 'WSJ',         head: 'AMD scales Taiwan chip production amid AI demand surge' },
+      { time: '1h ago',   src: 'Barron\u2019s', head: 'Strong AI sales but gains may already be priced in' },
+      { time: '2h ago',   src: 'Reuters',     head: 'AMD Q3 earnings beat: $0.92 EPS vs $0.87 estimate' },
+    ];
+    function NewsSection() {
+      return (
+        <div className="news-grid">
+          {NEWS.map((n, i) => (
+            <div key={i} className="news-card">
+              <div className="news-meta">
+                <span className="news-time">{n.time}</span>
+                <span className="sep">·</span>
+                <span className="news-src">{n.src}</span>
+              </div>
+              <div className="news-headline">{n.head}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    /* ─── Ownership ──────────────────────────────────────── */
+    const HOLDERS = [
+      { name: 'Vanguard Group',   pct: 8.2 },
+      { name: 'BlackRock',        pct: 7.1 },
+      { name: 'State Street',     pct: 4.8 },
+      { name: 'Fidelity',         pct: 3.9 },
+      { name: 'Capital Research', pct: 3.2 },
+    ];
+    const MAX_PCT = 10; // bar scales relative to this
+
+    const INSIDERS = [
+      { name: 'Lisa Su',          role: 'CEO', side: 'sell', amount: '−$8.4M', date: 'Nov 12' },
+      { name: 'Mark Papermaster', role: 'CTO', side: 'sell', amount: '−$2.1M', date: 'Nov 04' },
+      { name: 'Forrest Norrod',   role: 'EVP', side: 'buy',  amount: '+$320K', date: 'Oct 28' },
+    ];
+
+    function Ownership() {
+      return (
+        <div className="panel">
+          <div className="panel-label">Ownership</div>
+          <div>
+            {HOLDERS.map(h => (
+              <div className="holder-row" key={h.name}>
+                <div className="holder-name">{h.name}</div>
+                <div className="holder-bar">
+                  <div className="holder-bar-fill" style={{ '--w': `${(h.pct / MAX_PCT) * 100}%` }} />
+                </div>
+                <div className="holder-pct">{h.pct.toFixed(1)}%</div>
+              </div>
+            ))}
+          </div>
+          <div className="insider-block">
+            <div className="panel-label">Insider Activity</div>
+            {INSIDERS.map((ins, i) => (
+              <div className="insider-card" key={i}>
+                <div className="ins-left">
+                  <div className="ins-name">{ins.name}</div>
+                  <div className="ins-meta">
+                    <span className="ins-role">{ins.role}</span>
+                    <span className="sep">·</span>
+                    <span className="ins-date">{ins.date}</span>
+                  </div>
+                </div>
+                <div className="ins-right">
+                  <span className={`side-pill ${ins.side}`}>{ins.side}</span>
+                  <div className={`ins-amount ${ins.side}`}>{ins.amount}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Peers ──────────────────────────────────────────── */
+    const PEERS = [
+      { tk: 'AMD',  eps: 92,  rev: 36, mar: 13, self: true },
+      { tk: 'NVDA', eps: 145, rev: 78, mar: 55 },
+      { tk: 'INTC', eps: -24, rev: -8, mar: 2 },
+      { tk: 'QCOM', eps: 18,  rev: 11, mar: 26 },
+      { tk: 'MRVL', eps: 67,  rev: 29, mar: 8 },
+    ];
+    const cellTone = (n) => n < 0 ? 'neg' : n > 0 ? 'pos' : 'neutral';
+    const fmtPct = (n) => `${n > 0 ? '+' : ''}${n}%`;
+    function Peers() {
+      return (
+        <div className="panel">
+          <div className="panel-label">Peers</div>
+          <table className="peers">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>EPS Growth</th>
+                <th>Rev Growth</th>
+                <th>Net Margin</th>
+              </tr>
+            </thead>
+            <tbody>
+              {PEERS.map(p => (
+                <tr key={p.tk} className={p.self ? 'self' : ''}>
+                  <td className="tk">{p.tk}</td>
+                  <td className={cellTone(p.eps)}>{fmtPct(p.eps)}</td>
+                  <td className={cellTone(p.rev)}>{fmtPct(p.rev)}</td>
+                  <td className="neutral">{p.mar}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    /* ─── App ────────────────────────────────────────────── */
+    function App() {
+      return (
+        <>
+          <TopNav />
+          <IdentityBar />
+          <main className="page">
+            <section className="section">
+              <ChartPanel />
+              <KeyStats />
+            </section>
+
+            <section className="section">
+              <div className="section-head">
+                <span className="section-label">Financials</span>
+              </div>
+              <Financials />
+            </section>
+
+            <section className="section">
+              <div className="section-head">
+                <span className="section-label">
+                  Live News
+                </span>
+                <span className="live-pill">
+                  <span className="dot" />
+                  Live
+                </span>
+              </div>
+              <NewsSection />
+            </section>
+
+            <section className="section">
+              <div className="bottom-row">
+                <Ownership />
+                <Peers />
+              </div>
+            </section>
+          </main>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

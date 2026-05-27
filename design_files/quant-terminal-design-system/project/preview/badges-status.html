@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0B0B0D; font-family:'Inter',sans-serif; padding:24px; }
+  .group { margin-bottom:24px; }
+  .cap { font-size:10px; font-weight:600; letter-spacing:0.09em; text-transform:uppercase; color:#44444F; margin-bottom:12px; }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+  /* Status pill */
+  .pill {
+    display:inline-flex; align-items:center; gap:6px;
+    font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:500;
+    padding:4px 10px; border-radius:5px; letter-spacing:0.03em;
+    border:1px solid; white-space:nowrap;
+  }
+  .dot { width:5px; height:5px; border-radius:50%; background:currentColor; display:inline-block; }
+
+  /* Change rows */
+  .change { font-family:'IBM Plex Mono',monospace; font-size:14px; font-weight:500; }
+
+  /* Score bar */
+  .score-row { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
+  .score-label { font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8888A0; width:80px; }
+  .score-bar-bg { flex:1; height:4px; background:#1A1A1F; border-radius:2px; overflow:hidden; }
+  .score-bar { height:100%; border-radius:2px; }
+  .score-val { font-family:'IBM Plex Mono',monospace; font-size:12px; font-weight:600; width:28px; text-align:right; }
+
+  /* Trend pass/fail */
+  .check-row { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid #1A1A1F; font-size:12px; color:#8888A0; }
+  .check-icon { width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; flex-shrink:0; }
+</style>
+</head>
+<body>
+
+  <div class="group">
+    <div class="cap">Status</div>
+    <div class="row">
+      <span class="pill" style="color:#4ADE80;background:rgba(74,222,128,0.07);border-color:rgba(74,222,128,0.18);">
+        <span class="dot" style="box-shadow:0 0 6px #4ADE80;"></span>Live
+      </span>
+      <span class="pill" style="color:#44444F;background:rgba(68,68,79,0.15);border-color:#27272A;">
+        <span class="dot"></span>Closed
+      </span>
+      <span class="pill" style="color:#C8FF57;background:rgba(200,255,87,0.07);border-color:rgba(200,255,87,0.2);">SEPA Qualified</span>
+      <span class="pill" style="color:#4ADE80;background:rgba(74,222,128,0.07);border-color:rgba(74,222,128,0.18);">Stage 2</span>
+      <span class="pill" style="color:#F87171;background:rgba(248,113,113,0.07);border-color:rgba(248,113,113,0.18);">Stage 4</span>
+      <span class="pill" style="color:#FCD34D;background:rgba(252,211,77,0.07);border-color:rgba(252,211,77,0.18);">Watching</span>
+      <span class="pill" style="color:#8888A0;background:rgba(136,136,160,0.07);border-color:#27272A;">N/A</span>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="cap">Signal Chips</div>
+    <div class="row">
+      <span class="pill" style="color:#C8FF57;background:rgba(200,255,87,0.07);border-color:rgba(200,255,87,0.2);">Code 33 ✓</span>
+      <span class="pill" style="color:#C8FF57;background:rgba(200,255,87,0.07);border-color:rgba(200,255,87,0.2);">VCP ✓</span>
+      <span class="pill" style="color:#4ADE80;background:rgba(74,222,128,0.07);border-color:rgba(74,222,128,0.18);">7/8 Trend</span>
+      <span class="pill" style="color:#8888A0;background:rgba(136,136,160,0.07);border-color:#27272A;">No VCP</span>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="cap">Price Change</div>
+    <div class="row" style="gap:20px;">
+      <span class="change" style="color:#4ADE80;">+$24.18 (+2.84%)</span>
+      <span class="change" style="color:#F87171;">−$8.43 (−1.22%)</span>
+      <span class="change" style="color:#44444F;">$0.00 (0.00%)</span>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="cap">SEPA Score Range</div>
+    <div class="score-row">
+      <span class="score-label">NVDA</span>
+      <div class="score-bar-bg"><div class="score-bar" style="width:87%;background:#4ADE80;"></div></div>
+      <span class="score-val" style="color:#4ADE80;">87</span>
+    </div>
+    <div class="score-row">
+      <span class="score-label">IREN</span>
+      <div class="score-bar-bg"><div class="score-bar" style="width:52%;background:#FCD34D;"></div></div>
+      <span class="score-val" style="color:#FCD34D;">52</span>
+    </div>
+    <div class="score-row">
+      <span class="score-label">SOFI</span>
+      <div class="score-bar-bg"><div class="score-bar" style="width:32%;background:#F87171;"></div></div>
+      <span class="score-val" style="color:#F87171;">32</span>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="cap">Trend Criteria Pass / Fail</div>
+    <div class="check-row">
+      <div class="check-icon" style="background:rgba(74,222,128,0.1);color:#4ADE80;">✓</div>
+      Price above 150-day MA
+    </div>
+    <div class="check-row">
+      <div class="check-icon" style="background:rgba(74,222,128,0.1);color:#4ADE80;">✓</div>
+      MA150 above MA200
+    </div>
+    <div class="check-row" style="border:none;">
+      <div class="check-icon" style="background:rgba(248,113,113,0.1);color:#F87171;">✗</div>
+      MA200 trending up ≥ 1 month
+    </div>
+  </div>
+
+</body>
+</html>

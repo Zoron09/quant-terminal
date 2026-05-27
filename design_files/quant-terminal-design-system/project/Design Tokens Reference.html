@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Design Tokens · Quant Terminal</title>
+<link rel="stylesheet" href="colors_and_type.css" />
+
+<template id="__bundler_thumbnail" data-bg-color="#0E0E10">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#0E0E10"/>
+    <rect x="360" y="240" width="160" height="320" rx="16" fill="#161618"/>
+    <rect x="540" y="240" width="160" height="320" rx="16" fill="#1E1E22"/>
+    <rect x="720" y="240" width="160" height="320" rx="16" fill="#D4A843"/>
+    <circle cx="600" cy="400" r="40" fill="#34D399"/>
+    <text x="600" y="660" text-anchor="middle" font-family="Georgia, serif" font-size="36" fill="#FAFAFA" font-style="italic">tokens</text>
+  </svg>
+</template>
+
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg-base);
+    color: var(--fg-1);
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(212,168,67,0.06) 0%, transparent 70%),
+      linear-gradient(180deg, var(--bg-base), var(--bg-base));
+    background-attachment: fixed;
+  }
+
+  .page { max-width: 1280px; margin: 0 auto; padding: 56px 32px 96px; }
+
+  .topline {
+    display: flex; align-items: center; gap: 14px;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+  .topline .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(212,168,67,0.12), 0 0 14px rgba(212,168,67,0.7);
+  }
+  .topline .bar { flex: 1; height: 1px; background: var(--border-subtle); }
+
+  h1.display {
+    margin: 28px 0 6px;
+    font-family: var(--font-display);
+    font-size: var(--text-4xl);
+    font-weight: 400;
+    color: var(--fg-1);
+    line-height: 1.05;
+    letter-spacing: -0.01em;
+  }
+  .deck {
+    color: var(--fg-2);
+    font-size: 15px;
+    max-width: 60ch;
+    margin: 0 0 56px;
+  }
+
+  section.tokens {
+    margin-top: 64px;
+    padding-top: 28px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  section.tokens:first-of-type { border-top: none; padding-top: 0; margin-top: 32px; }
+
+  .sec-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 24px; margin-bottom: 24px;
+  }
+  .sec-eyebrow {
+    font-family: var(--font-ui);
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  .sec-title {
+    font-family: var(--font-display);
+    font-size: 28px;
+    color: var(--fg-1);
+    line-height: 1.1;
+    margin: 4px 0 0;
+  }
+  .sec-blurb {
+    color: var(--fg-2);
+    font-size: 13px;
+    max-width: 36ch;
+    text-align: right;
+  }
+
+  /* ───────── Color grids ───────── */
+  .swatch-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+  @media (max-width: 880px) { .swatch-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 520px) { .swatch-grid { grid-template-columns: 1fr; } }
+
+  .swatch {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .swatch-chip {
+    height: 96px;
+    position: relative;
+  }
+  .swatch-chip.check {
+    background-image:
+      linear-gradient(45deg, rgba(255,255,255,0.06) 25%, transparent 25%),
+      linear-gradient(-45deg, rgba(255,255,255,0.06) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.06) 75%),
+      linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.06) 75%);
+    background-size: 14px 14px;
+    background-position: 0 0, 0 7px, 7px -7px, -7px 0;
+  }
+  .swatch-meta { padding: 12px 14px 14px; }
+  .swatch-role {
+    font-family: var(--font-ui);
+    font-size: 13px; font-weight: 500;
+    color: var(--fg-1);
+    letter-spacing: 0.01em;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
+  }
+  .swatch-token {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-2);
+    margin-top: 4px;
+  }
+  .swatch-val {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    margin-top: 2px;
+    text-transform: uppercase;
+  }
+
+  /* ───────── Type ───────── */
+  .type-stack {
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .type-row {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    padding: 22px 24px;
+    display: grid;
+    grid-template-columns: 220px 1fr auto;
+    gap: 24px;
+    align-items: baseline;
+  }
+  @media (max-width: 720px) { .type-row { grid-template-columns: 1fr; row-gap: 8px; } }
+  .type-meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .type-role {
+    font-family: var(--font-ui);
+    font-size: 12px;
+    color: var(--fg-1);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+  .type-token {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.02em;
+  }
+  .type-sample {
+    color: var(--fg-1);
+    line-height: 1.1;
+    white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .type-specs {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .type-row.display .type-sample { font-family: var(--font-display); font-size: var(--text-4xl); font-weight: 400; }
+  .type-row.h1 .type-sample      { font-family: var(--font-display); font-size: var(--text-2xl); font-weight: 400; }
+  .type-row.h2 .type-sample      { font-family: var(--font-ui);      font-size: var(--text-xl);  font-weight: 600; }
+  .type-row.h3 .type-sample      { font-family: var(--font-ui);      font-size: var(--text-md);  font-weight: 500; color: var(--fg-2); }
+  .type-row.body .type-sample    { font-family: var(--font-ui);      font-size: var(--text-base);}
+  .type-row.label .type-sample   { font-family: var(--font-ui);      font-size: var(--text-xs); font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); }
+  .type-row.num .type-sample     { font-family: var(--font-mono);    font-size: var(--text-base); font-weight: 500; }
+  .type-row.num-lg .type-sample  { font-family: var(--font-mono);    font-size: var(--text-2xl); font-weight: 600; }
+  .type-row.num-xl .type-sample  { font-family: var(--font-mono);    font-size: var(--text-3xl); font-weight: 600; }
+
+  /* ───────── Spacing scale ───────── */
+  .scale-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  @media (max-width: 720px) { .scale-grid { grid-template-columns: 1fr; } }
+  .scale-row {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    display: grid;
+    grid-template-columns: 78px 1fr 44px;
+    gap: 14px;
+    align-items: center;
+  }
+  .scale-token { font-family: var(--font-mono); font-size: 11px; color: var(--fg-2); }
+  .scale-bar {
+    height: 10px;
+    background: var(--accent);
+    border-radius: 2px;
+    box-shadow: 0 0 12px rgba(212,168,67,0.25);
+  }
+  .scale-px { font-family: var(--font-mono); font-size: 12px; color: var(--fg-1); text-align: right; }
+
+  /* ───────── Radii ───────── */
+  .radii-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+  @media (max-width: 720px) { .radii-row { grid-template-columns: repeat(2, 1fr); } }
+  .radii-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    padding: 18px;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+  }
+  .radii-demo {
+    width: 88px; height: 64px;
+    background: linear-gradient(180deg, var(--accent), var(--accent-hover));
+    box-shadow: 0 0 14px rgba(212,168,67,0.3);
+  }
+  .radii-token { font-family: var(--font-mono); font-size: 11px; color: var(--fg-2); }
+  .radii-px    { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+  /* ───────── Footer ───────── */
+  .footer {
+    margin-top: 80px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.02em;
+    flex-wrap: wrap; gap: 12px;
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+
+    <div class="topline">
+      <span class="dot"></span>
+      <span>Quant Terminal · design tokens v2</span>
+      <span class="bar"></span>
+      <span>colors_and_type.css</span>
+    </div>
+
+    <h1 class="display">Design tokens</h1>
+    <p class="deck">A premium dark-fintech token set in two palettes — Obsidian Gold (default) and Midnight Cobalt — pairing DM Serif Display, Inter and IBM Plex Mono on a 4px spacing grid.</p>
+
+    <!-- COLORS · OBSIDIAN GOLD -->
+    <section class="tokens">
+      <div class="sec-head">
+        <div>
+          <div class="sec-eyebrow">Palette · 01</div>
+          <h2 class="sec-title">Obsidian Gold</h2>
+        </div>
+        <p class="sec-blurb">Default palette. Warm gold accent on a neutral charcoal base. Used across all production surfaces.</p>
+      </div>
+
+      <div class="swatch-grid">
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#0E0E10"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Background base <span style="color:var(--fg-3)">●</span></div>
+            <div class="swatch-token">--bg-base</div>
+            <div class="swatch-val">#0E0E10</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#161618"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Surface</div>
+            <div class="swatch-token">--bg-surface</div>
+            <div class="swatch-val">#161618</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#1E1E22"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Raised</div>
+            <div class="swatch-token">--bg-raised</div>
+            <div class="swatch-val">#1E1E22</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#242428"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Overlay</div>
+            <div class="swatch-token">--bg-overlay</div>
+            <div class="swatch-val">#242428</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#0A0A0C"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Sidebar</div>
+            <div class="swatch-token">--bg-sidebar</div>
+            <div class="swatch-val">#0A0A0C</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#27272A"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Border subtle</div>
+            <div class="swatch-token">--border-subtle</div>
+            <div class="swatch-val">#27272A</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#3F3F46"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Border default</div>
+            <div class="swatch-token">--border</div>
+            <div class="swatch-val">#3F3F46</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#D4A843; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05), 0 0 24px rgba(212,168,67,0.18);"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Accent · gold <span style="color:#D4A843">●</span></div>
+            <div class="swatch-token">--accent</div>
+            <div class="swatch-val">#D4A843</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#E0B84F"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Accent hover</div>
+            <div class="swatch-token">--accent-hover</div>
+            <div class="swatch-val">#E0B84F</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#FAFAFA"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role" style="color:#0E0E10">Text primary</div>
+            <div class="swatch-token">--fg-1</div>
+            <div class="swatch-val">#FAFAFA</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#A1A1AA"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Text secondary</div>
+            <div class="swatch-token">--fg-2</div>
+            <div class="swatch-val">#A1A1AA</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#52525B"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Text muted</div>
+            <div class="swatch-token">--fg-3</div>
+            <div class="swatch-val">#52525B</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- SEMANTIC COLORS -->
+    <section class="tokens">
+      <div class="sec-head">
+        <div>
+          <div class="sec-eyebrow">Palette · 02</div>
+          <h2 class="sec-title">Semantic</h2>
+        </div>
+        <p class="sec-blurb">Status tokens. Softer than typical fintech greens and reds so the data, not the colour, leads.</p>
+      </div>
+
+      <div class="swatch-grid">
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#34D399; box-shadow: 0 0 24px rgba(52,211,153,0.30) inset;"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Positive <span style="color:#34D399">●</span></div>
+            <div class="swatch-token">--positive</div>
+            <div class="swatch-val">#34D399</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#F87171; box-shadow: 0 0 24px rgba(248,113,113,0.30) inset;"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Negative <span style="color:#F87171">●</span></div>
+            <div class="swatch-token">--negative</div>
+            <div class="swatch-val">#F87171</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#FBBF24; box-shadow: 0 0 24px rgba(251,191,36,0.30) inset;"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Warning <span style="color:#FBBF24">●</span></div>
+            <div class="swatch-token">--warning</div>
+            <div class="swatch-val">#FBBF24</div>
+          </div>
+        </div>
+
+        <div class="swatch">
+          <div class="swatch-chip check" style="background-color:rgba(212,168,67,0.10);"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Accent dim · 10%</div>
+            <div class="swatch-token">--accent-dim</div>
+            <div class="swatch-val">rgba(212,168,67,.10)</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- MIDNIGHT COBALT -->
+    <section class="tokens">
+      <div class="sec-head">
+        <div>
+          <div class="sec-eyebrow">Palette · 03</div>
+          <h2 class="sec-title">Midnight Cobalt</h2>
+        </div>
+        <p class="sec-blurb">Alternate cool-toned palette. Drop-in via tweaks or seasonal variants.</p>
+      </div>
+
+      <div class="swatch-grid">
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#080C14"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Cobalt base</div>
+            <div class="swatch-token">--cobalt-bg-base</div>
+            <div class="swatch-val">#080C14</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#0F1520"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Cobalt surface</div>
+            <div class="swatch-token">--cobalt-bg-surface</div>
+            <div class="swatch-val">#0F1520</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#162030"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Cobalt raised</div>
+            <div class="swatch-token">--cobalt-bg-raised</div>
+            <div class="swatch-val">#162030</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-chip" style="background:#5B8EFF; box-shadow: 0 0 24px rgba(91,142,255,0.28) inset;"></div>
+          <div class="swatch-meta">
+            <div class="swatch-role">Cobalt accent <span style="color:#5B8EFF">●</span></div>
+            <div class="swatch-token">--cobalt-accent</div>
+            <div class="swatch-val">#5B8EFF</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TYPE -->
+    <section class="tokens">
+      <div class="sec-head">
+        <div>
+          <div class="sec-eyebrow">Typography</div>
+          <h2 class="sec-title">Three families, one voice</h2>
+        </div>
+        <p class="sec-blurb">DM Serif Display for editorial weight. Inter for product UI. IBM Plex Mono for every number, ticker and timestamp.</p>
+      </div>
+
+      <div class="type-stack">
+
+        <div class="type-row display">
+          <div class="type-meta">
+            <span class="type-role">Display</span>
+            <span class="type-token">.display</span>
+          </div>
+          <div class="type-sample">+92.4% YoY</div>
+          <div class="type-specs">DM Serif Display · 56px / 400</div>
+        </div>
+
+        <div class="type-row h1">
+          <div class="type-meta">
+            <span class="type-role">Heading 1</span>
+            <span class="type-token">h1</span>
+          </div>
+          <div class="type-sample">Advanced Micro Devices</div>
+          <div class="type-specs">DM Serif Display · 32px / 400</div>
+        </div>
+
+        <div class="type-row h2">
+          <div class="type-meta">
+            <span class="type-role">Heading 2</span>
+            <span class="type-token">h2</span>
+          </div>
+          <div class="type-sample">Financials · quarterly</div>
+          <div class="type-specs">Inter · 24px / 600</div>
+        </div>
+
+        <div class="type-row h3">
+          <div class="type-meta">
+            <span class="type-role">Heading 3</span>
+            <span class="type-token">h3</span>
+          </div>
+          <div class="type-sample">Trailing twelve months</div>
+          <div class="type-specs">Inter · 16px / 500</div>
+        </div>
+
+        <div class="type-row body">
+          <div class="type-meta">
+            <span class="type-role">Body</span>
+            <span class="type-token">body</span>
+          </div>
+          <div class="type-sample">Code 33 = EPS + revenue acceleration + margin expansion.</div>
+          <div class="type-specs">Inter · 14px / 400</div>
+        </div>
+
+        <div class="type-row label">
+          <div class="type-meta">
+            <span class="type-role">Label · caps</span>
+            <span class="type-token">.label-xs</span>
+          </div>
+          <div class="type-sample">Market cap · 52w high · sector</div>
+          <div class="type-specs">Inter · 11px / 500 / +8%</div>
+        </div>
+
+        <div class="type-row num">
+          <div class="type-meta">
+            <span class="type-role">Numeric</span>
+            <span class="type-token">.num</span>
+          </div>
+          <div class="type-sample">$184.26 · +12.34% · 43.2M</div>
+          <div class="type-specs">IBM Plex Mono · 14px / 500</div>
+        </div>
+
+        <div class="type-row num-lg">
+          <div class="type-meta">
+            <span class="type-role">Numeric · large</span>
+            <span class="type-token">.num-lg</span>
+          </div>
+          <div class="type-sample">$1.23B</div>
+          <div class="type-specs">IBM Plex Mono · 32px / 600</div>
+        </div>
+
+        <div class="type-row num-xl">
+          <div class="type-meta">
+            <span class="type-role">Numeric · hero</span>
+            <span class="type-token">.num-xl</span>
+          </div>
+          <div class="type-sample">$467.51</div>
+          <div class="type-specs">IBM Plex Mono · 42px / 600</div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- SPACING -->
+    <section class="tokens">
+      <div class="sec-head">
+        <div>
+          <div class="sec-eyebrow">Spacing</div>
+          <h2 class="sec-title">4 px base grid</h2>
+        </div>
+        <p class="sec-blurb">Every padding, gap and margin is a multiple of 4. Use these tokens; never hand-pick a value.</p>
+      </div>
+
+      <div class="scale-grid">
+        <div class="scale-row"><span class="scale-token">--space-1</span><div class="scale-bar" style="width:4px"></div><span class="scale-px">4</span></div>
+        <div class="scale-row"><span class="scale-token">--space-2</span><div class="scale-bar" style="width:8px"></div><span class="scale-px">8</span></div>
+        <div class="scale-row"><span class="scale-token">--space-3</span><div class="scale-bar" style="width:12px"></div><span class="scale-px">12</span></div>
+        <div class="scale-row"><span class="scale-token">--space-4</span><div class="scale-bar" style="width:16px"></div><span class="scale-px">16</span></div>
+        <div class="scale-row"><span class="scale-token">--space-5</span><div class="scale-bar" style="width:20px"></div><span class="scale-px">20</span></div>
+        <div class="scale-row"><span class="scale-token">--space-6</span><div class="scale-bar" style="width:24px"></div><span class="scale-px">24</span></div>
+        <div class="scale-row"><span class="scale-token">--space-8</span><div class="scale-bar" style="width:32px"></div><span class="scale-px">32</span></div>
+        <div class="scale-row"><span class="scale-token">--space-10</span><div class="scale-bar" style="width:40px"></div><span class="scale-px">40</span></div>
+        <div class="scale-row"><span class="scale-token">--space-12</span><div class="scale-bar" style="width:48px"></div><span class="scale-px">48</span></div>
+      </div>
+    </section>
+
+    <!-- RADII -->
+    <section class="tokens">
+      <div class="sec-head">
+        <div>
+          <div class="sec-eyebrow">Radii</div>
+          <h2 class="sec-title">Four corner radii</h2>
+        </div>
+        <p class="sec-blurb">Sharp enough to read as a terminal, soft enough to feel premium. Never pill except status chips.</p>
+      </div>
+
+      <div class="radii-row">
+        <div class="radii-card">
+          <div class="radii-demo" style="border-radius: var(--radius-sm)"></div>
+          <span class="radii-token">--radius-sm</span>
+          <span class="radii-px">4 px</span>
+        </div>
+        <div class="radii-card">
+          <div class="radii-demo" style="border-radius: var(--radius)"></div>
+          <span class="radii-token">--radius</span>
+          <span class="radii-px">8 px</span>
+        </div>
+        <div class="radii-card">
+          <div class="radii-demo" style="border-radius: var(--radius-lg)"></div>
+          <span class="radii-token">--radius-lg</span>
+          <span class="radii-px">12 px</span>
+        </div>
+        <div class="radii-card">
+          <div class="radii-demo" style="border-radius: var(--radius-xl)"></div>
+          <span class="radii-token">--radius-xl</span>
+          <span class="radii-px">16 px</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">
+      <span>colors_and_type.css · v2</span>
+      <span>Quant Terminal · design system</span>
+    </div>
+
+  </div>
+</body>
+</html>

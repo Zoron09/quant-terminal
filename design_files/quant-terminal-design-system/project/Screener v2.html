@@ -1,0 +1,985 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Screener · Quant Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --accent: #D4A843;
+    --accent-hi: #E8C060;
+    --positive: #34D399;
+    --negative: #F87171;
+    --warning: #FBBF24;
+    --fg-1: #FAFAFA;
+    --fg-2: rgba(255,255,255,0.55);
+    --fg-3: rgba(255,255,255,0.35);
+    --fg-4: rgba(255,255,255,0.18);
+    --font-display: 'DM Serif Display', Georgia, serif;
+    --font-ui: 'Inter', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
+    --t-fast: 150ms cubic-bezier(.4,0,.2,1);
+    --t-normal: 250ms cubic-bezier(.4,0,.2,1);
+    --t-out: 350ms cubic-bezier(.16,1,.3,1);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #000; }
+  body {
+    color: var(--fg-1);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* Very subtle vignette + dot grid */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background-image: radial-gradient(rgba(255,255,255,0.5) 1px, transparent 1px);
+    background-size: 28px 28px;
+    opacity: 0.025;
+  }
+  body::after {
+    content: '';
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(212,168,67,0.06), transparent 60%);
+  }
+
+  ::selection { background: rgba(212,168,67,0.25); color: #fff; }
+
+  /* ─── NAV ─────────────────────────────────────────── */
+  .nav {
+    height: 48px;
+    background: rgba(0,0,0,0.6);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    backdrop-filter: blur(20px) saturate(140%);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 28px;
+    position: sticky; top: 0; z-index: 50;
+  }
+  .nav-brand {
+    display: flex; align-items: center; gap: 12px;
+    font-family: var(--font-display); font-size: 18px; color: var(--fg-1);
+  }
+  .brand-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(212,168,67,0.12), 0 0 14px rgba(212,168,67,0.7);
+    animation: pulse-dot 3s ease-in-out infinite;
+  }
+  @keyframes pulse-dot {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(212,168,67,0.12), 0 0 12px rgba(212,168,67,0.5); }
+    50%      { box-shadow: 0 0 0 3px rgba(212,168,67,0.18), 0 0 22px rgba(212,168,67,0.9); }
+  }
+  .nav-items { display: flex; align-items: center; gap: 4px; }
+  .nav-item {
+    font-size: 13px; font-weight: 500; color: var(--fg-2);
+    background: transparent; border: none;
+    padding: 8px 14px; cursor: pointer; position: relative;
+    transition: color var(--t-fast); letter-spacing: 0.01em;
+  }
+  .nav-item:hover { color: var(--fg-1); }
+  .nav-item.active { color: var(--fg-1); }
+  .nav-item.active::after {
+    content: '';
+    position: absolute; left: 14px; right: 14px; bottom: -14px;
+    height: 2px; background: var(--accent);
+    box-shadow: 0 0 12px rgba(212,168,67,0.7);
+  }
+
+  /* ─── PAGE ────────────────────────────────────────── */
+  .page {
+    max-width: 1320px; margin: 0 auto;
+    padding: 0 28px 96px;
+    position: relative; z-index: 1;
+  }
+
+  /* ─── HERO ────────────────────────────────────────── */
+  .hero {
+    padding: 64px 0 48px;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    position: relative;
+  }
+  .hero-eyebrow {
+    font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--fg-3); margin-bottom: 26px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .hero-eyebrow .bar { width: 18px; height: 1px; background: var(--fg-4); }
+
+  .hero-stage {
+    position: relative;
+    width: 220px; height: 220px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .hero-ring {
+    position: absolute; inset: 20px;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg,
+      transparent 0%,
+      rgba(52,211,153,0.95) 18%,
+      transparent 40%,
+      rgba(212,168,67,0.95) 58%,
+      transparent 82%);
+    -webkit-mask: radial-gradient(circle, transparent 60%, #000 62%);
+            mask: radial-gradient(circle, transparent 60%, #000 62%);
+    animation: spin 8s linear infinite;
+    filter: drop-shadow(0 0 14px rgba(52,211,153,0.35))
+            drop-shadow(0 0 14px rgba(212,168,67,0.35));
+    transition: opacity var(--t-out), filter var(--t-out);
+  }
+  .hero-ring.dim {
+    opacity: 0.25;
+    filter: none;
+  }
+  /* Counter-rotating thinner inner ring */
+  .hero-ring-inner {
+    position: absolute; inset: 44px;
+    border-radius: 50%;
+    background: conic-gradient(from 180deg,
+      transparent 0%,
+      rgba(255,255,255,0.5) 12%,
+      transparent 25%,
+      transparent 75%,
+      rgba(255,255,255,0.18) 88%,
+      transparent 100%);
+    -webkit-mask: radial-gradient(circle, transparent 65%, #000 67%);
+            mask: radial-gradient(circle, transparent 65%, #000 67%);
+    animation: spin-rev 14s linear infinite;
+    opacity: 0.6;
+  }
+  @keyframes spin     { to { transform: rotate(360deg); } }
+  @keyframes spin-rev { to { transform: rotate(-360deg); } }
+
+  .hero-orb-glow {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: radial-gradient(circle,
+      rgba(212,168,67,0.18) 0%,
+      rgba(52,211,153,0.08) 35%,
+      transparent 65%);
+    filter: blur(8px);
+    transition: opacity var(--t-out);
+  }
+  .hero-stage.idle .hero-orb-glow { opacity: 0.3; }
+
+  .hero-center {
+    position: relative; z-index: 2;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .hero-count {
+    font-family: var(--font-display);
+    font-size: 64px; line-height: 1;
+    color: #fff;
+    text-shadow: 0 0 30px rgba(255,255,255,0.15);
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-count.alive {
+    background: linear-gradient(180deg, #fff 0%, rgba(212,168,67,0.85) 100%);
+    -webkit-background-clip: text;
+            background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 0 40px rgba(212,168,67,0.35);
+  }
+  .hero-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-top: 6px;
+  }
+
+  /* ─── CONTROLS ────────────────────────────────────── */
+  .controls {
+    display: grid;
+    grid-template-columns: 1fr 200px;
+    gap: 12px;
+    margin-top: 8px;
+  }
+  @media (max-width: 720px) { .controls { grid-template-columns: 1fr; } }
+
+  /* Upload */
+  .upload {
+    background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+            backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-top: 1px solid rgba(255,255,255,0.15);
+    border-radius: 14px;
+    padding: 16px 20px;
+    display: flex; align-items: center; gap: 14px;
+    cursor: pointer; user-select: none;
+    transition: background var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast);
+    position: relative; overflow: hidden;
+  }
+  .upload:hover { background: linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%); }
+  .upload.dragover {
+    border-color: rgba(212,168,67,0.6);
+    border-top-color: rgba(212,168,67,0.8);
+    box-shadow: 0 0 48px rgba(212,168,67,0.25), inset 0 0 0 1px rgba(212,168,67,0.4);
+  }
+  .upload.dragover::after {
+    content: '';
+    position: absolute; inset: 6px;
+    border: 1px dashed rgba(212,168,67,0.55);
+    border-radius: 10px;
+    pointer-events: none;
+  }
+  .upload.loaded { border-color: rgba(212,168,67,0.35); }
+
+  .upload-icon {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--fg-2);
+    flex-shrink: 0;
+  }
+  .upload.loaded .upload-icon {
+    background: rgba(212,168,67,0.10);
+    border-color: rgba(212,168,67,0.35);
+    color: var(--accent);
+  }
+  .upload-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .upload-title { font-size: 13px; font-weight: 500; color: var(--fg-1); letter-spacing: 0.01em; }
+  .upload-sub   { font-size: 11px; color: var(--fg-3); letter-spacing: 0.02em; }
+  .upload-loaded-line {
+    font-family: var(--font-mono);
+    font-size: 12px; font-weight: 500;
+    color: var(--accent);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .upload-loaded-line .sep { color: var(--fg-4); margin: 0 8px; }
+  .upload-sample {
+    margin-left: auto;
+    font-size: 11px; color: var(--fg-3);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 6px 10px; border-radius: 6px;
+    cursor: pointer;
+    transition: all var(--t-fast);
+    white-space: nowrap;
+  }
+  .upload-sample:hover { color: var(--fg-1); border-color: rgba(255,255,255,0.18); }
+
+  /* Run button */
+  .run-btn {
+    height: 100%; min-height: 56px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #D4A843 0%, #E8C060 50%, #D4A843 100%);
+    color: #000;
+    font-family: var(--font-ui); font-weight: 600; font-size: 13px;
+    letter-spacing: 0.02em;
+    border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: all var(--t-fast);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.45),
+      inset 0 -1px 0 rgba(0,0,0,0.15),
+      0 0 0 1px rgba(212,168,67,0.4),
+      0 12px 40px rgba(212,168,67,0.18);
+    position: relative;
+    animation: btn-pulse 3.4s ease-in-out infinite;
+  }
+  @keyframes btn-pulse {
+    0%, 100% { box-shadow: inset 0 1px 0 rgba(255,255,255,0.45), inset 0 -1px 0 rgba(0,0,0,0.15), 0 0 0 1px rgba(212,168,67,0.4), 0 12px 40px rgba(212,168,67,0.18); }
+    50%      { box-shadow: inset 0 1px 0 rgba(255,255,255,0.45), inset 0 -1px 0 rgba(0,0,0,0.15), 0 0 0 1px rgba(212,168,67,0.5), 0 12px 50px rgba(212,168,67,0.32); }
+  }
+  .run-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    filter: brightness(1.08);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.5),
+      inset 0 -1px 0 rgba(0,0,0,0.15),
+      0 0 0 1px rgba(212,168,67,0.6),
+      0 0 40px rgba(212,168,67,0.5),
+      0 16px 50px rgba(212,168,67,0.35);
+  }
+  .run-btn:active:not(:disabled) { transform: translateY(0); }
+  .run-btn:disabled {
+    background: rgba(255,255,255,0.04);
+    color: var(--fg-3);
+    cursor: not-allowed;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 1px rgba(255,255,255,0.06);
+    animation: none;
+  }
+
+  /* Progress (replaces run button visually while running) */
+  .progress-card {
+    grid-column: 1 / -1;
+    background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-top: 1px solid rgba(255,255,255,0.15);
+    border-radius: 14px;
+    padding: 14px 20px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .progress-row {
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--fg-2);
+  }
+  .progress-row .pct { color: var(--positive); font-weight: 500; }
+  .progress-wrap {
+    width: 100%; height: 6px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 999px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, rgba(52,211,153,0.6), #34D399);
+    box-shadow: 0 0 20px rgba(52,211,153,0.55);
+    transition: width 120ms linear;
+  }
+
+  /* ─── STAT ROW ────────────────────────────────────── */
+  .stats {
+    margin-top: 16px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  @media (max-width: 720px) { .stats { grid-template-columns: 1fr; } }
+  .stat {
+    background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%);
+    -webkit-backdrop-filter: blur(20px);
+            backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-top: 1px solid rgba(255,255,255,0.13);
+    border-radius: 12px;
+    padding: 14px 18px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-lbl {
+    font-size: 10px;
+    color: var(--fg-3);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .stat-val {
+    font-family: var(--font-mono);
+    font-size: 22px; font-weight: 600;
+    color: var(--fg-1);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat.passed .stat-val {
+    color: var(--positive);
+    text-shadow: 0 0 18px rgba(52,211,153,0.55);
+  }
+  .stat.insuf .stat-val { color: var(--fg-3); }
+
+  /* ─── SORT ────────────────────────────────────────── */
+  .sort-row {
+    margin-top: 32px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap;
+  }
+  .sort-pills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .sort-eyebrow {
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--fg-3); margin-right: 6px;
+  }
+  .sort-pill {
+    font-size: 12px; font-weight: 500;
+    color: var(--fg-2);
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 999px;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: all var(--t-fast);
+  }
+  .sort-pill:hover { color: var(--fg-1); border-color: rgba(255,255,255,0.14); }
+  .sort-pill.active {
+    color: var(--accent);
+    border-color: rgba(212,168,67,0.5);
+    background: rgba(212,168,67,0.07);
+    box-shadow: 0 0 14px rgba(212,168,67,0.25);
+  }
+  .results-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.04em;
+  }
+  .results-count strong { color: var(--fg-1); font-weight: 600; }
+
+  /* ─── GRID ────────────────────────────────────────── */
+  .grid {
+    margin-top: 16px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+  }
+  @media (max-width: 1000px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 640px)  { .grid { grid-template-columns: 1fr; } }
+
+  /* ─── CARD ────────────────────────────────────────── */
+  .card {
+    position: relative;
+    background: linear-gradient(135deg,
+      rgba(255,255,255,0.06) 0%,
+      rgba(255,255,255,0.02) 100%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+            backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-top: 1px solid rgba(255,255,255,0.22);
+    border-radius: 16px;
+    padding: 20px;
+    cursor: pointer;
+    transition: transform var(--t-out), border-color var(--t-out), box-shadow var(--t-out);
+    opacity: 0;
+    transform: translateY(14px);
+    animation: card-in 600ms cubic-bezier(.16,1,.3,1) forwards;
+    animation-delay: var(--delay, 0ms);
+  }
+  @keyframes card-in {
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .card.green {
+    box-shadow:
+      0 0 0 1px rgba(52,211,153,0.15),
+      0 8px 40px rgba(52,211,153,0.12),
+      0 32px 80px rgba(0,0,0,0.6);
+  }
+  .card.yellow {
+    box-shadow:
+      0 0 0 1px rgba(251,191,36,0.15),
+      0 8px 40px rgba(251,191,36,0.12),
+      0 32px 80px rgba(0,0,0,0.6);
+  }
+  .card:hover {
+    transform: translateY(-6px);
+    border-color: rgba(212,168,67,0.35);
+    border-top-color: rgba(212,168,67,0.5);
+  }
+  .card.green:hover {
+    box-shadow:
+      0 0 0 1px rgba(52,211,153,0.25),
+      0 16px 60px rgba(52,211,153,0.22),
+      0 40px 100px rgba(0,0,0,0.7);
+  }
+  .card.yellow:hover {
+    box-shadow:
+      0 0 0 1px rgba(251,191,36,0.25),
+      0 16px 60px rgba(251,191,36,0.22),
+      0 40px 100px rgba(0,0,0,0.7);
+  }
+
+  .card-top {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px;
+  }
+  .ticker {
+    font-family: var(--font-display);
+    font-size: 32px; font-weight: 400;
+    line-height: 1;
+    background: linear-gradient(180deg, #fff 0%, var(--accent) 100%);
+    -webkit-background-clip: text;
+            background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 0.01em;
+  }
+  .company {
+    font-size: 11px;
+    color: rgba(255,255,255,0.4);
+    margin-top: 6px;
+    letter-spacing: 0.01em;
+    max-width: 220px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-weight: 300;
+  }
+  .sector-pill {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.7);
+    font-size: 10px; font-weight: 500;
+    padding: 4px 9px;
+    border-radius: 5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .sector-pill.technology { color: rgba(91,142,255,0.9); border-color: rgba(91,142,255,0.25); background: rgba(91,142,255,0.07); }
+  .sector-pill.healthcare { color: rgba(52,211,153,0.9); border-color: rgba(52,211,153,0.25); background: rgba(52,211,153,0.07); }
+
+  .metrics {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .metric-row {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    align-items: center;
+    gap: 12px;
+  }
+  .metric-label {
+    font-size: 10px;
+    color: rgba(255,255,255,0.4);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  .quarters {
+    display: flex; align-items: baseline; justify-content: flex-end;
+    gap: 6px;
+    font-family: var(--font-mono); font-size: 11px;
+    color: rgba(255,255,255,0.35);
+  }
+  .quarters .q-old { color: rgba(255,255,255,0.35); }
+  .quarters .sep { color: rgba(255,255,255,0.15); }
+  .quarters .arrow { font-size: 14px; font-weight: 600; line-height: 1; }
+  .quarters .arrow.pos { color: var(--positive); text-shadow: 0 0 10px rgba(52,211,153,0.7); }
+  .quarters .arrow.warn { color: var(--warning); text-shadow: 0 0 10px rgba(251,191,36,0.65); }
+  .quarters .arrow.neg { color: var(--negative); text-shadow: 0 0 10px rgba(248,113,113,0.7); }
+  .quarters .q-new {
+    color: #fff;
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .card-bottom {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
+  }
+  .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10px; font-weight: 500;
+    padding: 5px 10px;
+    border-radius: 999px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 1px solid;
+  }
+  .status .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 6px currentColor; }
+  .status.green {
+    background: rgba(52,211,153,0.10);
+    color: var(--positive);
+    border-color: rgba(52,211,153,0.35);
+    box-shadow: 0 0 16px rgba(52,211,153,0.4);
+  }
+  .status.yellow {
+    background: rgba(251,191,36,0.10);
+    color: var(--warning);
+    border-color: rgba(251,191,36,0.35);
+    box-shadow: 0 0 16px rgba(251,191,36,0.4);
+  }
+  .mcap {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: rgba(255,255,255,0.5);
+    letter-spacing: 0.02em;
+    margin-left: auto;
+    text-align: right;
+  }
+
+  input[type="file"] { display: none; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <script type="text/babel" data-presets="env,react">
+    const { useState, useRef, useEffect, useMemo, useCallback } = React;
+
+    /* ─── Icon helper ─────────────────────────────────────── */
+    function Icon({ name, size = 16, stroke = 1.5, color = 'currentColor' }) {
+      const ref = useRef(null);
+      useEffect(() => {
+        if (!ref.current || !window.lucide) return;
+        ref.current.innerHTML = '';
+        const node = window.lucide.createElement(window.lucide.icons[toPascal(name)] || window.lucide.icons.Circle);
+        node.setAttribute('width', size);
+        node.setAttribute('height', size);
+        node.setAttribute('stroke-width', stroke);
+        node.setAttribute('stroke', color);
+        ref.current.appendChild(node);
+      }, [name, size, stroke, color]);
+      return <span ref={ref} style={{ display: 'inline-flex' }} />;
+    }
+    const toPascal = (k) => k.split('-').map(s => s[0].toUpperCase() + s.slice(1)).join('');
+
+    /* ─── Count-up hook ───────────────────────────────────── */
+    function useCountUp(target, duration = 1100) {
+      const [n, setN] = useState(0);
+      useEffect(() => {
+        if (!target) { setN(0); return; }
+        const start = performance.now();
+        let raf;
+        const tick = (t) => {
+          const p = Math.min(1, (t - start) / duration);
+          const eased = 1 - Math.pow(1 - p, 3);
+          setN(Math.round(target * eased));
+          if (p < 1) raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(raf);
+      }, [target, duration]);
+      return n;
+    }
+
+    /* ─── Data ────────────────────────────────────────────── */
+    const WINNERS = [
+      { ticker: 'AXON', company: 'Axon Enterprise, Inc.', sector: 'Technology', mcap: '$27.0B',
+        eps: [30, 42, 85], rev: [31, 34, 33], margin: [18, 21, 18], status: 'green' },
+      { ticker: 'ANET', company: 'Arista Networks, Inc.', sector: 'Technology', mcap: '$96.4B',
+        eps: [38, 32, 30], rev: [16, 15, 19], margin: [52, 54, 53], status: 'green' },
+      { ticker: 'LLY',  company: 'Eli Lilly and Company',  sector: 'Healthcare', mcap: '$952.1B',
+        eps: [91, 479, 169], rev: [37, 53, 42], margin: [16, 21, 18], status: 'green' },
+      { ticker: 'AMD',  company: 'Advanced Micro Devices', sector: 'Technology', mcap: '$151.3B',
+        eps: [230, 60, 92], rev: [35, 34, 37], margin: [13, 14, 13], status: 'yellow' },
+      { ticker: 'ADI',  company: 'Analog Devices, Inc.',   sector: 'Technology', mcap: '$175.2B',
+        eps: [-50, -36, -16], rev: [-22, -33, -24], margin: [16, 19, 16], status: 'green' },
+    ];
+
+    const fmtPct  = (n) => (n === null || n === undefined) ? '—' : `${n > 0 ? '+' : ''}${n}%`;
+    const fmtMarg = (n) => `${n}%`;
+
+    /* ─── Nav ─────────────────────────────────────────────── */
+    function TopNav() {
+      const items = [
+        { id: 'screener',  label: 'Screener',  active: true },
+        { id: 'overview',  label: 'Overview' },
+        { id: 'portfolio', label: 'Portfolio' },
+      ];
+      return (
+        <nav className="nav">
+          <div className="nav-brand">
+            <span className="brand-dot" />
+            Quant Terminal
+          </div>
+          <div className="nav-items">
+            {items.map(it => (
+              <button key={it.id} className={`nav-item ${it.active ? 'active' : ''}`}>
+                {it.label}
+              </button>
+            ))}
+          </div>
+        </nav>
+      );
+    }
+
+    /* ─── Hero ring ───────────────────────────────────────── */
+    function Hero({ phase, winnerCount }) {
+      const alive = phase === 'done' && winnerCount > 0;
+      const display = useCountUp(alive ? winnerCount : 0, 900);
+      const dim = phase !== 'done';
+      const eyebrow = phase === 'idle' ? 'Code 33 · awaiting signal' :
+                      phase === 'running' ? 'Code 33 · scanning' :
+                      'Code 33 · complete';
+      return (
+        <section className="hero">
+          <div className="hero-eyebrow">
+            <span className="bar" />
+            {eyebrow}
+            <span className="bar" />
+          </div>
+          <div className={`hero-stage ${dim ? 'idle' : ''}`}>
+            <div className="hero-orb-glow" />
+            <div className={`hero-ring ${dim ? 'dim' : ''}`} />
+            <div className="hero-ring-inner" />
+            <div className="hero-center">
+              <div className={`hero-count ${alive ? 'alive' : ''}`}>{display}</div>
+              <div className="hero-label">
+                {phase === 'done' ? 'winners found' : phase === 'running' ? 'analysing···' : 'awaiting upload'}
+              </div>
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    /* ─── Upload + Run ────────────────────────────────────── */
+    function UploadZone({ file, onFile }) {
+      const [drag, setDrag] = useState(false);
+      const inputRef = useRef(null);
+
+      const handleFiles = useCallback((fileList) => {
+        const f = fileList && fileList[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const text = String(e.target.result || '');
+          const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+          const tickers = Math.max(0, lines.length - 1);
+          onFile({ name: f.name, tickers: tickers || 529 });
+        };
+        reader.onerror = () => onFile({ name: f.name, tickers: 529 });
+        reader.readAsText(f);
+      }, [onFile]);
+
+      const onDrop = (e) => { e.preventDefault(); setDrag(false); handleFiles(e.dataTransfer.files); };
+      const simulate = (e) => {
+        e.stopPropagation();
+        onFile({ name: 'tradingview-export-2026-05-23.csv', tickers: 529, simulated: true });
+      };
+
+      return (
+        <div
+          className={`upload ${drag ? 'dragover' : ''} ${file ? 'loaded' : ''}`}
+          onClick={() => inputRef.current && inputRef.current.click()}
+          onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={onDrop}
+        >
+          <input ref={inputRef} type="file" accept=".csv,text/csv" onChange={(e) => handleFiles(e.target.files)} />
+          <div className="upload-icon">
+            <Icon name={file ? 'file-check-2' : 'upload-cloud'} size={18} stroke={1.5} />
+          </div>
+          <div className="upload-body">
+            {!file ? (
+              <>
+                <div className="upload-title">Drop TradingView CSV</div>
+                <div className="upload-sub">500–600 tickers expected</div>
+              </>
+            ) : (
+              <>
+                <div className="upload-loaded-line">
+                  {file.name}<span className="sep">·</span>{file.tickers.toLocaleString()} tickers
+                </div>
+                <div className="upload-sub">click to replace</div>
+              </>
+            )}
+          </div>
+          {!file && (
+            <button className="upload-sample" onClick={simulate}>use sample</button>
+          )}
+        </div>
+      );
+    }
+
+    function RunButton({ file, phase, onRun }) {
+      const isFirst = phase === 'idle';
+      const label = isFirst ? 'Run Code 33' : 'Re-run Code 33';
+      return (
+        <button className="run-btn" disabled={!file} onClick={onRun}>
+          {label}
+          <Icon name="arrow-right" size={15} stroke={2} color="#000" />
+        </button>
+      );
+    }
+
+    function Progress({ scanned, total }) {
+      const pct = total ? Math.round((scanned / total) * 100) : 0;
+      return (
+        <div className="progress-card">
+          <div className="progress-row">
+            <span>Analysing <strong style={{ color: '#fff' }}>{scanned.toLocaleString()}</strong> of {total.toLocaleString()}</span>
+            <span className="pct">{pct}%</span>
+          </div>
+          <div className="progress-wrap"><div className="progress-fill" style={{ width: `${pct}%` }} /></div>
+        </div>
+      );
+    }
+
+    /* ─── Stats ───────────────────────────────────────────── */
+    function Stats({ scanned, passed, insuf }) {
+      const aScan = useCountUp(scanned, 900);
+      const aPass = useCountUp(passed, 900);
+      const aInsuf = useCountUp(insuf, 900);
+      return (
+        <div className="stats">
+          <div className="stat scanned">
+            <div className="stat-lbl">Scanned</div>
+            <div className="stat-val">{aScan.toLocaleString()}</div>
+          </div>
+          <div className="stat passed">
+            <div className="stat-lbl">Passed</div>
+            <div className="stat-val">{aPass}</div>
+          </div>
+          <div className="stat insuf">
+            <div className="stat-lbl">Insufficient data</div>
+            <div className="stat-val">{aInsuf}</div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── Sort ────────────────────────────────────────────── */
+    const SORTS = [
+      { id: 'eps', label: 'EPS momentum' },
+      { id: 'rev', label: 'Revenue' },
+      { id: 'mcap', label: 'Market cap' },
+    ];
+    function SortBar({ sort, setSort, count }) {
+      return (
+        <div className="sort-row">
+          <div className="sort-pills">
+            <span className="sort-eyebrow">Sort</span>
+            {SORTS.map(s => (
+              <button key={s.id} className={`sort-pill ${sort === s.id ? 'active' : ''}`} onClick={() => setSort(s.id)}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <div className="results-count"><strong>{count}</strong> winners</div>
+        </div>
+      );
+    }
+
+    /* ─── Card ────────────────────────────────────────────── */
+    function MetricRow({ label, values, formatter = fmtPct }) {
+      const [q1, q2, q3] = values;
+      const up = q3 >= q2;
+      let tone;
+      if (q3 < 0) tone = 'neg';
+      else if (q3 < q2) tone = 'warn';
+      else tone = 'pos';
+      return (
+        <div className="metric-row">
+          <div className="metric-label">{label}</div>
+          <div className="quarters">
+            <span className="q-old">{formatter(q1)}</span>
+            <span className="sep">→</span>
+            <span className="q-old">{formatter(q2)}</span>
+            <span className={`arrow ${up ? 'up' : 'dn'} ${tone}`}>{up ? '↑' : '↓'}</span>
+            <span className="q-new">{formatter(q3)}</span>
+          </div>
+        </div>
+      );
+    }
+
+    function WinnerCard({ w, idx }) {
+      return (
+        <div className={`card ${w.status}`} style={{ '--delay': `${idx * 60}ms` }}>
+          <div className="card-top">
+            <div>
+              <div className="ticker">{w.ticker}</div>
+              <div className="company">{w.company}</div>
+            </div>
+            <div className={`sector-pill ${w.sector.toLowerCase()}`}>{w.sector}</div>
+          </div>
+          <div className="metrics">
+            <MetricRow label="EPS YoY" values={w.eps} />
+            <MetricRow label="Revenue YoY" values={w.rev} />
+            <MetricRow label="Net margin" values={w.margin} formatter={fmtMarg} />
+          </div>
+          <div className="card-bottom">
+            <span className={`status ${w.status}`}>
+              <span className="dot" />
+              {w.status === 'green' ? 'Green' : 'Yellow'}
+            </span>
+            <span className="mcap">{w.mcap}</span>
+          </div>
+        </div>
+      );
+    }
+
+    /* ─── App ─────────────────────────────────────────────── */
+    function App() {
+      const [file, setFile] = useState(null);
+      const [phase, setPhase] = useState('idle');
+      const [progress, setProgress] = useState(0);
+      const [scanned, setScanned] = useState(0);
+      const [sort, setSort] = useState('eps');
+      const [resetKey, setResetKey] = useState(0);
+
+      const total = file ? file.tickers : 0;
+
+      useEffect(() => {
+        if (phase !== 'running') return;
+        const start = performance.now();
+        const dur = 2400;
+        let raf;
+        const tick = (t) => {
+          const p = Math.min(1, (t - start) / dur);
+          setProgress(p);
+          setScanned(Math.floor(p * total));
+          if (p < 1) raf = requestAnimationFrame(tick);
+          else {
+            setPhase('done');
+            setScanned(total);
+            setResetKey(k => k + 1);
+          }
+        };
+        raf = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(raf);
+      }, [phase, total]);
+
+      const onRun = () => {
+        if (!file) return;
+        setPhase('running');
+        setProgress(0);
+        setScanned(0);
+      };
+
+      const sorted = useMemo(() => {
+        const arr = [...WINNERS];
+        if (sort === 'eps') arr.sort((a, b) => b.eps[2] - a.eps[2]);
+        else if (sort === 'rev') arr.sort((a, b) => b.rev[2] - a.rev[2]);
+        else if (sort === 'mcap') {
+          const parse = (s) => {
+            const m = s.match(/([\d.]+)([BMK])/);
+            if (!m) return 0;
+            const n = parseFloat(m[1]);
+            return n * (m[2] === 'B' ? 1e9 : m[2] === 'M' ? 1e6 : 1e3);
+          };
+          arr.sort((a, b) => parse(b.mcap) - parse(a.mcap));
+        }
+        return arr;
+      }, [sort]);
+
+      const passed = phase === 'done' ? WINNERS.length : 0;
+      const insuf  = phase === 'done' && file ? Math.round(total * 0.07) : 0;
+      const scannedDone = phase === 'done' ? total : 0;
+
+      return (
+        <>
+          <TopNav />
+          <main className="page">
+            <Hero phase={phase} winnerCount={passed} />
+
+            <div className="controls">
+              <UploadZone
+                file={file}
+                onFile={(f) => { setFile(f); setPhase('idle'); setProgress(0); setScanned(0); }}
+              />
+              {phase !== 'running'
+                ? <RunButton file={file} phase={phase} onRun={onRun} />
+                : <Progress scanned={scanned} total={total} />}
+            </div>
+
+            {phase === 'done' && (
+              <Stats scanned={scannedDone} passed={passed} insuf={insuf} />
+            )}
+
+            {phase === 'done' && (
+              <>
+                <SortBar sort={sort} setSort={setSort} count={sorted.length} />
+                <div className="grid" key={`grid-${sort}-${resetKey}`}>
+                  {sorted.map((w, i) => <WinnerCard key={w.ticker} w={w} idx={i} />)}
+                </div>
+              </>
+            )}
+          </main>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

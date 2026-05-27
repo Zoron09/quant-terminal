@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0B0B0D; font-family:'Inter',sans-serif; padding:24px; }
+  .cap { font-size:10px; font-weight:600; letter-spacing:0.09em; text-transform:uppercase; color:#44444F; margin-bottom:12px; }
+  .group { margin-bottom:24px; }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+  /* Buttons */
+  .btn { display:inline-flex; align-items:center; gap:6px; font-family:'Inter',sans-serif; font-weight:500; border-radius:8px; border:1px solid transparent; cursor:pointer; transition:all 120ms; white-space:nowrap; }
+  .btn-md  { font-size:13px; padding:9px 20px; }
+  .btn-sm  { font-size:12px; padding:6px 14px; }
+  .btn-lg  { font-size:14px; padding:11px 28px; }
+
+  /* Input */
+  .input { background:#1A1A1F; border:1px solid #2E2E38; border-radius:8px; color:#EFEFEF; font-family:'IBM Plex Mono',monospace; font-size:13px; padding:9px 14px; outline:none; transition:border-color 150ms; }
+  .input::placeholder { color:#44444F; }
+  .input-focus { border-color:#C8FF57; box-shadow:0 0 0 3px rgba(200,255,87,0.08); }
+  .input-wrap { display:flex; flex-direction:column; gap:5px; }
+  .input-label { font-size:11px; color:#8888A0; }
+</style>
+</head>
+<body>
+
+  <div class="group">
+    <div class="cap">Primary</div>
+    <div class="row">
+      <button class="btn btn-lg" style="background:#C8FF57;color:#0B0B0D;border-color:#C8FF57;font-weight:600;">Run Scan</button>
+      <button class="btn btn-md" style="background:#C8FF57;color:#0B0B0D;border-color:#C8FF57;font-weight:600;">Add Alert</button>
+      <button class="btn btn-sm" style="background:#C8FF57;color:#0B0B0D;border-color:#C8FF57;font-weight:600;">Export</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="cap">Secondary & Ghost</div>
+    <div class="row">
+      <button class="btn btn-md" style="background:transparent;color:#EFEFEF;border-color:#2E2E38;">View Details</button>
+      <button class="btn btn-md" style="background:transparent;color:#8888A0;border-color:#222228;">Cancel</button>
+      <button class="btn btn-md" style="background:#1A1A1F;color:#EFEFEF;border-color:#2E2E38;">Filter</button>
+      <button class="btn btn-sm" style="background:rgba(248,113,113,0.08);color:#F87171;border-color:rgba(248,113,113,0.2);">Remove</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="cap">Inputs</div>
+    <div class="row" style="gap:12px;align-items:flex-start;">
+      <div class="input-wrap">
+        <span class="input-label">Ticker</span>
+        <input class="input input-focus" style="width:140px;" value="NVDA" readonly />
+      </div>
+      <div class="input-wrap">
+        <span class="input-label">Search</span>
+        <input class="input" style="width:200px;" placeholder="Search ticker or name…" />
+      </div>
+      <div class="input-wrap">
+        <span class="input-label">Min SEPA Score</span>
+        <input class="input" style="width:150px;" value="75" readonly />
+      </div>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="cap">Preset Filter Tabs</div>
+    <div class="row">
+      <button class="btn btn-sm" style="background:#1A1A1F;color:#EFEFEF;border-color:#2E2E38;">All</button>
+      <button class="btn btn-sm" style="background:transparent;color:#44444F;border-color:#222228;">SEPA ≥ 75</button>
+      <button class="btn btn-sm" style="background:transparent;color:#44444F;border-color:#222228;">Code 33</button>
+      <button class="btn btn-sm" style="background:transparent;color:#44444F;border-color:#222228;">Stage 2</button>
+      <button class="btn btn-sm" style="background:transparent;color:#44444F;border-color:#222228;">VCP</button>
+    </div>
+  </div>
+
+</body>
+</html>

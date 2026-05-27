@@ -1,0 +1,55 @@
+    # Normalized EPS: NI / split-adjusted diluted shares (FactSet / TV method)
+    edgar_eps, edgar_eps_lbl, edgar_eps_end, edgar_eps_fy, edgar_eps_fp = _fetch_edgar_eps_normalized()
+
+
+
+    # ΓöÇΓöÇ EPS: EDGAR standalone only ΓÇö no yfinance/Finnhub fill ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    fh_eps, fh_eps_lbl, fh_eps_end = [], [], []
+    fh_source = 'edgar'
+
+
+
+    # Concept mismatch guard: if sources differ by >5x, EDGAR has wrong concept
+
+    if fmp_rev and edgar_rev:
+
+        fmp_vals = [v for v in fmp_rev if v is not None]
+
+        fmp_avg = sum(fmp_vals) / len(fmp_vals) if fmp_vals else 0
+
+        edgar_vals = [v for v in edgar_rev if v is not None]
+
+        edgar_avg = sum(edgar_vals) / len(edgar_vals) if edgar_vals else 0
+
+        if edgar_avg > 0 and fmp_avg > 0:
+
+            ratio = max(fmp_avg, edgar_avg) / min(fmp_avg, edgar_avg)
+
+            if ratio > 5:
+
+                edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp = [], [], [], [], []
+
+
+
+    if fmp_ni and edgar_ni_abs:
+
+        fmp_ni_vals = [v for v in fmp_ni if v is not None]
+
+        fmp_ni_avg = sum(fmp_ni_vals) / len(fmp_ni_vals) if fmp_ni_vals else 0
+
+        edgar_ni_vals = [v for v in edgar_ni_abs if v is not None]
+
+        edgar_ni_avg = sum(edgar_ni_vals) / len(edgar_ni_vals) if edgar_ni_vals else 0
+
+        if fmp_ni_avg != 0 and edgar_ni_avg != 0:
+
+            ratio = max(abs(fmp_ni_avg), abs(edgar_ni_avg)) / max(abs(min(fmp_ni_avg, edgar_ni_avg)), 1)
+
+            if ratio > 5:
+
+                edgar_ni_abs, edgar_ni_lbl, edgar_ni_end, edgar_ni_fy, edgar_ni_fp = [], [], [], [], []
+
+
+
+    # ΓöÇΓöÇ EPS sanity filter ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+

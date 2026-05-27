@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #070B12; font-family: 'DM Sans', sans-serif; padding: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+  .stat { background: #0D1420; border: 1px solid #243650; border-radius: 6px; padding: 12px 14px; }
+  .stat-accent { border-left: 3px solid #3ECFCF; }
+  .stat-pos { border-left: 3px solid #22C55E; }
+  .stat-neg { border-left: 3px solid #F43F5E; }
+  .stat-warn { border-left: 3px solid #F59E0B; }
+  .lbl { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #475569; margin-bottom: 6px; }
+  .val { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 600; color: #EDF2F7; }
+  .sub { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #475569; margin-top: 4px; }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="stat stat-accent">
+      <div class="lbl">SEPA Score</div>
+      <div class="val" style="color:#3ECFCF;">87</div>
+      <div class="sub">/ 100</div>
+    </div>
+    <div class="stat stat-pos">
+      <div class="lbl">Profit Margin</div>
+      <div class="val" style="color:#22C55E;">+55.7%</div>
+      <div class="sub">↑ vs 48.2% LY</div>
+    </div>
+    <div class="stat stat-neg">
+      <div class="lbl">Short Ratio</div>
+      <div class="val" style="color:#F43F5E;">3.2x</div>
+      <div class="sub">High short interest</div>
+    </div>
+    <div class="stat stat-warn">
+      <div class="lbl">P/E Ratio</div>
+      <div class="val" style="color:#F59E0B;">68.4x</div>
+      <div class="sub">Above sector avg</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Market Cap</div>
+      <div class="val">$2.16T</div>
+      <div class="sub">Mega cap</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">52-Wk High</div>
+      <div class="val">$974.00</div>
+      <div class="sub">−10.1% from high</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Avg Vol (10D)</div>
+      <div class="val">42.3M</div>
+      <div class="sub">vs 38.1M avg</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Beta</div>
+      <div class="val">1.68</div>
+      <div class="sub">High volatility</div>
+    </div>
+  </div>
+</body>
+</html>

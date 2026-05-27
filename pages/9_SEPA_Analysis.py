@@ -15,8 +15,9 @@ from utils.sepa_engine import (
     _sma,
 )
 from utils.formatters import fmt_number, fmt_pct, safe_get
+st.set_page_config(page_title="Quant Terminal")
+st.stop()
 
-st.set_page_config(page_title="SEPA Analysis · Quant Terminal", page_icon="🎯", layout="wide")
 
 _css = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'styles', 'custom.css')
 if os.path.exists(_css):

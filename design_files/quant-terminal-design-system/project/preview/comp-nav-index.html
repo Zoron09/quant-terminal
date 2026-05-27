@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #070B12; font-family: 'DM Sans', sans-serif; padding: 20px; }
+  .label { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #475569; margin-bottom: 10px; }
+
+  /* Sidebar */
+  .sidebar { background: #060910; border: 1px solid #1A2640; border-radius: 6px; width: 180px; padding: 12px 0; }
+  .nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 12px; color: #94A3B8; cursor: pointer; transition: background 150ms; }
+  .nav-item.active { background: rgba(62,207,207,0.08); color: #3ECFCF; border-left: 2px solid #3ECFCF; }
+  .nav-item:hover:not(.active) { background: #0D1420; color: #EDF2F7; }
+  .nav-divider { height: 1px; background: #1A2640; margin: 6px 0; }
+  .nav-section { font-size: 9px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #2D3F55; padding: 6px 14px 2px; }
+  .icon { width: 14px; height: 14px; opacity: 0.7; }
+
+  /* Index cards */
+  .idx-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .idx-card { background: #0D1420; border: 1px solid #243650; border-radius: 6px; padding: 10px 12px; }
+  .idx-name { font-size: 10px; color: #475569; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+  .idx-val { font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 700; color: #EDF2F7; }
+  .idx-chg { font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-top: 2px; }
+</style>
+</head>
+<body>
+  <div style="display:flex;gap:20px;align-items:flex-start;">
+    <!-- Sidebar Nav -->
+    <div>
+      <div class="label">Sidebar Navigation</div>
+      <div class="sidebar">
+        <div style="padding:10px 14px 8px;border-bottom:1px solid #1A2640;">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:#3ECFCF;letter-spacing:0.06em;">QUANT</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#2D3F55;letter-spacing:0.1em;">TERMINAL v2</div>
+        </div>
+        <div style="padding:8px 12px;">
+          <input style="width:100%;background:#111B2E;border:1px solid #243650;border-radius:4px;color:#EDF2F7;font-family:'JetBrains Mono',monospace;font-size:12px;padding:5px 8px;outline:none;" placeholder="Ticker…" value="NVDA" />
+        </div>
+        <div class="nav-section">Research</div>
+        <div class="nav-item active">Overview</div>
+        <div class="nav-item">Financials</div>
+        <div class="nav-item">Growth & Margins</div>
+        <div class="nav-item">Valuation</div>
+        <div class="nav-item">Earnings</div>
+        <div class="nav-divider"></div>
+        <div class="nav-section">SEPA</div>
+        <div class="nav-item">SEPA Analysis</div>
+        <div class="nav-item">Screener</div>
+        <div class="nav-divider"></div>
+        <div class="nav-section">Market</div>
+        <div class="nav-item">Market Dashboard</div>
+        <div class="nav-item">Portfolio</div>
+        <div class="nav-item">News & Alerts</div>
+      </div>
+    </div>
+
+    <!-- Index Cards -->
+    <div style="flex:1;">
+      <div class="label">Index Cards</div>
+      <div class="idx-grid">
+        <div class="idx-card">
+          <div class="idx-name">S&amp;P 500</div>
+          <div class="idx-val">5,234.18</div>
+          <div class="idx-chg" style="color:#22C55E;">+0.84%</div>
+        </div>
+        <div class="idx-card">
+          <div class="idx-name">NASDAQ</div>
+          <div class="idx-val">16,402.7</div>
+          <div class="idx-chg" style="color:#22C55E;">+1.12%</div>
+        </div>
+        <div class="idx-card">
+          <div class="idx-name">Nifty 50</div>
+          <div class="idx-val">22,147.0</div>
+          <div class="idx-chg" style="color:#F43F5E;">−0.31%</div>
+        </div>
+        <div class="idx-card">
+          <div class="idx-name">VIX</div>
+          <div class="idx-val" style="color:#F59E0B;">18.42</div>
+          <div class="idx-chg" style="color:#475569;">NEUTRAL</div>
+        </div>
+        <div class="idx-card">
+          <div class="idx-name">Gold</div>
+          <div class="idx-val">$2,341</div>
+          <div class="idx-chg" style="color:#22C55E;">+0.44%</div>
+        </div>
+        <div class="idx-card">
+          <div class="idx-name">10Y UST</div>
+          <div class="idx-val">4.287%</div>
+          <div class="idx-chg" style="color:#F43F5E;">−0.02%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

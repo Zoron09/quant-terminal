@@ -12,8 +12,9 @@ from utils.data_fetcher import get_ticker_info, get_financials, get_price_histor
 from utils.formatters import fmt_price, fmt_pct, fmt_large_number, safe_get
 from utils.dcf_model import calculate_dcf
 from utils.piotroski import calculate_piotroski
+st.set_page_config(page_title="Quant Terminal")
+st.stop()
 
-st.set_page_config(page_title="Valuation · Quant Terminal", page_icon="💰", layout="wide")
 
 _css = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'styles', 'custom.css')
 if os.path.exists(_css):

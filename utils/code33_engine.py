@@ -24,7 +24,7 @@ except Exception:
     FINNHUB_KEY  = ''
     _HAS_FINNHUB = False
 
-CACHE_VERSION = 'v24'
+CACHE_VERSION = 'v25'
 
 # ── SEC EDGAR headers ─────────────────────────────────────────────────────────
 EDGAR_UA = {'User-Agent': 'Meet Singh singhgaganmeet09@gmail.com'}
@@ -82,6 +82,8 @@ def _edgar_series(facts: dict | None, concepts: list, unit: str = 'USD',
 
 def _get_fq_fy(dt, fy_end_m=12) -> str:
     try:
+        if dt.month in (3, 6, 9, 12):
+            return f"Q{dt.month // 3} {dt.year}"
         shift = 12 - fy_end_m
         shifted_m = dt.month + shift
         if shifted_m > 12:
@@ -284,9 +286,10 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
 
     def _make_pool(vals, ends, fys, fps, source_name):
         pool = []
-        for v, e, fy, fp in zip(vals or [], ends or [], fys or [None]*len(vals or []), fps or [None]*len(vals or [])):
+        src_list = source_name if isinstance(source_name, list) else [source_name] * len(vals or [])
+        for v, e, fy, fp, src in zip(vals or [], ends or [], fys or [None]*len(vals or []), fps or [None]*len(vals or []), src_list):
             if v is not None and e:
-                pool.append({'val': float(v), 'end': e, 'fy': fy, 'fp': str(fp).strip().upper() if fp else None, 'source': source_name})
+                pool.append({'val': float(v), 'end': e, 'fy': fy, 'fp': str(fp).strip().upper() if fp else None, 'source': src})
         pool.sort(key=lambda x: x['end'], reverse=True)
         deduped = []
         for entry in pool:
@@ -409,21 +412,25 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
         else:
             fy = merged[duplicate_idx]
             curr_diff = abs(ey['curr_val'] - fy['curr_val']) / max(abs(ey['curr_val']), abs(fy['curr_val']), 1e-9)
-            prior_diff = abs(ey['prior_val'] - fy['prior_val']) / max(abs(ey['prior_val']), abs(fy['prior_val']), 1e-9)
+            if ey['prior_val'] is not None and fy['prior_val'] is not None:
+                prior_diff = abs(ey['prior_val'] - fy['prior_val']) / max(abs(ey['prior_val']), abs(fy['prior_val']), 1e-9)
+            else:
+                prior_diff = 0.0
             if curr_diff > 0.01 or prior_diff > 0.01:
                 merged[duplicate_idx] = ey
 
     merged.sort(key=lambda x: x['dt'])
-    if len(merged) > 8:
-        merged = merged[-8:]
+    if len(merged) > 16:
+        merged = merged[-16:]
     if merged:
         return (
             [x['rate'] for x in merged],
             [x['label'] for x in merged],
             [x['end'] for x in merged],
-            [x['prior_val'] for x in merged]
+            [x['prior_val'] for x in merged],
+            [x.get('source', '') for x in merged]
         )
-    return [], [], [], []
+    return [], [], [], [], []
 
 @st.cache_data(ttl=86400, show_spinner=False)
 
@@ -449,6 +456,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     excluded_sector_name = ''
 
+    fy_end_month = 12
     try:
 
         info = yf.Ticker(ticker.upper()).info or {}
@@ -456,7 +464,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
         fy_end_month = 12
         if 'lastFiscalYearEnd' in info:
             try:
-                from datetime import datetime, timezone
+                from datetime import timezone
                 fy_end_dt = datetime.fromtimestamp(info['lastFiscalYearEnd'], tz=timezone.utc)
                 m = fy_end_dt.month
                 # January FY-end: treat as December so calendar-year quarters
@@ -892,169 +900,94 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
     # ── EDGAR fetcher (independent per metric) ────────────────────────────────
-
     def _edgar_metric(concepts, unit='USD', is_eps=False, is_revenue=False):
-
         """Return (values, labels, end_dates, fy_list, fp_list) from SEC EDGAR filings using strict quarterly filters."""
-
         facts = get_edgar_facts(ticker)
-
         if not facts:
-
-            return [], [], [], [], []
-
-
+            return [], [], [], [], [], []
 
         usgaap = facts.get('facts', {}).get('us-gaap', {})
-
         cutoff_date = (datetime.utcnow() - timedelta(days=365 * 5)).date()
-
         recency_cutoff = (datetime.utcnow() - timedelta(days=548)).date()  # ~18 months
 
-
-
-        global_dedup = {}
-
-        global_ytd_6m = {}
-
-        global_ytd_9m = {}
-
-        global_annual = {}
-
-
-
-        # ── Accumulate entries across ALL concepts into a unified global pool ──
-
-        # This prevents the "first passing concept" early-return from missing
-
-        # historical data that lives under a different XBRL tag (e.g. SalesRevenueNet
-
-        # for older years vs RevenueFromContractWithCustomer for recent years).
-
-        for concept in concepts:
+        def _extract_for_concept(concept):
+            global_dedup = {}
+            global_ytd_6m = {}
+            global_ytd_9m = {}
+            global_annual = {}
 
             entries = usgaap.get(concept, {}).get('units', {}).get(unit, [])
-
             if not entries:
-
-                continue
+                return []
 
             for e in entries:
-
                 form = str(e.get('form', '')).strip().upper()
-
                 if form not in ('10-Q', '10-K', '20-F', '6-K'):
-
                     continue
-
                 end_str = str(e.get('end', '')).strip()
-
                 start_str = str(e.get('start', '')).strip()
-
                 filed_str = str(e.get('filed', '')).strip()
-
                 val = _sf(e.get('val'))
-
                 if not end_str or not start_str or val is None:
-
                     continue
-
                 try:
-
                     end_dt = datetime.strptime(end_str, '%Y-%m-%d').date()
-
                     start_dt = datetime.strptime(start_str, '%Y-%m-%d').date()
-
                 except Exception:
-
                     continue
-
                 if end_dt < cutoff_date:
-
                     continue
-
                 try:
-
                     filed_dt = datetime.strptime(filed_str, '%Y-%m-%d').date() if filed_str else None
-
                 except Exception:
-
                     filed_dt = None
-
                 duration_days = (end_dt - start_dt).days
-
                 end_key = e['end']
-
                 cloned = dict(e)
-
                 cloned['_end_dt'] = end_dt
-
                 cloned['_filed_dt'] = filed_dt
-
                 cloned['_val'] = float(val)
-
                 cloned['_fy'] = int(e['fy']) if e.get('fy') is not None else end_dt.year
-
                 cloned['_fp'] = str(e['fp']).strip().upper() if e.get('fp') else None
-
                 cloned['form'] = form
 
                 if is_eps and not (75 <= duration_days <= 105):
                     continue
 
                 if 75 <= duration_days <= 105:
-
                     if end_key not in global_dedup:
-
                         global_dedup[end_key] = cloned
-
                     else:
                         if is_revenue:
                             if cloned['_val'] > global_dedup[end_key]['_val']:
                                 global_dedup[end_key] = cloned
                         else:
                             if filed_dt and global_dedup[end_key]['_filed_dt'] and filed_dt > global_dedup[end_key]['_filed_dt']:
-
                                 global_dedup[end_key] = cloned
-
                 elif 170 <= duration_days <= 195:
-
                     if end_key not in global_ytd_6m:
-
                         global_ytd_6m[end_key] = cloned
-
                     else:
                         if is_revenue:
                             if cloned['_val'] > global_ytd_6m[end_key]['_val']:
                                 global_ytd_6m[end_key] = cloned
                         else:
                             if filed_dt and global_ytd_6m[end_key]['_filed_dt'] and filed_dt > global_ytd_6m[end_key]['_filed_dt']:
-
                                 global_ytd_6m[end_key] = cloned
-
                 elif 260 <= duration_days <= 285:
-
                     if end_key not in global_ytd_9m:
-
                         global_ytd_9m[end_key] = cloned
-
                     else:
                         if is_revenue:
                             if cloned['_val'] > global_ytd_9m[end_key]['_val']:
                                 global_ytd_9m[end_key] = cloned
                         else:
                             if filed_dt and global_ytd_9m[end_key]['_filed_dt'] and filed_dt > global_ytd_9m[end_key]['_filed_dt']:
-
                                 global_ytd_9m[end_key] = cloned
-
-                elif 350 <= duration_days <= 380:
-
+                elif 335 <= duration_days <= 395:
                     if form in ('10-K', '20-F'):
-
                         annual_fy = int(e['fy']) if e.get('fy') is not None else None
-
                         f_dt = filed_dt if filed_dt else datetime.min.date()
-
                         if end_dt not in global_annual:
                             global_annual[end_dt] = (end_dt, start_dt, float(val), annual_fy, f_dt)
                         else:
@@ -1065,117 +998,85 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
                                 if f_dt > global_annual[end_dt][4]:
                                     global_annual[end_dt] = (end_dt, start_dt, float(val), annual_fy, f_dt)
 
-        # ── Post-loop: derive Q2/Q3, apply filters, derive Q4 ────────────────
+            for ytd_end, ytd_entry in global_ytd_6m.items():
+                if not any(abs((v['_end_dt'] - ytd_entry['_end_dt']).days) <= 15 for v in global_dedup.values()):
+                    target_q1_end = ytd_entry['_end_dt'] - timedelta(days=90)
+                    q1_entry = next((v for v in global_dedup.values() if abs((v['_end_dt'] - target_q1_end).days) <= 25), None)
+                    if q1_entry:
+                        derived_q2 = dict(ytd_entry)
+                        derived_q2['_val'] = ytd_entry['_val'] - q1_entry['_val']
+                        derived_q2['form'] = '10-Q-derived'
+                        global_dedup[ytd_end] = derived_q2
 
-        # Derive missing Q2 from YTD 6-month
+            for ytd_end, ytd_entry in global_ytd_9m.items():
+                if not any(abs((v['_end_dt'] - ytd_entry['_end_dt']).days) <= 15 for v in global_dedup.values()):
+                    target_q2_end = ytd_entry['_end_dt'] - timedelta(days=90)
+                    ytd_6m_entry = next((v for v in global_ytd_6m.values() if abs((v['_end_dt'] - target_q2_end).days) <= 25), None)
+                    if ytd_6m_entry:
+                        derived_q3 = dict(ytd_entry)
+                        derived_q3['_val'] = ytd_entry['_val'] - ytd_6m_entry['_val']
+                        derived_q3['form'] = '10-Q-derived'
+                        global_dedup[ytd_end] = derived_q3
 
-        for ytd_end, ytd_entry in global_ytd_6m.items():
+            filtered_entries = sorted(global_dedup.values(), key=lambda x: x['_end_dt'], reverse=True)
+            
+            annual_entries = [(item[0], item[1], item[2], item[3]) for item in global_annual.values()]
+            existing_ends = {item['_end_dt'] for item in filtered_entries}
+            for annual_end, annual_start, annual_val, annual_fy in annual_entries:
+                already_exists = any(abs((annual_end - existing_end).days) <= 45 for existing_end in existing_ends)
+                if already_exists:
+                    continue
+                q_in_year = [item for item in global_dedup.values() if item['_end_dt'] > annual_start and item['_end_dt'] <= annual_end]
+                if len(q_in_year) == 3:
+                    q4_val = annual_val - sum(item['_val'] for item in q_in_year)
+                    derived = {
+                        '_end_dt': annual_end,
+                        '_filed_dt': None,
+                        '_val': q4_val,
+                        'form': 'edgar_derived_q4',
+                        '_fy': q_in_year[0]['_fy'],
+                        '_fp': 'Q4',
+                    }
+                    filtered_entries.append(derived)
+                    existing_ends.add(annual_end)
 
-            if not any(abs((v['_end_dt'] - ytd_entry['_end_dt']).days) <= 15 for v in global_dedup.values()):
+            filtered_entries.sort(key=lambda x: x['_end_dt'], reverse=True)
+            return filtered_entries
 
-                target_q1_end = ytd_entry['_end_dt'] - timedelta(days=90)
-
-                q1_entry = next((v for v in global_dedup.values() if abs((v['_end_dt'] - target_q1_end).days) <= 25), None)
-
-                if q1_entry:
-
-                    derived_q2 = dict(ytd_entry)
-
-                    derived_q2['_val'] = ytd_entry['_val'] - q1_entry['_val']
-
-                    derived_q2['form'] = '10-Q-derived'
-
-                    global_dedup[ytd_end] = derived_q2
-
-        # Derive missing Q3 from YTD 9-month
-
-        for ytd_end, ytd_entry in global_ytd_9m.items():
-
-            if not any(abs((v['_end_dt'] - ytd_entry['_end_dt']).days) <= 15 for v in global_dedup.values()):
-
-                target_q2_end = ytd_entry['_end_dt'] - timedelta(days=90)
-
-                ytd_6m_entry = next((v for v in global_ytd_6m.values() if abs((v['_end_dt'] - target_q2_end).days) <= 25), None)
-
-                if ytd_6m_entry:
-
-                    derived_q3 = dict(ytd_entry)
-
-                    derived_q3['_val'] = ytd_entry['_val'] - ytd_6m_entry['_val']
-
-                    derived_q3['form'] = '10-Q-derived'
-
-                    global_dedup[ytd_end] = derived_q3
-
-        filtered_entries = sorted(global_dedup.values(), key=lambda x: x['_end_dt'], reverse=True)
-
-        filtered_entries = filtered_entries[:16]
-
-        if len(filtered_entries) < 3:
-
-            return [], [], [], [], []
-
-        if filtered_entries[0]['_end_dt'] < recency_cutoff:
-
-            return [], [], [], [], []
-
-        filtered_entries.reverse()  # chronological ascending
-
-        # Derive missing Q4s from annual filings
-
-        annual_entries = [(item[0], item[1], item[2], item[3]) for item in global_annual.values()]
-
-        existing_ends = {item['_end_dt'] for item in filtered_entries}
-
-        for annual_end, annual_start, annual_val, annual_fy in annual_entries:
-
-            already_exists = any(abs((annual_end - existing_end).days) <= 60 for existing_end in existing_ends)
-
-            if already_exists:
-
-                continue
-
-            q_in_year = [item for item in global_dedup.values() if item['_end_dt'] > annual_start and item['_end_dt'] <= annual_end]
-
-            if len(q_in_year) == 3:
-
-                q4_val = annual_val - sum(item['_val'] for item in q_in_year)
-
-                derived = {
-
-                    '_end_dt': annual_end,
-
-                    '_filed_dt': None,
-
-                    '_val': q4_val,
-
-                    'form': '10-K-derived',
-
-                    '_fy': q_in_year[0]['_fy'],
-
-                    '_fp': 'Q4',
-
-                }
-
-                filtered_entries.append(derived)
-
-                existing_ends.add(annual_end)
-
-        filtered_entries.sort(key=lambda x: x['_end_dt'])
-
-        vals    = [item['_val'] for item in filtered_entries]
-
-        ends    = [item['_end_dt'].isoformat() for item in filtered_entries]
-
-        lbls    = [_get_fq_fy(item['_end_dt'], fy_end_month) for item in filtered_entries]
-
-        fy_list = [item.get('_fy') for item in filtered_entries]
-
-        fp_list = [item.get('_fp') for item in filtered_entries]
-
-        return vals, lbls, ends, fy_list, fp_list
-
-        return [], [], [], [], []
+        primary_entries = []
+        for concept in concepts:
+            concept_entries = _extract_for_concept(concept)
+            if concept_entries and concept_entries[0]['_end_dt'] < recency_cutoff:
+                concept_entries = []
+            
+            if not primary_entries and len(concept_entries) >= 4:
+                primary_entries = concept_entries
+            elif primary_entries:
+                existing_ends = {item['_end_dt'] for item in primary_entries}
+                for entry in concept_entries:
+                    already_exists = any(abs((entry['_end_dt'] - e).days) <= 60 for e in existing_ends)
+                    if not already_exists:
+                        primary_entries.append(entry)
+                        existing_ends.add(entry['_end_dt'])
+        
+        primary_entries.sort(key=lambda x: x['_end_dt'], reverse=True)
+        primary_entries = primary_entries[:16]
+        
+        if len(primary_entries) < 3:
+            return [], [], [], [], [], []
+        if primary_entries[0]['_end_dt'] < recency_cutoff:
+            return [], [], [], [], [], []
+            
+        primary_entries.reverse()  # chronological ascending
+        
+        vals    = [item['_val'] for item in primary_entries]
+        ends    = [item['_end_dt'].isoformat() for item in primary_entries]
+        lbls    = [_get_fq_fy(item['_end_dt'], fy_end_month) for item in primary_entries]
+        fy_list = [item.get('_fy') for item in primary_entries]
+        fp_list = [item.get('_fp') for item in primary_entries]
+        form_list = [item.get('form') for item in primary_entries]
+        
+        return vals, lbls, ends, fy_list, fp_list, form_list
 
 
 
@@ -1186,7 +1087,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
         WeightedAverageNumberOfDilutedSharesOutstanding.  Matches FactSet/TV."""
         facts = get_edgar_facts(ticker)
         if not facts:
-            return [], [], [], [], []
+            return [], [], [], [], [], []
 
         usgaap = facts.get('facts', {}).get('us-gaap', {})
         cutoff   = (datetime.utcnow() - timedelta(days=365 * 5)).date()
@@ -1289,6 +1190,81 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
                     'form':     ni['form'],
                 })
 
+        # -- Derived Q4 --
+        def _annual(concepts, unit, use_first_filed=False):
+            by_end = {}
+            for concept in concepts:
+                for e in usgaap.get(concept, {}).get('units', {}).get(unit, []):
+                    form = str(e.get('form', '')).upper()
+                    if form not in ('10-K', '20-F'): continue
+                    end_s   = str(e.get('end',   '')).strip()
+                    start_s = str(e.get('start', '')).strip()
+                    filed_s = str(e.get('filed', '')).strip()
+                    val = _sf(e.get('val'))
+                    if not end_s or not start_s or val is None: continue
+                    try:
+                        end_dt   = datetime.strptime(end_s,   '%Y-%m-%d').date()
+                        start_dt = datetime.strptime(start_s, '%Y-%m-%d').date()
+                        filed_dt = datetime.strptime(filed_s, '%Y-%m-%d').date() if filed_s else None
+                    except Exception: continue
+                    if end_dt < cutoff: continue
+                    if not (335 <= (end_dt - start_dt).days <= 395): continue
+                    entry = {
+                        '_end_dt':   end_dt,
+                        '_start_dt': start_dt,
+                        '_filed_dt': filed_dt,
+                        '_val':      float(val),
+                        '_fy':       int(e['fy']) if e.get('fy') is not None else end_dt.year,
+                        '_fp':       str(e['fp']).strip().upper() if e.get('fp') else None,
+                        'form':      form,
+                    }
+                    if end_s not in by_end:
+                        by_end[end_s] = entry
+                    elif filed_dt and by_end[end_s]['_filed_dt']:
+                        if use_first_filed:
+                            if filed_dt < by_end[end_s]['_filed_dt']: by_end[end_s] = entry
+                        else:
+                            if filed_dt > by_end[end_s]['_filed_dt']: by_end[end_s] = entry
+            return by_end
+
+        ni_ann = _annual(['NetIncomeLoss', 'NetIncome', 'ProfitLoss', 'NetIncomeLossAvailableToCommonStockholdersBasic'], 'USD', False)
+        sh_ann = _annual(['WeightedAverageNumberOfDilutedSharesOutstanding', 'WeightedAverageNumberOfSharesOutstandingDiluted'], 'shares', True)
+        
+        if ni_ann and sh_ann:
+            for end_s, ni_a in ni_ann.items():
+                end_dt = ni_a['_end_dt']
+                
+                # Check if discrete Q4 exists within 45 days
+                if any(abs((r['_end_dt'] - end_dt).days) <= 45 for r in results):
+                    continue
+                    
+                best_sh = None; best_diff = 31
+                for sh_a in sh_ann.values():
+                    d = abs((sh_a['_end_dt'] - end_dt).days)
+                    if d < best_diff:
+                        best_diff = d; best_sh = sh_a
+                if best_sh is None or best_sh['_val'] == 0: continue
+                
+                # Q1+Q2+Q3 from ni_map
+                q_in_year = [q for q in ni_map.values() if q['_end_dt'] > ni_a['_start_dt'] and q['_end_dt'] <= end_dt]
+                if len(q_in_year) == 3:
+                    q4_ni = ni_a['_val'] - sum(q['_val'] for q in q_in_year)
+                    cum = 1.0
+                    for split_dt, ratio in splits:
+                        if split_dt > end_dt:
+                            cum *= ratio
+                    adj_shares = best_sh['_val'] * cum
+                    if adj_shares == 0: continue
+                    
+                    results.append({
+                        '_end_dt':  end_dt,
+                        '_filed_dt': ni_a['_filed_dt'],
+                        '_val':     q4_ni / adj_shares,
+                        '_fy':      ni_a['_fy'],
+                        '_fp':      ni_a['_fp'] if ni_a['_fp'] else 'Q4',
+                        'form':     'edgar_derived_q4',
+                    })
+
         # If NI/shares path produced only stale data (all entries older than
         # recency cutoff), discard so the 6-K EPS fallback can run.
         if results and max(r['_end_dt'] for r in results) < recency:
@@ -1338,7 +1314,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
                 elif filed_dt and fb_by_end[end_s]['_filed_dt'] and filed_dt > fb_by_end[end_s]['_filed_dt']:
                     fb_by_end[end_s] = entry
             if not fb_by_end:
-                return [], [], [], [], []  # foreign_filer_no_data
+                return [], [], [], [], [], []  # foreign_filer_no_data
             results = list(fb_by_end.values())
 
             # Level 3: if all level-2 results are semi-annual (duration > 105d),
@@ -1433,7 +1409,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
         results.sort(key=lambda x: x['_end_dt'], reverse=True)
         results = results[:8]
         if results[0]['_end_dt'] < recency:
-            return [], [], [], [], []
+            return [], [], [], [], [], []
         results.reverse()
 
         return (
@@ -1442,6 +1418,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
             [r['_end_dt'].isoformat() for r in results],
             [r['_fy']  for r in results],
             [r['_fp']  for r in results],
+            [r['form'] for r in results],
         )
 
     # ── Fetch each metric independently ───────────────────────────────────────
@@ -1480,14 +1457,14 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp = _edgar_metric(rev_keys_edgar, is_revenue=True)
+    edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp, edgar_rev_form = _edgar_metric(rev_keys_edgar, is_revenue=True)
 
 
 
-    edgar_ni_abs, edgar_ni_lbl, edgar_ni_end, edgar_ni_fy, edgar_ni_fp = _edgar_metric(ni_keys_edgar)
+    edgar_ni_abs, edgar_ni_lbl, edgar_ni_end, edgar_ni_fy, edgar_ni_fp, edgar_ni_form = _edgar_metric(ni_keys_edgar)
 
     # Normalized EPS: NI / split-adjusted diluted shares (FactSet / TV method)
-    edgar_eps, edgar_eps_lbl, edgar_eps_end, edgar_eps_fy, edgar_eps_fp = _fetch_edgar_eps_normalized()
+    edgar_eps, edgar_eps_lbl, edgar_eps_end, edgar_eps_fy, edgar_eps_fp, edgar_eps_form = _fetch_edgar_eps_normalized()
 
 
 
@@ -1515,7 +1492,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
             if ratio > 5:
 
-                edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp = [], [], [], [], []
+                edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp, edgar_rev_form = [], [], [], [], [], []
 
 
 
@@ -1535,7 +1512,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
             if ratio > 5:
 
-                edgar_ni_abs, edgar_ni_lbl, edgar_ni_end, edgar_ni_fy, edgar_ni_fp = [], [], [], [], []
+                edgar_ni_abs, edgar_ni_lbl, edgar_ni_end, edgar_ni_fy, edgar_ni_fp, edgar_ni_form = [], [], [], [], [], []
 
 
 
@@ -1597,25 +1574,26 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     # ── yfinance Fallback Injection ───────────────────────────────────────────
 
-    # If FMP failed (e.g. 402 error for un-subscribed tickers), inject yfinance.
+    # If FMP failed (e.g. 402 error for un-subscribed tickers), try EDGAR first, then yfinance.
+    if not fmp_rev or len(fmp_rev) < 4:
+        if edgar_rev and len(edgar_rev) >= 4:
+            fmp_rev, fmp_rev_lbl, fmp_rev_end, fmp_rev_fy, fmp_rev_fp = edgar_rev, edgar_rev_lbl, edgar_rev_end, edgar_rev_fy, edgar_rev_fp
+        elif yf_rev:
+            fmp_rev, fmp_rev_end = yf_rev, yf_rev_end
+            fmp_rev_fy, fmp_rev_fp = [None] * len(yf_rev), [None] * len(yf_rev)
 
-    if not fmp_rev and yf_rev:
-
-        fmp_rev, fmp_rev_end = yf_rev, yf_rev_end
-
-        fmp_rev_fy, fmp_rev_fp = [None] * len(yf_rev), [None] * len(yf_rev)
-
-    if not fmp_ni and yf_ni:
-
-        fmp_ni, fmp_ni_end = yf_ni, yf_ni_end
-
-        fmp_ni_fy, fmp_ni_fp = [None] * len(yf_ni), [None] * len(yf_ni)
+    if not fmp_ni or len(fmp_ni) < 4:
+        if edgar_ni_abs and len(edgar_ni_abs) >= 4:
+            fmp_ni, fmp_ni_lbl, fmp_ni_end, fmp_ni_fy, fmp_ni_fp = edgar_ni_abs, edgar_ni_lbl, edgar_ni_end, edgar_ni_fy, edgar_ni_fp
+        elif yf_ni:
+            fmp_ni, fmp_ni_end = yf_ni, yf_ni_end
+            fmp_ni_fy, fmp_ni_fp = [None] * len(yf_ni), [None] * len(yf_ni)
 
 
 
     # ── Revenue YoY ───────────────────────────────────────────────────────────
 
-    rev_yoy_final, rev_labels_final, _, _rev_prior_vals = _date_first_yoy(fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end, fmp_rev_fy, fmp_rev_fp, None, None, fy_end_m=fy_end_month, append_none=True)
+    rev_yoy_final, rev_labels_final, _, _rev_prior_vals, _ = _date_first_yoy(fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end, fmp_rev_fy, fmp_rev_fp, None, None, fy_end_m=fy_end_month, append_none=True)
 
     rev_raw_final      = edgar_rev     if edgar_rev     else fmp_rev
 
@@ -1643,20 +1621,23 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
+    # ── Wire yfinance as primary for US tickers ───────────────────────────────
+    eps_edgar_sources = [f if f == 'edgar_derived_q4' else 'edgar' for f in edgar_eps_form]
+
     # -- EPS YoY: normalized NI/split-adj-shares from EDGAR.
     # Step 6 N/A guards applied after pairing:
     #   - abs(prior) < 0.03 → skip (denominator instability)
     #   - abs(rate) > 999%  → skip (extreme / meaningless)
     #   - sign flip         → keep but append [NM] to label
 
-    eps_yoy_raw, eps_labels_raw, eps_yoy_ends_raw, eps_prior_vals_raw = _date_first_yoy(
+    eps_yoy_raw, eps_labels_raw, eps_yoy_ends_raw, eps_prior_vals_raw, eps_sources_raw = _date_first_yoy(
         eps_edgar_clean, edgar_eps_end, [], [], edgar_eps_fy, edgar_eps_fp, None, None,
         fy_end_m=fy_end_month, src_primary='edgar', src_fallback='none'
     )
 
-    eps_yoy_final, eps_labels_final, eps_yoy_ends, eps_prior_vals = [], [], [], []
-    for rate, label, end, prior in zip(
-            eps_yoy_raw, eps_labels_raw, eps_yoy_ends_raw, eps_prior_vals_raw):
+    eps_yoy_final, eps_labels_final, eps_yoy_ends, eps_prior_vals, eps_sources = [], [], [], [], []
+    for rate, label, end, prior, src in zip(
+            eps_yoy_raw, eps_labels_raw, eps_yoy_ends_raw, eps_prior_vals_raw, eps_sources_raw):
         # Always keep quarter in pool — mark rate as None instead of skipping.
         # Skipping reduces raw quarter count below 8 → false INSUFFICIENT.
         if prior is None or abs(prior) < 0.10 or abs(rate) > 999:
@@ -1664,6 +1645,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
             eps_labels_final.append(label)
             eps_yoy_ends.append(end)
             eps_prior_vals.append(prior)
+            eps_sources.append(src)
             continue
         # Sign flip: prior > 0 and went negative, or prior < 0 and went positive
         sign_flip = (prior > 0 and rate < -100) or (prior < 0 and rate > 100)
@@ -1671,6 +1653,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
         eps_labels_final.append(f'{label} [NM]' if sign_flip else label)
         eps_yoy_ends.append(end)
         eps_prior_vals.append(prior)
+        eps_sources.append(src)
 
     eps_raw_final      = eps_edgar_clean
     eps_raw_ends_final = edgar_eps_end
@@ -1698,6 +1681,8 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
         sources['rev'] = 'insufficient'
 
 
+
+    status, _d1, _d2 = _c33_status(eps_yoy_final or [])
 
     return {
 
@@ -1727,7 +1712,11 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
         'is_reit': is_reit,
 
+        'status': status,
+
         'eps_prior_vals': eps_prior_vals if eps_yoy_final else [],
+
+        'eps_sources': eps_sources if eps_yoy_final else [],
 
     }
 

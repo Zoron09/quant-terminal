@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quant Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+html, body, #root { height:100%; }
+body { -webkit-font-smoothing:antialiased; font-family:'Inter',sans-serif; background:#0F0F11; color:#EFEFEF; }
+input, button { font-family:inherit; }
+::-webkit-scrollbar { width:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:#222228; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+const T = {
+  bg:        '#0F0F11',
+  surface:   '#161618',
+  raised:    '#1E1E21',
+  border:    '#222226',
+  borderMid: '#2E2E35',
+  accent:    '#C8FF57',
+  accentDim: 'rgba(200,255,87,0.09)',
+  pos:       '#4ADE80',
+  posDim:    'rgba(74,222,128,0.12)',
+  neg:       '#F87171',
+  negDim:    'rgba(248,113,113,0.12)',
+  warn:      '#FCD34D',
+  fg1:       '#EFEFEF',
+  fg2:       '#9090A8',
+  fg3:       '#48485A',
+  fg4:       '#28282F',
+  serif:     "'DM Serif Display', Georgia, serif",
+  ui:        "'Inter', sans-serif",
+  mono:      "'IBM Plex Mono', monospace",
+};
+
+/* ── SPARKLINE ─────────────────────────────────────────────────── */
+function Spark({ data, color, h = 40 }) {
+  if (!data || data.length < 2) return null;
+  const mn = Math.min(...data), mx = Math.max(...data), r = mx - mn || 1;
+  const W = 100, H = h;
+  const pts = data.map((v, i) => `${(i / (data.length - 1)) * W},${H - ((v - mn) / r) * (H - 3) - 1}`).join(' ');
+  const fillPts = `0,${H} ${pts} ${W},${H}`;
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block' }}>
+      <defs>
+        <linearGradient id={`sg${h}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.2" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polygon points={fillPts} fill={`url(#sg${h})`} />
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/* ── CHANGE PILL ── like PilePeak green pills ────────────────────── */
+function ChangePill({ pct, value }) {
+  const pos = pct >= 0;
+  const col = pos ? '#0F2A1A' : '#2A0F0F';
+  const text = pos ? T.pos : T.neg;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      background: pos ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)',
+      color: text, borderRadius: 6, padding: '4px 10px',
+      fontFamily: T.mono, fontSize: 12, fontWeight: 600,
+    }}>
+      {pos ? '▲' : '▼'} {pos ? '+' : ''}{pct?.toFixed(2)}%
+      {value !== undefined && <span style={{ opacity: 0.7 }}>${Math.abs(value).toFixed(2)}</span>}
+    </span>
+  );
+}
+
+/* ── TABS ───────────────────────────────────────────────────────── */
+function Tabs({ items, active, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 0, borderBottom: `1px solid ${T.border}`, marginBottom: 28 }}>
+      {items.map(item => (
+        <button key={item} onClick={() => onChange(item)} style={{
+          padding: '10px 18px', fontSize: 13, fontWeight: active === item ? 600 : 400,
+          color: active === item ? T.fg1 : T.fg3,
+          background: 'transparent', border: 'none', cursor: 'pointer',
+          borderBottom: `2px solid ${active === item ? T.accent : 'transparent'}`,
+          marginBottom: -1, transition: 'all 120ms',
+        }}>{item}</button>
+      ))}
+    </div>
+  );
+}
+
+/* ── SECTION TITLE ─────────────────────────────────────────────── */
+function SectionTitle({ children, sub }) {
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 15, fontWeight: 600, color: T.fg1 }}>{children}</div>
+      {sub && <div style={{ fontSize: 12, color: T.fg3, marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+}
+
+/* ── STAT ROW ── no cards, just text rows like PilePeak ─────────── */
+function StatRow({ label, value, color, sub }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: `1px solid ${T.border}` }}>
+      <div>
+        <div style={{ fontSize: 12, color: T.fg3, marginBottom: 2 }}>{label}</div>
+        {sub && <div style={{ fontSize: 11, color: T.fg3 }}>{sub}</div>}
+      </div>
+      <div style={{ fontFamily: T.mono, fontSize: 14, fontWeight: 500, color: color || T.fg1 }}>{value}</div>
+    </div>
+  );
+}
+
+/* ── MINI STAT ── the 3-col stat below chart like PilePeak ─────── */
+function MiniStat({ label, value, sub, color }) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: T.fg3, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: T.mono, fontSize: 18, fontWeight: 600, color: color || T.fg1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: T.fg3, marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   OVERVIEW SCREEN
+──────────────────────────────────────────────────────────────────*/
+const SPARK30 = [42,44,43,47,50,48,52,57,54,60,63,61,66,71,69,74,77,73,79,86,83,88,85,90,87,92,89,94,91,87];
+
+function OverviewScreen() {
+  const [tab, setTab] = React.useState('Overview');
+
+  return (
+    <div>
+      {/* Greeting */}
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 13, color: T.fg3, marginBottom: 6 }}>Good morning, Meet.</div>
+        <div style={{ fontFamily: T.serif, fontSize: 40, color: T.fg1, lineHeight: 1, letterSpacing: '-0.01em' }}>
+          NVIDIA Corporation
+        </div>
+      </div>
+
+      <Tabs items={['Overview', 'Financials', 'Valuation', 'Ownership']} active={tab} onChange={setTab} />
+
+      {/* Price hero — BIG like the second reference */}
+      <div style={{ marginBottom: 32 }}>
+        <div style={{ fontSize: 12, color: T.fg3, marginBottom: 10, fontWeight: 500, letterSpacing: '0.04em', textTransform: 'uppercase', fontFamily: T.mono }}>NVDA · NYSE · USD</div>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ fontFamily: T.serif, fontSize: 80, fontWeight: 400, color: T.fg1, lineHeight: 1, letterSpacing: '-0.02em' }}>
+            $875<span style={{ fontSize: 48, opacity: 0.5 }}>.39</span>
+          </div>
+          <div style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <ChangePill pct={2.84} value={24.18} />
+            <div style={{ fontSize: 12, color: T.fg3 }}>Today · 15-min delay</div>
+          </div>
+          <div style={{ marginLeft: 'auto', paddingBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: T.pos, boxShadow: `0 0 8px ${T.pos}`, display: 'inline-block' }} />
+            <span style={{ fontSize: 12, color: T.pos }}>Market open</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Chart */}
+      <div style={{ marginBottom: 8 }}>
+        <Spark data={SPARK30} color={T.pos} h={80} />
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 32 }}>
+        {['1D','1W','1M','3M','1Y','All'].map(p => (
+          <button key={p} style={{
+            background: p === '1M' ? T.raised : 'transparent',
+            border: `1px solid ${p === '1M' ? T.borderMid : 'transparent'}`,
+            borderRadius: 5, color: p === '1M' ? T.fg1 : T.fg3,
+            fontSize: 11, padding: '4px 10px', cursor: 'pointer',
+          }}>{p}</button>
+        ))}
+      </div>
+
+      {/* 3-col mini stats — like PilePeak */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0, paddingBottom: 28, borderBottom: `1px solid ${T.border}`, marginBottom: 28 }}>
+        <MiniStat label="52-week return" value="+189.3%" color={T.pos} sub="vs S&P +24.1%" />
+        <MiniStat label="Avg volume (10D)" value="42.3M" sub="vs 38.1M avg" />
+        <MiniStat label="Best SEPA signal" value="Code 33" color={T.accent} sub="3 consecutive quarters" />
+      </div>
+
+      {/* Two columns: stats + SEPA */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 40 }}>
+        <div>
+          <SectionTitle>Key Metrics</SectionTitle>
+          <StatRow label="Market Cap" value="$2.16T" />
+          <StatRow label="Trailing P/E" value="68.4×" color={T.warn} />
+          <StatRow label="Forward P/E" value="34.2×" />
+          <StatRow label="Profit Margin" value="55.7%" color={T.pos} />
+          <StatRow label="Return on Equity" value="91.4%" color={T.pos} />
+          <StatRow label="Beta" value="1.68" />
+          <StatRow label="Short Ratio" value="0.9d" />
+        </div>
+        <div>
+          <SectionTitle>SEPA Summary</SectionTitle>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
+            <span style={{ fontFamily: T.serif, fontSize: 56, color: T.accent, lineHeight: 1 }}>87</span>
+            <span style={{ fontSize: 13, color: T.fg3 }}>/ 100 · Qualified</span>
+          </div>
+          <div style={{ background: T.raised, borderRadius: 4, height: 4, overflow: 'hidden', marginBottom: 20 }}>
+            <div style={{ width: '87%', height: '100%', background: `linear-gradient(90deg, ${T.accent}66, ${T.accent})`, borderRadius: 4 }} />
+          </div>
+          <StatRow label="Stage" value="Stage 2 — Advancing" color={T.pos} />
+          <StatRow label="RS Rank" value="94 / 100" color={T.accent} />
+          <StatRow label="Trend Template" value="7 / 8 criteria" color={T.pos} />
+          <StatRow label="VCP Pattern" value="Detected" color={T.accent} />
+          <StatRow label="Code 33" value="● Green" color={T.pos} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   SCREENER SCREEN
+──────────────────────────────────────────────────────────────────*/
+function ScreenerScreen() {
+  const [q, setQ] = React.useState('');
+  const [preset, setPreset] = React.useState('All');
+  const stocks = [
+    { t:'NVDA', n:'NVIDIA',        p:'$875.39',  c:2.84,  s:87, st:'Stage 2', rs:94, mc:'$2.16T', c33:true  },
+    { t:'MELI', n:'MercadoLibre',  p:'$1,842',   c:1.02,  s:81, st:'Stage 2', rs:87, mc:'$93.4B', c33:true  },
+    { t:'META', n:'Meta Platforms',p:'$512.40',  c:0.87,  s:78, st:'Stage 2', rs:83, mc:'$1.30T', c33:false },
+    { t:'AMZN', n:'Amazon',        p:'$182.30',  c:0.54,  s:74, st:'Stage 2', rs:79, mc:'$1.89T', c33:false },
+    { t:'MSFT', n:'Microsoft',     p:'$413.50',  c:-0.22, s:66, st:'Stage 2', rs:70, mc:'$3.07T', c33:false },
+    { t:'IREN', n:'Iris Energy',   p:'$9.84',    c:-1.43, s:52, st:'Stage 1', rs:58, mc:'$1.2B',  c33:false },
+    { t:'SOFI', n:'SoFi',          p:'$8.24',    c:-2.11, s:32, st:'Stage 4', rs:28, mc:'$8.7B',  c33:false },
+  ].filter(s => !q || s.t.includes(q.toUpperCase()) || s.n.toLowerCase().includes(q.toLowerCase()));
+
+  const sc = v => v >= 75 ? T.pos : v >= 50 ? T.warn : T.neg;
+  const presets = ['All', 'SEPA ≥ 75', 'Code 33', 'Stage 2', 'RS > 80', 'VCP'];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 13, color: T.fg3, marginBottom: 6 }}>Scanning US markets</div>
+        <div style={{ fontFamily: T.serif, fontSize: 40, color: T.fg1, lineHeight: 1, letterSpacing: '-0.01em' }}>Screener</div>
+      </div>
+
+      {/* Controls */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+        <input value={q} onChange={e => setQ(e.target.value)}
+          placeholder="Search ticker or company…"
+          style={{
+            flex: 1, background: T.surface, border: `1px solid ${T.borderMid}`,
+            borderRadius: 8, color: T.fg1, fontSize: 13,
+            padding: '10px 16px', outline: 'none',
+          }} />
+        <button style={{
+          background: T.accent, color: '#0A1200', border: 'none',
+          borderRadius: 8, padding: '10px 24px', fontSize: 13, fontWeight: 700,
+        }}>Run Scan</button>
+      </div>
+
+      {/* Preset pills */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 24 }}>
+        {presets.map(p => (
+          <button key={p} onClick={() => setPreset(p)} style={{
+            padding: '6px 14px', borderRadius: 20, fontSize: 12,
+            fontWeight: preset === p ? 600 : 400,
+            background: preset === p ? T.raised : 'transparent',
+            border: `1px solid ${preset === p ? T.borderMid : T.border}`,
+            color: preset === p ? T.fg1 : T.fg3, cursor: 'pointer', transition: 'all 120ms',
+          }}>{p}</button>
+        ))}
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: T.fg3, alignSelf: 'center' }}>
+          6,842 stocks · Updated 14:32
+        </span>
+      </div>
+
+      {/* Table */}
+      <div style={{ background: T.surface, borderRadius: 14, border: `1px solid ${T.border}`, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: T.raised }}>
+              {['Company', 'Price', 'Today', 'SEPA', 'Stage', 'RS', 'Market Cap', 'Code 33'].map((h, i) => (
+                <th key={h} style={{
+                  padding: '12px 20px', textAlign: i === 0 ? 'left' : 'right',
+                  fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
+                  letterSpacing: '0.07em', color: T.fg3, borderBottom: `1px solid ${T.border}`,
+                }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {stocks.map((s, i) => (
+              <tr key={s.t}
+                style={{ borderBottom: i < stocks.length - 1 ? `1px solid ${T.border}` : 'none', transition: 'background 120ms', cursor: 'pointer' }}
+                onMouseEnter={e => e.currentTarget.style.background = T.raised}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <td style={{ padding: '13px 20px' }}>
+                  <div style={{ fontFamily: T.mono, fontSize: 13, fontWeight: 600, color: T.accent }}>{s.t}</div>
+                  <div style={{ fontSize: 11, color: T.fg3, marginTop: 2 }}>{s.n}</div>
+                </td>
+                <td style={{ padding: '13px 20px', textAlign: 'right', fontFamily: T.mono, fontSize: 13, fontWeight: 500, color: T.fg1 }}>{s.p}</td>
+                <td style={{ padding: '13px 20px', textAlign: 'right' }}>
+                  <ChangePill pct={s.c} />
+                </td>
+                <td style={{ padding: '13px 20px', textAlign: 'right' }}>
+                  <span style={{
+                    fontFamily: T.mono, fontSize: 13, fontWeight: 600, color: sc(s.s),
+                    background: s.s >= 75 ? T.posDim : s.s >= 50 ? 'rgba(252,211,77,0.1)' : T.negDim,
+                    padding: '2px 9px', borderRadius: 5,
+                  }}>{s.s}</span>
+                </td>
+                <td style={{ padding: '13px 20px', textAlign: 'right', fontSize: 12, color: s.st === 'Stage 2' ? T.pos : s.st === 'Stage 4' ? T.neg : T.fg3 }}>{s.st}</td>
+                <td style={{ padding: '13px 20px', textAlign: 'right', fontFamily: T.mono, fontSize: 13, color: T.fg2 }}>{s.rs}</td>
+                <td style={{ padding: '13px 20px', textAlign: 'right', fontFamily: T.mono, fontSize: 13, color: T.fg2 }}>{s.mc}</td>
+                <td style={{ padding: '13px 20px', textAlign: 'right' }}>
+                  {s.c33
+                    ? <span style={{ color: T.accent, fontFamily: T.mono, fontSize: 12, fontWeight: 700 }}>✓</span>
+                    : <span style={{ color: T.fg4 }}>—</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   MARKET SCREEN — with PilePeak-style allocation blocks
+──────────────────────────────────────────────────────────────────*/
+function MarketScreen() {
+  const indices = [
+    { n:'S&P 500',  v:'5,234.18', c:0.84,  s:[48,50,52,55,58,56,60,62,64,63,67,65,69,70,72] },
+    { n:'NASDAQ',   v:'16,402',   c:1.12,  s:[44,46,50,54,57,55,60,63,65,63,68,66,71,72,74] },
+    { n:'Dow Jones',v:'39,142',   c:0.41,  s:[60,61,62,64,65,64,67,68,69,68,71,70,72,73,74] },
+    { n:'Nifty 50', v:'22,147',   c:-0.31, s:[55,57,56,55,54,53,55,52,53,50,51,49,50,48,49] },
+    { n:'VIX',      v:'18.42',    c:2.1,   s:[14,15,16,17,15,16,18,17,19,18,20,19,18,19,18], warn:true },
+    { n:'Bitcoin',  v:'$67,420',  c:3.24,  s:[40,44,48,50,54,52,56,60,64,62,68,70,72,74,76] },
+  ];
+
+  /* Sector allocation blocks — like PilePeak treemap */
+  const sectors = [
+    { n:'Technology',    pct:28.4, c:1.8,  color:'#1E3A5F' },
+    { n:'Financials',    pct:13.2, c:0.6,  color:'#1A2E4A' },
+    { n:'Health Care',   pct:12.1, c:0.2,  color:'#162440' },
+    { n:'Industrials',   pct:8.6,  c:0.9,  color:'#162440' },
+    { n:'Energy',        pct:4.2,  c:-0.4, color:'#3A1A1A' },
+    { n:'Utilities',     pct:2.8,  c:-0.8, color:'#3A1A1A' },
+    { n:'Real Estate',   pct:2.4,  c:-1.1, color:'#2A1515' },
+    { n:'Comm. Svcs',    pct:8.8,  c:0.7,  color:'#1A2E4A' },
+    { n:'Cons. Disc.',   pct:10.2, c:1.2,  color:'#1E3A5F' },
+    { n:'Cons. Staples', pct:6.1,  c:-0.1, color:'#28281A' },
+    { n:'Materials',     pct:3.2,  c:0.3,  color:'#1A2E1A' },
+  ];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 13, color: T.fg3, marginBottom: 6 }}>Live market overview</div>
+        <div style={{ fontFamily: T.serif, fontSize: 40, color: T.fg1, lineHeight: 1, letterSpacing: '-0.01em' }}>Market</div>
+      </div>
+
+      {/* Indices — clean row, no cards */}
+      <div style={{ marginBottom: 32 }}>
+        <div style={{ fontSize: 12, color: T.fg3, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 16 }}>Global Indices</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12 }}>
+          {indices.map(idx => (
+            <div key={idx.n} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: '14px 16px' }}>
+              <div style={{ fontSize: 10, color: T.fg3, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 600, marginBottom: 8 }}>{idx.n}</div>
+              <div style={{ fontFamily: T.mono, fontSize: 14, fontWeight: 600, color: idx.warn ? T.warn : T.fg1, marginBottom: 4 }}>{idx.v}</div>
+              <ChangePill pct={idx.c} />
+              <div style={{ marginTop: 10 }}>
+                <Spark data={idx.s} color={idx.warn ? T.warn : idx.c >= 0 ? T.pos : T.neg} h={28} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Sector allocation — PilePeak-style blocks */}
+      <div style={{ marginBottom: 32 }}>
+        <div style={{ fontSize: 12, color: T.fg3, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 16 }}>Sector Allocation</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gridTemplateRows: '120px 120px', gap: 6 }}>
+          {/* Big block */}
+          <div style={{ background: '#1A4A3A', borderRadius: 12, padding: 18, gridRow: '1 / 3', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Technology</div>
+            <div>
+              <div style={{ fontFamily: T.mono, fontSize: 13, color: '#fff' }}>28.4% of S&P</div>
+              <div style={{ fontFamily: T.mono, fontSize: 13, color: T.pos, marginTop: 3 }}>+1.8%</div>
+            </div>
+          </div>
+          {/* Medium blocks */}
+          {sectors.slice(1, 5).map((s, i) => (
+            <div key={s.n} style={{ background: s.color, borderRadius: 12, padding: 14, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.n}</div>
+              <div>
+                <div style={{ fontFamily: T.mono, fontSize: 12, color: '#fff' }}>{s.pct}%</div>
+                <div style={{ fontFamily: T.mono, fontSize: 11, color: s.c >= 0 ? T.pos : T.neg }}>{s.c >= 0 ? '+' : ''}{s.c.toFixed(1)}%</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Remaining sectors as rows */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6, marginTop: 6 }}>
+          {sectors.slice(5).map(s => (
+            <div key={s.n} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontSize: 9, color: T.fg3, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600, marginBottom: 4 }}>{s.n}</div>
+              <div style={{ fontFamily: T.mono, fontSize: 12, color: s.c >= 0 ? T.pos : T.neg, fontWeight: 600 }}>{s.c >= 0 ? '+' : ''}{s.c.toFixed(1)}%</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* VIX + Breadth */}
+      <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16 }}>
+        <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 22, textAlign: 'center' }}>
+          <div style={{ fontSize: 10, color: T.fg3, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 14 }}>VIX</div>
+          <div style={{ fontFamily: T.serif, fontSize: 56, color: T.warn, lineHeight: 1 }}>18.42</div>
+          <div style={{ fontSize: 12, color: T.warn, fontWeight: 600, marginTop: 8 }}>NEUTRAL</div>
+          <div style={{ fontSize: 10, color: T.fg3, marginTop: 8, lineHeight: 1.6 }}>&lt;12 Greed<br />12–28 Neutral<br />28+ Fear</div>
+        </div>
+        <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 22 }}>
+          <div style={{ fontSize: 12, color: T.fg3, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 20 }}>Market Breadth</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
+            {[['Stocks above 50MA', '63.4%', '318 of 502 stocks', T.pos], ['Stocks above 200MA', '71.2%', '357 of 502 stocks', T.pos], ['Market Posture', 'Bullish', 'Based on breadth', T.pos]].map(([l, v, s, c]) => (
+              <div key={l}>
+                <div style={{ fontSize: 11, color: T.fg3, marginBottom: 8 }}>{l}</div>
+                <div style={{ fontFamily: T.mono, fontSize: 26, fontWeight: 600, color: c }}>{v}</div>
+                <div style={{ fontSize: 11, color: T.fg3, marginTop: 4 }}>{s}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   SEPA SCREEN
+──────────────────────────────────────────────────────────────────*/
+function SEPAScreen() {
+  const [tab, setTab] = React.useState('Trend Template');
+  const criteria = [
+    { t: 'Price above 150-day moving average', p: true },
+    { t: 'Price above 200-day moving average', p: true },
+    { t: '150-day MA above 200-day MA', p: true },
+    { t: '200-day MA trending up for at least 1 month', p: false },
+    { t: '50-day MA above both 150-day and 200-day', p: true },
+    { t: 'Price above 50-day moving average', p: true },
+    { t: 'Price at least 30% above 52-week low', p: true },
+    { t: 'Price within 25% of 52-week high', p: true },
+  ];
+  const passes = criteria.filter(c => c.p).length;
+
+  return (
+    <div>
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 13, color: T.fg3, marginBottom: 6 }}>NVDA · SEPA Methodology</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 20 }}>
+          <div style={{ fontFamily: T.serif, fontSize: 72, color: T.accent, lineHeight: 1, letterSpacing: '-0.02em' }}>87</div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: T.fg1 }}>SEPA Score · Qualified</div>
+            <div style={{ fontSize: 13, color: T.fg3, marginTop: 3 }}>Stage 2 — Advancing · RS Rank 94</div>
+          </div>
+        </div>
+        <div style={{ background: T.raised, borderRadius: 4, height: 4, overflow: 'hidden', marginTop: 16, maxWidth: 400 }}>
+          <div style={{ width: '87%', height: '100%', background: `linear-gradient(90deg, ${T.accent}66, ${T.accent})`, borderRadius: 4 }} />
+        </div>
+      </div>
+
+      <Tabs items={['Trend Template', 'Code 33', 'VCP', 'RS Rank']} active={tab} onChange={setTab} />
+
+      {tab === 'Trend Template' && (
+        <div style={{ maxWidth: 560 }}>
+          <div style={{ fontSize: 13, color: T.fg3, marginBottom: 20 }}>
+            {passes} of 8 criteria met — <span style={{ color: T.pos }}>Qualified for Stage 2</span>
+          </div>
+          {criteria.map((c, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: 14,
+              padding: '11px 0', borderBottom: `1px solid ${T.border}`,
+            }}>
+              <div style={{
+                width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: c.p ? T.posDim : T.negDim,
+                color: c.p ? T.pos : T.neg, fontSize: 12, fontWeight: 700,
+              }}>{c.p ? '✓' : '✗'}</div>
+              <span style={{ fontSize: 14, color: c.p ? T.fg1 : T.fg3, lineHeight: 1.4 }}>{c.t}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'Code 33' && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+            <div style={{ width: 10, height: 10, borderRadius: '50%', background: T.pos, boxShadow: `0 0 10px ${T.pos}` }} />
+            <span style={{ fontSize: 15, fontWeight: 600, color: T.pos }}>Green — All 3 metrics accelerating</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 24 }}>
+            {[['EPS Growth Rate', '↑ 84%', '+19pp acceleration', T.pos], ['Revenue Growth Rate', '↑ 122%', '+38pp acceleration', T.pos], ['Net Profit Margin', '↑ +7pp', 'Expanding', T.pos]].map(([l, v, s, c]) => (
+              <div key={l} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }}>
+                <div style={{ fontSize: 11, color: T.fg3, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{l}</div>
+                <div style={{ fontFamily: T.mono, fontSize: 24, fontWeight: 600, color: c, marginBottom: 4 }}>{v}</div>
+                <div style={{ fontSize: 11, color: T.fg3 }}>{s}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 13, color: T.fg3, lineHeight: 1.7 }}>
+            Code 33 requires all three metrics to accelerate simultaneously for 3+ consecutive quarters.<br />
+            <span style={{ color: T.neg }}>High growth but decelerating = Red (the Dell Computer trap).</span>
+          </div>
+        </div>
+      )}
+
+      {tab === 'VCP' && (
+        <div style={{ maxWidth: 480 }}>
+          <div style={{ fontSize: 13, color: T.fg3, marginBottom: 24 }}>Volatility Contraction Pattern — 3 contractions detected</div>
+          {[['Contraction 1', '18.2%', 'Widest — sets the baseline'], ['Contraction 2', '12.4%', 'Tighter — volume declining'], ['Contraction 3', '7.1%', 'Tightest — near pivot point']].map(([l, v, s], i) => (
+            <div key={i} style={{ display: 'flex', gap: 16, padding: '14px 0', borderBottom: `1px solid ${T.border}`, alignItems: 'center' }}>
+              <div style={{ width: 32, height: 32, borderRadius: '50%', background: T.accentDim, border: `1px solid rgba(200,255,87,0.25)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: T.mono, fontSize: 12, fontWeight: 600, color: T.accent, flexShrink: 0 }}>{i + 1}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, color: T.fg2 }}>{l}</div>
+                <div style={{ fontSize: 11, color: T.fg3, marginTop: 2 }}>{s}</div>
+              </div>
+              <div style={{ fontFamily: T.mono, fontSize: 20, fontWeight: 600, color: T.fg1 }}>{v}</div>
+            </div>
+          ))}
+          <div style={{ marginTop: 20, fontSize: 13, color: T.pos }}>Volume dry-up confirmed at C3 — buy trigger zone active</div>
+        </div>
+      )}
+
+      {tab === 'RS Rank' && (
+        <div style={{ maxWidth: 440 }}>
+          <div style={{ fontFamily: T.serif, fontSize: 64, color: T.accent, lineHeight: 1, marginBottom: 8 }}>94</div>
+          <div style={{ fontSize: 14, color: T.fg2, marginBottom: 4 }}>Top 6% of all US stocks</div>
+          <div style={{ fontSize: 13, color: T.fg3, marginBottom: 24 }}>Relative strength vs S&P 500 over past 12 months</div>
+          <div style={{ background: T.raised, borderRadius: 6, height: 8, overflow: 'hidden', marginBottom: 28 }}>
+            <div style={{ width: '94%', height: '100%', background: `linear-gradient(90deg, ${T.accent}55, ${T.accent})`, borderRadius: 6 }} />
+          </div>
+          <StatRow label="RS vs S&P 500" value="+189.3% (12M)" color={T.pos} />
+          <StatRow label="RS vs Sector" value="+112.4% (12M)" color={T.pos} />
+          <StatRow label="Minimum RS for SEPA" value="≥ 70" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   SIDEBAR + APP SHELL
+──────────────────────────────────────────────────────────────────*/
+const NAV = [
+  { group: 'Research', items: ['Overview', 'Financials', 'Growth & Margins', 'Valuation', 'Earnings', 'Analyst Ratings', 'Ownership', 'Peer Comparison'] },
+  { group: 'SEPA', items: ['SEPA Analysis', 'Screener'] },
+  { group: 'Market', items: ['Market Dashboard', 'Portfolio', 'News & Alerts'] },
+];
+
+function Sidebar({ page, setPage }) {
+  const [ticker, setTicker] = React.useState('NVDA');
+  return (
+    <div style={{
+      width: 208, flexShrink: 0, background: '#0A0A0C',
+      borderRight: `1px solid ${T.border}`,
+      display: 'flex', flexDirection: 'column', height: '100vh', position: 'sticky', top: 0,
+    }}>
+      <div style={{ padding: '22px 22px 18px', borderBottom: `1px solid ${T.border}` }}>
+        <div style={{ fontFamily: T.serif, fontSize: 20, color: T.fg1, letterSpacing: '-0.01em' }}>Quant</div>
+        <div style={{ fontSize: 10, color: T.fg3, letterSpacing: '0.1em', marginTop: 2, textTransform: 'uppercase' }}>Terminal</div>
+      </div>
+
+      <div style={{ padding: '12px 14px', borderBottom: `1px solid ${T.border}` }}>
+        <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
+          style={{
+            width: '100%', background: T.raised, border: `1px solid ${T.borderMid}`,
+            borderRadius: 8, color: T.accent, fontFamily: T.mono,
+            fontSize: 14, fontWeight: 600, padding: '8px 12px', outline: 'none', letterSpacing: '0.04em',
+          }} />
+      </div>
+
+      <nav style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+        {NAV.map(({ group, items }) => (
+          <div key={group} style={{ marginBottom: 4 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.fg4, padding: '10px 22px 3px' }}>{group}</div>
+            {items.map(item => {
+              const on = item === page;
+              return (
+                <div key={item} onClick={() => setPage(item)} style={{
+                  padding: '8px 22px', fontSize: 13, cursor: 'pointer',
+                  color: on ? T.fg1 : T.fg3,
+                  background: on ? T.raised : 'transparent',
+                  fontWeight: on ? 500 : 400,
+                  borderLeft: `2px solid ${on ? T.accent : 'transparent'}`,
+                  transition: 'all 120ms',
+                }}
+                  onMouseEnter={e => { if (!on) e.currentTarget.style.color = T.fg2; }}
+                  onMouseLeave={e => { if (!on) e.currentTarget.style.color = T.fg3; }}
+                >{item}</div>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+
+      <div style={{ padding: '12px 22px', borderTop: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: 10, color: T.fg4 }}>Alpaca · yfinance · Finnhub</div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [page, setPage] = React.useState('Overview');
+  const screens = {
+    'Overview': <OverviewScreen />,
+    'SEPA Analysis': <SEPAScreen />,
+    'Screener': <ScreenerScreen />,
+    'Market Dashboard': <MarketScreen />,
+  };
+  const screen = screens[page] || (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 10 }}>
+      <div style={{ fontFamily: T.serif, fontSize: 40, color: T.fg4 }}>—</div>
+      <div style={{ fontSize: 13, color: T.fg3 }}>"{page}" is not yet in this prototype</div>
+      <div style={{ fontSize: 11, color: T.fg4 }}>Try: Overview · SEPA Analysis · Screener · Market Dashboard</div>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: T.bg, color: T.fg1 }}>
+      <Sidebar page={page} setPage={setPage} />
+      <main style={{ flex: 1, overflowY: 'auto', padding: '36px 48px' }}>
+        {screen}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.sidebar import render_sidebar
 from utils.data_fetcher import get_price_history
 
-st.set_page_config(page_title="Market Dashboard · Quant Terminal", page_icon="🌐", layout="wide")
 
 _css = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'styles', 'custom.css')
 if os.path.exists(_css):
@@ -222,6 +221,8 @@ st.markdown("### 📈 Market Breadth")
 
 # Use S&P 500 tickers from JSON if available, else use sector ETFs as proxy
 import json as _json
+st.set_page_config(page_title="Quant Terminal")
+st.stop()
 _sp500_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'sp500_tickers.json')
 if os.path.exists(_sp500_path):
     with open(_sp500_path) as _f:
