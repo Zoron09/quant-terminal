@@ -19,7 +19,7 @@ CACHE_TTL = 300  # 5 minutes
 
 def evict_cache():
     now = time.time()
-    expired = [k for k, v in list(TICKER_CACHE.items()) if now - v[1] > 600]
+    expired = [k for k, v in list(TICKER_CACHE.items()) if now - v[1] > CACHE_TTL]
     for k in expired: TICKER_CACHE.pop(k, None)
 
 
@@ -61,6 +61,13 @@ async def scan(file: UploadFile = File(...)):
             df['Sector'].fillna('Unknown')
         ))
     
+    company_map = {}
+    if 'Symbol' in df.columns and 'Description' in df.columns:
+        company_map = dict(zip(
+            df['Symbol'].str.upper(),
+            df['Description'].fillna('')
+        ))
+
     if 'Symbol' in df.columns and 'Market capitalization' in df.columns:
         def fmt_mcap(v):
             try:
@@ -123,7 +130,7 @@ async def scan(file: UploadFile = File(...)):
 
                 winners.append({
                     'ticker':  ticker,
-                    'company': data.get('company_name', ticker),
+                    'company': company_map.get(ticker, '') or data.get('company_name', ticker),
                     'sector':  sector_map.get(ticker, 'Unknown'),
                     'mcap':    mcap_map.get(ticker, 'N/A'),
                     'eps':     safe3(data.get('eps_yoy', [])),
