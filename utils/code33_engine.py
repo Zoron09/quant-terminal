@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 import requests
 import pandas as pd
 import numpy as np
@@ -7,6 +8,8 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import streamlit as st
 from dotenv import load_dotenv
+
+log = logging.getLogger(__name__)
 
 # Load env vars from root .env
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
@@ -25,6 +28,18 @@ try:
 except Exception:
     _HAS_EDGARTOOLS_MARGIN = False
 
+try:
+    from utils.secfs_revenue import get_quarterly_revenue as get_quarterly_revenue_secfs
+    _HAS_SECFS_REV = True
+except Exception:
+    _HAS_SECFS_REV = False
+
+try:
+    from utils.secfs_net_margin import get_quarterly_net_margin as get_quarterly_net_margin_secfs
+    _HAS_SECFS_MARGIN = True
+except Exception:
+    _HAS_SECFS_MARGIN = False
+
 # ── API keys ──────────────────────────────────────────────────────────────────
 FMP_API_KEY = os.getenv('FMP_API_KEY', '')
 _HAS_FMP    = bool(FMP_API_KEY)
@@ -36,7 +51,7 @@ except Exception:
     FINNHUB_KEY  = ''
     _HAS_FINNHUB = False
 
-CACHE_VERSION = 'v28'
+CACHE_VERSION = 'v29'
 
 # ── SEC EDGAR headers ─────────────────────────────────────────────────────────
 EDGAR_UA = {'User-Agent': 'Meet Singh singhgaganmeet09@gmail.com'}
@@ -1543,11 +1558,35 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
     # ── Revenue YoY ───────────────────────────────────────────────────────────
-    # Primary: utils/edgar_revenue.py (edgartools, bug-fixed Q4 derivation).
-    # Falls back to the FMP/EDGAR-raw-concepts pipeline when edgartools
-    # returns too few or too-stale quarters.
+    # Primary: utils/secfs_revenue.py (local secfsdstools parquet DB, fast).
+    # Fallback: utils/edgar_revenue.py (edgartools, live HTTP, newer quarters
+    # than the local bulk DB can have). Last resort: FMP/EDGAR-raw-concepts
+    # pipeline when neither of the above returns enough/recent-enough data.
+    secfs_rev_vals, secfs_rev_ends = [], []
+    if _HAS_SECFS_REV:
+        try:
+            _secfs_rev = sorted(get_quarterly_revenue_secfs(ticker, n_quarters=16), key=lambda r: r['period_end'])
+        except Exception:
+            _secfs_rev = []
+        for r in _secfs_rev:
+            secfs_rev_vals.append(r['revenue_m'] * 1_000_000)  # millions -> raw USD
+            secfs_rev_ends.append(r['period_end'].isoformat())
+
+    rev_yoy_secfs, rev_labels_secfs, _, _, _ = _date_first_yoy(
+        secfs_rev_vals, secfs_rev_ends, [], [], None, None, None, None,
+        fy_end_m=fy_end_month, append_none=True
+    )
+
+    _use_secfs_rev = (
+        len([x for x in rev_yoy_secfs if x is not None]) >= 3
+        and _is_recent(secfs_rev_ends)
+    )
+
+    # Skip the live edgartools HTTP fetch entirely when secfs already gave us
+    # a good-enough series — it's the slowest tier and would otherwise run on
+    # every ticker for no benefit.
     edgartools_rev_vals, edgartools_rev_ends = [], []
-    if _HAS_EDGARTOOLS_REV:
+    if _HAS_EDGARTOOLS_REV and not _use_secfs_rev:
         try:
             _et_rev = sorted(get_quarterly_revenue(ticker, n_quarters=16), key=lambda r: r['period_end'])
         except Exception:
@@ -1564,11 +1603,16 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
     rev_yoy_existing, rev_labels_existing, _, _, _ = _date_first_yoy(fmp_rev, fmp_rev_end, edgar_rev, edgar_rev_end, fmp_rev_fy, fmp_rev_fp, None, None, fy_end_m=fy_end_month, append_none=True)
 
     _use_edgartools_rev = (
-        len([x for x in rev_yoy_edgartools if x is not None]) >= 3
+        not _use_secfs_rev
+        and len([x for x in rev_yoy_edgartools if x is not None]) >= 3
         and _is_recent(edgartools_rev_ends)
     )
 
-    if _use_edgartools_rev:
+    if _use_secfs_rev:
+        rev_yoy_final, rev_labels_final = rev_yoy_secfs, rev_labels_secfs
+        rev_raw_final, rev_raw_ends_final = secfs_rev_vals, secfs_rev_ends
+        sources['rev'] = 'secfsdstools'
+    elif _use_edgartools_rev:
         rev_yoy_final, rev_labels_final = rev_yoy_edgartools, rev_labels_edgartools
         rev_raw_final, rev_raw_ends_final = edgartools_rev_vals, edgartools_rev_ends
         sources['rev'] = 'EDGAR-edgartools'
@@ -1578,14 +1622,37 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
         rev_raw_ends_final = edgar_rev_end if edgar_rev     else fmp_rev_end
         sources['rev'] = 'FMP|EDGAR' if rev_yoy_final else 'insufficient'
 
+    log.info("code33_engine: %s rev source = %s", ticker, sources['rev'])
+
 
 
     # ── Net Profit Margin pool (replaces NI YoY) ─────────────────────────────
-    # Primary: utils/edgar_net_margin.py (edgartools NI/Revenue, bug-fixed).
-    # Falls back to the FMP/EDGAR-raw-concepts margin pool when edgartools
-    # returns too few or too-stale quarters.
+    # Primary: utils/secfs_net_margin.py (local secfsdstools parquet DB, fast).
+    # Fallback: utils/edgar_net_margin.py (edgartools, live HTTP, newer
+    # quarters than the local bulk DB can have). Last resort: FMP/EDGAR-raw-
+    # concepts margin pool when neither of the above returns enough/recent-
+    # enough data.
+    secfs_npm_vals, secfs_npm_labels, secfs_npm_ends = [], [], []
+    if _HAS_SECFS_MARGIN:
+        try:
+            _secfs_npm = sorted(get_quarterly_net_margin_secfs(ticker, n_quarters=16), key=lambda r: r['period_end'])
+        except Exception:
+            _secfs_npm = []
+        for r in _secfs_npm:
+            secfs_npm_vals.append(r['net_margin_pct'])
+            secfs_npm_ends.append(r['period_end'].isoformat())
+            secfs_npm_labels.append(_get_fq_fy(r['period_end'], fy_end_month))
+
+    _use_secfs_npm = (
+        len([x for x in secfs_npm_vals if x is not None]) >= 3
+        and _is_recent(secfs_npm_ends)
+    )
+
+    # Skip the live edgartools HTTP fetch entirely when secfs already gave us
+    # a good-enough series — it's the slowest tier and would otherwise run on
+    # every ticker for no benefit.
     edgartools_npm_vals, edgartools_npm_labels, edgartools_npm_ends = [], [], []
-    if _HAS_EDGARTOOLS_MARGIN:
+    if _HAS_EDGARTOOLS_MARGIN and not _use_secfs_npm:
         try:
             _et_npm = sorted(get_quarterly_net_margin(ticker, n_quarters=16), key=lambda r: r['period_end'])
         except Exception:
@@ -1604,16 +1671,22 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
     )
 
     _use_edgartools_npm = (
-        len([x for x in edgartools_npm_vals if x is not None]) >= 3
+        not _use_secfs_npm
+        and len([x for x in edgartools_npm_vals if x is not None]) >= 3
         and _is_recent(edgartools_npm_ends)
     )
 
-    if _use_edgartools_npm:
+    if _use_secfs_npm:
+        npm_vals, npm_labels_final, npm_ends_final = secfs_npm_vals, secfs_npm_labels, secfs_npm_ends
+        sources['ni'] = 'secfsdstools'
+    elif _use_edgartools_npm:
         npm_vals, npm_labels_final, npm_ends_final = edgartools_npm_vals, edgartools_npm_labels, edgartools_npm_ends
         sources['ni'] = 'EDGAR-edgartools'
     else:
         npm_vals, npm_labels_final, npm_ends_final = npm_vals_existing, npm_labels_existing, npm_ends_existing
         sources['ni'] = 'FMP|EDGAR' if npm_vals else 'insufficient'
+
+    log.info("code33_engine: %s ni source = %s", ticker, sources['ni'])
 
     ni_raw_final      = edgar_ni_abs if edgar_ni_abs else fmp_ni
 
@@ -1716,7 +1789,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    status, _d1, _d2 = _c33_status(eps_yoy_final or [], rev_yoy_final or [], npm_vals or [])
+    status, _d1, _d2 = _c33_status(rev_yoy_final or [], npm_vals or [])
 
     return {
 
@@ -1754,54 +1827,49 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
     }
 
-def _c33_status(eps_rates: list, rev_rates: list = None, npm_vals: list = None) -> tuple:
+def _c33_status(rev_rates: list, npm_vals: list = None) -> tuple:
     """(status, d1, d2) — green/yellow/red/insufficient.
 
-    Code 33 requires ALL THREE simultaneously for 3 consecutive quarters:
-      - EPS YoY growth RATE accelerating (delta > 0)
+    Code 33 (2026-06-24: EPS removed from the signal — Revenue + Net Margin
+    only) requires BOTH simultaneously for 3 consecutive quarters:
       - Revenue YoY growth RATE accelerating (delta > 0)
       - Net Profit Margin expanding (delta > 0)
 
-    Status rules (per CLAUDE.md §8):
-      GREEN  = all 3 metrics have positive values AND positive deltas
-      YELLOW = all 3 still positive but at least one delta shrinking (d2 < d1)
-      RED    = any rate negative OR any delta negative (deceleration)
+    Status rules:
+      GREEN  = both metrics have positive deltas, accelerating (d2 >= d1)
+      YELLOW = both deltas positive but acceleration shrinking (d2 < d1)
+      RED    = revenue rate negative, OR any delta negative (deceleration)
     """
     def _last3(arr):
         if not arr: return None
         clean = [x for x in arr if x is not None]
         return clean[-3:] if len(clean) >= 3 else None
 
-    eps3 = _last3(eps_rates)
-    if eps3 is None:
-        return 'insufficient', None, None
-
-    rev3 = _last3(rev_rates) if rev_rates else None
+    rev3 = _last3(rev_rates)
     npm3 = _last3(npm_vals) if npm_vals else None
 
-    # Need all 3 metrics for Code 33
+    # Need both metrics for Code 33
     if rev3 is None or npm3 is None:
         return 'insufficient', None, None
 
-    # EPS and Rev rates must all be positive (negative = pre-profit / declining)
-    for rates in [eps3, rev3]:
-        if any(r < 0 for r in rates):
-            return 'red', None, None
+    # Rev rates must all be positive (negative = declining)
+    if any(r < 0 for r in rev3):
+        return 'red', None, None
 
-    # Compute deltas for all 3 metrics
+    # Compute deltas for both metrics
     all_d = []
-    for m in [eps3, rev3, npm3]:
+    for m in [rev3, npm3]:
         all_d.append((m[1] - m[0], m[2] - m[1]))
 
-    eps_d1, eps_d2 = all_d[0]
+    rev_d1, rev_d2 = all_d[0]
 
     # RED: any delta negative in any metric (deceleration)
     if any(d1 < 0 or d2 < 0 for d1, d2 in all_d):
-        return 'red', eps_d1, eps_d2
+        return 'red', rev_d1, rev_d2
 
     # GREEN: all deltas positive AND acceleration increasing (d2 >= d1)
     if all(d2 >= d1 for d1, d2 in all_d):
-        return 'green', eps_d1, eps_d2
+        return 'green', rev_d1, rev_d2
 
     # YELLOW: all deltas positive but at least one metric's acceleration slowing
-    return 'yellow', eps_d1, eps_d2
+    return 'yellow', rev_d1, rev_d2

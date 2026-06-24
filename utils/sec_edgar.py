@@ -19,11 +19,14 @@ def _get(url: str, params: dict | None = None):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _get_ticker_mapping() -> dict | None:
+    """SEC's full ticker->CIK mapping, fetched once per cache window (not per ticker)."""
+    return _get('https://www.sec.gov/files/company_tickers.json')
+
+
 def get_cik(ticker: str) -> str | None:
     """Resolve ticker → CIK via EDGAR company search."""
-    data = _get('https://efts.sec.gov/LATEST/search-index?q=%22' + ticker + '%22&dateRange=custom&startdt=2020-01-01&forms=4')
-    # Fallback: use the company facts lookup
-    mapping = _get('https://www.sec.gov/files/company_tickers.json')
+    mapping = _get_ticker_mapping()
     if not mapping:
         return None
     ticker_up = ticker.upper().split('.')[0]  # strip .NS etc.
