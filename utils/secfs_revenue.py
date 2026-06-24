@@ -293,6 +293,19 @@ def _quarterly_revenue_secfs(cik: int, n_quarters: int) -> list[dict]:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+# Per-process memoization, keyed by (ticker, n_quarters). code33_engine.py
+# calls get_quarterly_revenue(ticker, n_quarters=16) directly AND indirectly
+# via secfs_net_margin.get_quarterly_net_margin(ticker, n_quarters=16) (which
+# needs the Revenue leg to compute margin) — same ticker, same n_quarters,
+# every single time. Without this cache, the merge (including any edgartools
+# fallback call) ran twice per ticker, which was the main cause of the batch
+# run slowing down after the merge logic was introduced. Thread-safe for the
+# ThreadPoolExecutor(max_workers=10) batch use case — each ticker's entry is
+# independent, and CPython dict get/set is atomic under the GIL.
+_REVENUE_RESULT_CACHE: dict[tuple[str, int], list[dict]] = {}
+_REVENUE_RESULT_CACHE_LOCK = threading.Lock()
+
+
 def get_quarterly_revenue(ticker: str, n_quarters: int = 8) -> list[dict]:
     """
     Merged Revenue series for ticker: secfsdstools (local parquet DB) pulls
@@ -303,9 +316,25 @@ def get_quarterly_revenue(ticker: str, n_quarters: int = 8) -> list[dict]:
     'revenue_m' in USD millions), with 'source' prefixed by which side
     supplied that quarter (e.g. 'secfsdstools:10-Q', 'edgartools:derived_q4').
 
+    Memoized per (ticker, n_quarters) for the lifetime of the process — see
+    _REVENUE_RESULT_CACHE above.
+
     Returns [] (never raises) if the ticker has no local CIK match, or if the
     merged result has fewer than 3 quarters total.
     """
+    cache_key = (ticker, n_quarters)
+    cached = _REVENUE_RESULT_CACHE.get(cache_key)
+    if cached is not None:
+        return [dict(r) for r in cached]
+
+    result = _compute_quarterly_revenue(ticker, n_quarters)
+    with _REVENUE_RESULT_CACHE_LOCK:
+        _REVENUE_RESULT_CACHE[cache_key] = result
+    return [dict(r) for r in result]
+
+
+def _compute_quarterly_revenue(ticker: str, n_quarters: int) -> list[dict]:
+    """Uncached implementation — see get_quarterly_revenue()."""
     try:
         cik = get_cik(ticker)
         if not cik:
