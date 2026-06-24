@@ -1,12 +1,15 @@
 """
 utils/secfs_net_margin.py — Local SEC bulk-dataset (secfsdstools) quarterly Net
-Profit Margin fetcher.
+Profit Margin fetcher, merged with utils/edgar_net_margin.py (live edgartools/HTTP)
+at the quarter level.
 
-Primary source ahead of utils/edgar_net_margin.py (live edgartools/HTTP) in the
-Code33 fallback chain (see utils/code33_engine.py). Same architecture and
-performance notes as utils/secfs_revenue.py — reuses its shared, process-wide
-quarter cache (_load_quarter_tags) so revenue and NI for the same filing are
-read from the same already-resident in-memory dataframe, never re-touching disk.
+get_quarterly_net_margin() merges NI the same way utils/secfs_revenue.py merges
+Revenue: secfsdstools pulls every NI quarter it has, edgartools fills ONLY the
+quarters secfsdstools is missing. Revenue comes from secfs_revenue.get_quarterly_revenue(),
+which is itself already a secfsdstools+edgartools merge. Reuses secfs_revenue's
+shared, process-wide quarter cache (_load_quarter_tags) so revenue and NI for the
+same filing are read from the same already-resident in-memory dataframe, never
+re-touching disk.
 
 Net Profit Margin (NI / Revenue x 100) is a level, not a YoY rate — Code33 tracks
 whether the margin itself is expanding quarter over quarter (see CLAUDE.md SS8),
@@ -25,8 +28,8 @@ from utils.secfs_revenue import (
     _load_quarter_tags,
     _own_period_value,
     get_quarterly_revenue,
-    latest_filing_period,
 )
+from utils.edgar_net_margin import _get_ni_quarters as _edgar_get_ni_quarters
 
 log = logging.getLogger(__name__)
 
@@ -139,11 +142,16 @@ def _quarterly_ni_secfs(cik: int, n_quarters: int) -> list[dict]:
 
 def get_quarterly_net_margin(ticker: str, n_quarters: int = 8) -> list[dict]:
     """
-    Local-DB equivalent of utils/edgar_net_margin.get_quarterly_net_margin() —
-    same return shape (list of dicts, newest first, 'net_margin_pct' = NI/Rev x 100),
-    sourced from the local secfsdstools parquet DB instead of live edgartools.
+    Merged Net Profit Margin series for ticker. Net Income is merged the same
+    way as utils/secfs_revenue.get_quarterly_revenue(): secfsdstools pulls
+    every NI quarter it has, edgartools is then queried and used ONLY to fill
+    NI quarters secfsdstools is missing. Revenue comes from
+    utils/secfs_revenue.get_quarterly_revenue(), which is itself already a
+    secfsdstools+edgartools merge — so both legs of the margin calc draw on
+    the best available per-quarter source independently.
 
-    Returns [] (never raises) if revenue or NI is unavailable for this ticker.
+    Returns [] (never raises) if the merged NI series, or the combined
+    NI+Revenue result, has fewer than 3 quarters.
     """
     try:
         cik = get_cik(ticker)
@@ -151,33 +159,70 @@ def get_quarterly_net_margin(ticker: str, n_quarters: int = 8) -> list[dict]:
             return []
         cik_int = int(cik)
 
-        ni_quarters = _quarterly_ni_secfs(cik_int, n_quarters)
-        if not ni_quarters:
+        secfs_ni = _quarterly_ni_secfs(cik_int, n_quarters)
+        ni_merged: dict[date, dict] = {}
+        for r in secfs_ni:
+            period = r['period_end']
+            ni_merged[period] = {**r, 'source': f"secfsdstools:{r['source']}"}
+            log.info("secfs_net_margin: %s NI period=%s from secfsdstools (%s)", ticker, period, r['source'])
+
+        # secfsdstools already has enough quarters — skip the slow live
+        # edgartools call entirely. edgartools is only worth its latency
+        # when secfsdstools has a real gap to fill.
+        if len(ni_merged) >= n_quarters:
+            log.info("secfs_net_margin: %s has %d/%d secfsdstools NI quarters — skipping edgartools", ticker, len(ni_merged), n_quarters)
+        else:
+            try:
+                edgar_ni = _edgar_get_ni_quarters(ticker, n_quarters)
+            except Exception as exc:
+                log.warning("secfs_net_margin: edgartools NI fetch failed for %s: %s", ticker, exc)
+                edgar_ni = []
+
+            # Same fiscal quarter can carry slightly different period-end
+            # dates between sources — match by proximity, not exact date
+            # equality (see secfs_revenue.get_quarterly_revenue()).
+            covered = sorted(ni_merged.keys())
+            for r in edgar_ni:
+                period = r['period_end']
+                if any(abs((period - sp).days) <= 45 for sp in covered):
+                    continue  # secfsdstools already has this quarter — it wins
+                ni_merged[period] = {**r, 'source': f"edgartools:{r['source']}"}
+                covered.append(period)
+                log.info("secfs_net_margin: %s NI period=%s filled from edgartools (%s)", ticker, period, r['source'])
+
+        if len(ni_merged) < 3:
             return []
 
         rev_quarters = get_quarterly_revenue(ticker, n_quarters=n_quarters)
         if not rev_quarters:
             return []
-        rev_by_period = {r['period_end']: r for r in rev_quarters}
 
         results: list[dict] = []
-        for ni_item in ni_quarters:
-            period = ni_item['period_end']
-            rev_item = rev_by_period.get(period)
+        for period, ni_item in ni_merged.items():
+            # NI and Revenue can each win from a different source for the
+            # same quarter (e.g. secfsdstools has the NI tag but not the
+            # revenue tag for one filing), leaving slightly different anchor
+            # dates — match by closest within 45 days, not exact equality.
+            rev_item = min(
+                (r for r in rev_quarters if abs((r['period_end'] - period).days) <= 45),
+                key=lambda r: abs((r['period_end'] - period).days),
+                default=None,
+            )
             if rev_item is None:
                 continue
             revenue_m = rev_item['revenue_m']
             if not revenue_m:
                 continue
             net_margin_pct = round((ni_item['net_income_m'] / revenue_m) * 100, 2)
-            source = ('derived_q4'
-                      if 'derived' in ni_item['source'] or 'derived' in rev_item['source']
-                      else '10-Q')
+            source = f"ni:{ni_item['source']}|rev:{rev_item['source']}"
             results.append({
                 'ticker': ticker, 'period_end': period,
                 'fiscal_quarter': rev_item.get('fiscal_quarter'),
                 'net_margin_pct': net_margin_pct, 'source': source,
             })
+
+        if len(results) < 3:
+            return []
 
         results.sort(key=lambda r: r['period_end'], reverse=True)
         return results[:n_quarters]
@@ -189,25 +234,16 @@ def get_quarterly_net_margin(ticker: str, n_quarters: int = 8) -> list[dict]:
 def get_quarterly_net_margin_pct(ticker: str, n_quarters: int = 4) -> list[float]:
     """
     Last n_quarters (default 4) of Net Profit Margin % for ticker, ascending
-    (most recent last), sourced from the local secfsdstools parquet DB.
+    (most recent last), sourced from the merged secfsdstools+edgartools series
+    (see get_quarterly_net_margin()).
 
     Returns [] (never raises) when:
-      - fewer than 3 quarters of margin data are available locally
-      - the most recent available quarter is older than 365 days (local bulk
-        dataset is stale — caller should fall back to utils/edgar_net_margin.py)
+      - fewer than 3 quarters of margin data are available from either source
+      - the most recent quarter in the merged series is still older than 365
+        days (neither source has anything fresh)
       - any exception occurs
     """
     try:
-        cik = get_cik(ticker)
-        if not cik:
-            return []
-
-        # Fast fail: skip the expensive NI + revenue extraction entirely if
-        # the latest 10-K on file is already stale.
-        proxy = latest_filing_period(int(cik))
-        if proxy is None or (date.today() - proxy).days > 365:
-            return []
-
         raw = get_quarterly_net_margin(ticker, n_quarters=n_quarters + 1)
         if len(raw) < 3:
             return []

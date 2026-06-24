@@ -1,12 +1,14 @@
 """
-utils/secfs_revenue.py — Local SEC bulk-dataset (secfsdstools) quarterly Revenue fetcher.
+utils/secfs_revenue.py — Local SEC bulk-dataset (secfsdstools) quarterly Revenue fetcher,
+merged with utils/edgar_revenue.py (live edgartools/HTTP) at the quarter level.
 
-Primary source ahead of utils/edgar_revenue.py (live edgartools/HTTP) in the Code33
-fallback chain (see utils/code33_engine.py). Reads the locally downloaded SEC Financial
-Statement Data Sets parquet DB (path configured in C:\\Users\\Meet Singh\\.secfsdstools.cfg)
-instead of hitting SEC EDGAR over the network — fast, but lags live data by roughly one
-quarter (bulk dataset release cadence), hence the 365-day recency gate in
-get_quarterly_revenue_yoy() that hands off to the edgartools fallback when stale.
+get_quarterly_revenue() pulls every quarter secfsdstools (local parquet DB) has for the
+ticker, then queries edgartools and uses it ONLY to fill quarters secfsdstools is missing
+— secfsdstools wins whenever both sources cover the same period. This handles the case
+where the local bulk DB lags live filings by ~1 quarter (SEC only publishes bulk datasets
+quarterly) without discarding the (cheap, already-fetched) historical quarters secfsdstools
+does have. get_quarterly_revenue_yoy() then applies a 365-day staleness check to the
+merged result and returns [] if even the merge can't produce anything recent enough.
 
 PERFORMANCE NOTES:
   1. Avoids secfsdstools' CompanyReportCollector and any collector path that spins up
@@ -40,6 +42,7 @@ import pandas as pd
 from secfsdstools.c_index.companyindexreading import CompanyIndexReader
 
 from utils.sec_edgar import get_cik
+from utils.edgar_revenue import get_quarterly_revenue as _edgar_get_quarterly_revenue
 
 log = logging.getLogger(__name__)
 
@@ -292,20 +295,62 @@ def _quarterly_revenue_secfs(cik: int, n_quarters: int) -> list[dict]:
 
 def get_quarterly_revenue(ticker: str, n_quarters: int = 8) -> list[dict]:
     """
-    Local-DB equivalent of utils/edgar_revenue.get_quarterly_revenue() — same
-    return shape (list of dicts, newest first, 'revenue_m' in USD millions),
-    sourced from the local secfsdstools parquet DB instead of live edgartools.
+    Merged Revenue series for ticker: secfsdstools (local parquet DB) pulls
+    every quarter it has; edgartools (live HTTP) is then queried and used
+    ONLY to fill quarters secfsdstools is missing — secfsdstools wins on any
+    period both sources cover. Same return shape as
+    utils/edgar_revenue.get_quarterly_revenue() (list of dicts, newest first,
+    'revenue_m' in USD millions), with 'source' prefixed by which side
+    supplied that quarter (e.g. 'secfsdstools:10-Q', 'edgartools:derived_q4').
 
-    Returns [] (never raises) if the ticker has no local CIK match or no data.
+    Returns [] (never raises) if the ticker has no local CIK match, or if the
+    merged result has fewer than 3 quarters total.
     """
     try:
         cik = get_cik(ticker)
         if not cik:
             return []
-        results = _quarterly_revenue_secfs(int(cik), n_quarters)
-        for r in results:
-            r['ticker'] = ticker
-        return results
+        cik_int = int(cik)
+
+        secfs_results = _quarterly_revenue_secfs(cik_int, n_quarters)
+        merged: dict[date, dict] = {}
+        for r in secfs_results:
+            period = r['period_end']
+            merged[period] = {**r, 'ticker': ticker, 'source': f"secfsdstools:{r['source']}"}
+            log.info("secfs_revenue: %s period=%s from secfsdstools (%s)", ticker, period, r['source'])
+
+        # secfsdstools already returned at least as many quarters as asked
+        # for — skip the slow live edgartools call entirely. edgartools is
+        # only worth its latency when secfsdstools has a real gap to fill.
+        if len(merged) >= n_quarters:
+            log.info("secfs_revenue: %s has %d/%d secfsdstools quarters — skipping edgartools", ticker, len(merged), n_quarters)
+        else:
+            try:
+                edgar_results = _edgar_get_quarterly_revenue(ticker, n_quarters=n_quarters)
+            except Exception as exc:
+                log.warning("secfs_revenue: edgartools fetch failed for %s: %s", ticker, exc)
+                edgar_results = []
+
+            # Same fiscal quarter can carry slightly different period-end
+            # dates between sources (e.g. secfsdstools' calendar-quarter-end
+            # vs edgartools' filer-reported fiscal date, off by a few days) —
+            # match by proximity, not exact date equality, or every
+            # edgartools quarter looks "missing" and gets added as a
+            # near-duplicate.
+            covered = sorted(merged.keys())
+            for r in edgar_results:
+                period = r['period_end']
+                if any(abs((period - sp).days) <= 45 for sp in covered):
+                    continue  # secfsdstools already has this quarter — it wins
+                merged[period] = {**r, 'ticker': ticker, 'source': f"edgartools:{r['source']}"}
+                covered.append(period)
+                log.info("secfs_revenue: %s period=%s filled from edgartools (%s)", ticker, period, r['source'])
+
+        if len(merged) < 3:
+            return []
+
+        results = sorted(merged.values(), key=lambda r: r['period_end'], reverse=True)
+        return results[:n_quarters]
     except Exception as exc:
         log.warning("secfs_revenue: get_quarterly_revenue('%s') failed: %s", ticker, exc)
         return []
@@ -314,27 +359,18 @@ def get_quarterly_revenue(ticker: str, n_quarters: int = 8) -> list[dict]:
 def get_quarterly_revenue_yoy(ticker: str, n_quarters: int = 4) -> list[float]:
     """
     Last n_quarters (default 4) of Revenue YoY growth % for ticker, ascending
-    (most recent last), sourced from the local secfsdstools parquet DB.
+    (most recent last), sourced from the merged secfsdstools+edgartools series
+    (see get_quarterly_revenue()).
 
     Returns [] (never raises) when:
-      - fewer than 3 quarters of YoY can be computed (too little local history)
-      - the most recent available quarter is older than 365 days (local bulk
-        dataset is stale — caller should fall back to utils/edgar_revenue.py)
+      - fewer than 3 quarters of YoY can be computed (too little history from
+        either source)
+      - the most recent quarter in the merged series is still older than 365
+        days (neither source has anything fresh)
       - any exception occurs
     """
     try:
-        cik = get_cik(ticker)
-        if not cik:
-            return []
-        cik_int = int(cik)
-
-        # Fast fail: skip the expensive per-filing extraction entirely if the
-        # latest 10-K on file is already stale (see latest_filing_period()).
-        proxy = latest_filing_period(cik_int)
-        if proxy is None or (date.today() - proxy).days > 365:
-            return []
-
-        raw = _quarterly_revenue_secfs(cik_int, n_quarters + 5)
+        raw = get_quarterly_revenue(ticker, n_quarters=n_quarters + 5)
         if not raw:
             return []
 
