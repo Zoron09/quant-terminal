@@ -1,5 +1,5 @@
 # CONTEXT.md — Quant Terminal Project State
-> Generated after CACHE_VERSION v29 (secfsdstools wiring + EPS removed from Code33 signal).
+> Generated after CACHE_VERSION v30 (engine finalized: never-crash guardrails).
 > See CLAUDE.md for full spec/rules. This file tracks current state, not rules.
 
 ---
@@ -9,7 +9,7 @@
 ### utils/
 | File | Status |
 |---|---|
-| `code33_engine.py` | **Production** — Code33 engine. Rev/NI: secfsdstools primary → edgartools fallback → FMP/EDGAR-raw last resort. EPS still fetched (Finnhub primary, EDGAR fallback) but no longer feeds the status signal (v29). |
+| `code33_engine.py` | **Production** — Code33 engine. Rev/NI: secfsdstools primary → edgartools fallback → FMP/EDGAR-raw last resort. EPS still fetched (Finnhub primary, EDGAR fallback) but no longer feeds the status signal (v29). **v30: finalized, never-crash.** `get_code33_data()` is now a thin wrapper around `_get_code33_data_inner()` — any unhandled exception is caught and returns a safe `_insufficient_result()` dict (status='insufficient', empty lists) instead of propagating. The 4 secfsdstools/edgartools result-parsing loops (rev + net margin, both tiers) are now individually try/except-guarded with a logged warning on failure, falling through to the next tier exactly as the existing source-selection logic already expected. `RECENCY_CUTOFF_DAYS` (548) and `HISTORICAL_LOOKBACK_DAYS` (365×5), previously duplicated as bare literals in 3 places, are now module-level constants. `EXCL_SECTORS`/`EXCL_INDUSTRY_KEYWORDS`/`REIT_KEYWORDS` (sector-exclusion lists) moved from being rebuilt on every call to module level. |
 | `secfs_revenue.py` | **Production (new, v29)** — `get_quarterly_revenue()` / `get_quarterly_revenue_yoy()`. Reads the local secfsdstools parquet DB directly (sqlite-backed `CompanyIndexReader` + a shared, process-wide tag-filtered quarter cache — avoids secfsdstools' own collector/ParallelExecutor classes, which benchmarked at 40-340s/call on this machine). 365-day staleness gate before falling back to edgartools. |
 | `secfs_net_margin.py` | **Production (new, v29)** — `get_quarterly_net_margin()` / `get_quarterly_net_margin_pct()`. Same architecture as `secfs_revenue.py`, reuses its shared quarter cache. |
 | `edgar_revenue.py` | **Production** — `get_quarterly_revenue()`. PROTECTED — do not modify without a confirmed bug. Now the fallback tier, not primary. |
@@ -83,6 +83,18 @@ secfsdstools lags live filings by up to ~1 quarter (SEC only publishes bulk data
 - **`tools/run_c33_batch.py` rebuilt** to write each ticker's row to disk as soon as it completes (not buffered to the end) and to log the data source (`rev:<src>|ni:<src>`) per row.
 - **Full batch run on `Minervini builder Managed copy_2026-06-23.csv` (381 tickers), post EPS-removal:** 65.6 min, 0 errors. GREEN: AIP, CMP, MU (4th GREEN ticker, EIX, is a Utilities-sector stock — see §4, Code33's sector exclusion is not currently applied to the `status` field, so EIX should be treated as a false positive, not a real signal). YELLOW: 13. RED: 314. INSUFFICIENT: 50 (down from 94 in the pre-fix run — confirms the EPS-removal fix's intended effect).
 - Performance work: discovered secfsdstools' own collector classes that spin up its `ParallelExecutor` cost 40-340s/call regardless of how much is requested (ProcessPoolExecutor spin-up cost on Windows); avoided entirely in favor of the sqlite-backed `CompanyIndexReader` (~1s) plus a shared, tag-filtered, in-process parquet cache keyed by quarter folder (one disk read per quarter file, reused across every ticker and both metrics in a batch run).
+
+---
+
+## 3a. What's Done (v30 — engine finalized, never-crash)
+
+- **Audited `code33_engine.py` for crash risk and EPS leakage.** Confirmed `_c33_status()` already used Revenue + Net Margin only (no EPS) — no change needed there, v29's removal was already correct/complete.
+- **Found and fixed 4 unguarded result-parsing loops.** `_fmp_fetch_revenue_ni()` and the EDGAR/Finnhub fetchers were already try/except-wrapped, but the loops consuming `get_quarterly_revenue_secfs()` / `get_quarterly_revenue()` (edgartools) / `get_quarterly_net_margin_secfs()` / `get_quarterly_net_margin()` (edgartools) results were not — a malformed row (missing `revenue_m`/`net_margin_pct`/`period_end` key) would have raised an unhandled `KeyError`/`AttributeError`. All 4 now try/except-guarded; on failure, logs a warning and clears that tier so the existing secfsdstools → edgartools → FMP/EDGAR-raw fallback chain engages exactly as already designed.
+- **Added an outer never-crash boundary.** `get_code33_data()` is now a thin `@st.cache_data`-wrapped function that calls `_get_code33_data_inner()` inside a try/except; any unhandled exception anywhere in the ~900-line body now returns `_insufficient_result()` (status='insufficient', empty lists for every series) instead of crashing the caller. Verified all callers (`run_c33_batch.py`, `code33_screener.py`, `api/server.py`) read via `.get(key, default)`, never raw `dict[key]`, so the smaller fallback dict shape is safe.
+- **Hoisted duplicated magic numbers to constants.** `548` (recency cutoff) and `365 * 5` (historical lookback), each previously hardcoded in 2-3 separate places, are now `RECENCY_CUTOFF_DAYS`/`HISTORICAL_LOOKBACK_DAYS`. Sector-exclusion lists (`_EXCL_SECTORS`/`_EXCL_INDUSTRY_KEYWORDS`/`_REIT_KEYWORDS`), previously rebuilt fresh on every `get_code33_data()` call, are now module-level `EXCL_SECTORS`/`EXCL_INDUSTRY_KEYWORDS`/`REIT_KEYWORDS`.
+- **`CACHE_VERSION` bumped to `v30`.**
+- **Verified:** `py_compile` clean; ran MU, AIP, CMP, VIAV, AXON, FN, LRCX through `get_code33_data()` — zero crashes, results unchanged from the v29 batch run (MU/AIP/CMP green, FN yellow, VIAV/AXON/LRCX red).
+- **No new features, no UI changes** — this was a crash-hardening/cleanup pass only. The sector-exclusion gating gap (§4 below) was deliberately left untouched — out of scope for this pass.
 
 ---
 
