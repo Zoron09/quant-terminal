@@ -51,10 +51,26 @@ except Exception:
     FINNHUB_KEY  = ''
     _HAS_FINNHUB = False
 
-CACHE_VERSION = 'v29'
+CACHE_VERSION = 'v30'
 
 # ── SEC EDGAR headers ─────────────────────────────────────────────────────────
 EDGAR_UA = {'User-Agent': 'Meet Singh singhgaganmeet09@gmail.com'}
+
+# ── Shared cutoff constants ───────────────────────────────────────────────────
+RECENCY_CUTOFF_DAYS      = 548       # ~18 months — max staleness for "fresh enough" data
+HISTORICAL_LOOKBACK_DAYS = 365 * 5   # 5 years — ignore filings older than this
+
+# ── Sector / industry exclusion rules (Minervini SEPA methodology) ───────────
+#   Hard exclusion  → NOT APPLICABLE (Utilities, Cyclicals, Airlines)
+#   Soft warning    → runs Code 33 but shows REIT advisory
+#   No exclusion    → Financials removed per Minervini (can be superperformance leaders)
+EXCL_SECTORS = {'Utilities'}
+EXCL_INDUSTRY_KEYWORDS = [
+    'steel', 'aluminum', 'auto manufacturer', 'automobile',
+    'paper', 'packaging', 'chemical', 'fertilizer',
+    'airline', 'air freight', 'airports',
+]
+REIT_KEYWORDS = ['reit', 'real estate investment trust']
 
 # ── Small numeric helpers ─────────────────────────────────────────────────────
 def _nan(v):
@@ -459,18 +475,43 @@ def _date_first_yoy(fmp_vals, fmp_ends, edgar_vals, edgar_ends, fmp_fy=None, fmp
         )
     return [], [], [], [], []
 
+def _insufficient_result(ticker: str, reason: str = 'unhandled error') -> dict:
+    """Safe fallback dict, same shape as get_code33_data()'s normal return.
+    Used whenever a ticker can't be processed so callers never see an exception."""
+    log.warning("code33_engine: %s returning INSUFFICIENT (%s)", ticker, reason)
+    return {
+        'eps': [], 'rev': [], 'ni': [],
+        'eps_end_dates': [], 'rev_end_dates': [], 'ni_end_dates': [],
+        'eps_yoy': [], 'rev_yoy': [],
+        'eps_labels': [], 'rev_labels': [],
+        'npm': [], 'npm_labels': [], 'npm_ends': [],
+        'sources': {'rev': 'insufficient', 'ni': 'insufficient', 'eps': 'insufficient'},
+        'is_us': True,
+        'sector_excluded': False, 'excluded_sector_name': '',
+        'is_reit': False,
+        'status': 'insufficient',
+        'eps_prior_vals': [], 'eps_sources': [],
+    }
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
-
 def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
-
     """Fetch EPS, Revenue, Net Margin independently for Code 33 analysis.
 
     EPS: Finnhub stock/earnings (adjusted) primary, EDGAR GAAP fill for missing quarters.
+    Revenue + Net Margin: secfsdstools primary, edgartools fallback, FMP/EDGAR-raw last resort.
+    Need minimum 8 raw quarters per metric to compute 4 YoY rates (3 acceleration deltas).
 
-    Revenue + Net Margin: FMP quarterly income statement primary, EDGAR fallback.
+    Never raises — any unhandled error falls back to an INSUFFICIENT result so callers
+    (screener batch runs, server endpoints, pages) never crash on a single bad ticker."""
+    try:
+        return _get_code33_data_inner(ticker, cache_v)
+    except Exception:
+        log.exception("code33_engine: %s unhandled error in get_code33_data", ticker)
+        return _insufficient_result(ticker, 'unhandled exception')
 
-    Need minimum 8 raw quarters per metric to compute 4 YoY rates (3 acceleration deltas)."""
 
+def _get_code33_data_inner(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
     import yfinance as yf
 
 
@@ -516,26 +557,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
         industry = str(info.get('industry', '') or '').strip()
 
-        # Hard-excluded sectors: Utilities only at the sector level.
-        # Financial Services deliberately removed — banks/brokers/fintechs can be leaders.
-        _EXCL_SECTORS = {'Utilities'}
-
-        # Hard-excluded industry keywords: Cyclicals + Airlines.
-        # 'reit', 'bank', 'insurance', 'mortgage' removed from hard list.
-        _EXCL_INDUSTRY_KEYWORDS = [
-
-            'steel', 'aluminum', 'auto manufacturer', 'automobile',
-
-            'paper', 'packaging', 'chemical', 'fertilizer',
-
-            'airline', 'air freight', 'airports',
-
-        ]
-
-        # REIT soft-warning keywords (run Code 33, but show advisory)
-        _REIT_KEYWORDS = ['reit', 'real estate investment trust']
-
-        if sector in _EXCL_SECTORS:
+        if sector in EXCL_SECTORS:
 
             sector_excluded = True
 
@@ -545,7 +567,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
             ind_lower = industry.lower()
 
-            for kw in _EXCL_INDUSTRY_KEYWORDS:
+            for kw in EXCL_INDUSTRY_KEYWORDS:
 
                 if kw in ind_lower:
 
@@ -558,7 +580,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
         # Detect REIT for soft warning (sector='Real Estate' or industry keyword)
         is_reit = (
             sector == 'Real Estate' or
-            any(kw in industry.lower() for kw in _REIT_KEYWORDS)
+            any(kw in industry.lower() for kw in REIT_KEYWORDS)
         )
 
     except Exception:
@@ -761,7 +783,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
 
 
 
-    def _is_recent(end_dates, max_days=548):
+    def _is_recent(end_dates, max_days=RECENCY_CUTOFF_DAYS):
 
         """Reject data if most recent date is older than max_days (~18 months)."""
 
@@ -911,8 +933,8 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
             return [], [], [], [], [], []
 
         usgaap = facts.get('facts', {}).get('us-gaap', {})
-        cutoff_date = (datetime.utcnow() - timedelta(days=365 * 5)).date()
-        recency_cutoff = (datetime.utcnow() - timedelta(days=548)).date()  # ~18 months
+        cutoff_date = (datetime.utcnow() - timedelta(days=HISTORICAL_LOOKBACK_DAYS)).date()
+        recency_cutoff = (datetime.utcnow() - timedelta(days=RECENCY_CUTOFF_DAYS)).date()
 
         def _extract_for_concept(concept):
             global_dedup = {}
@@ -1090,8 +1112,8 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
             return [], [], [], [], [], []
 
         usgaap = facts.get('facts', {}).get('us-gaap', {})
-        cutoff   = (datetime.utcnow() - timedelta(days=365 * 5)).date()
-        recency  = (datetime.utcnow() - timedelta(days=548)).date()
+        cutoff   = (datetime.utcnow() - timedelta(days=HISTORICAL_LOOKBACK_DAYS)).date()
+        recency  = (datetime.utcnow() - timedelta(days=RECENCY_CUTOFF_DAYS)).date()
 
         def _standalone_concept(concept, unit, is_annual=False):
             by_end = {}
@@ -1566,11 +1588,12 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
     if _HAS_SECFS_REV:
         try:
             _secfs_rev = sorted(get_quarterly_revenue_secfs(ticker, n_quarters=16), key=lambda r: r['period_end'])
+            for r in _secfs_rev:
+                secfs_rev_vals.append(r['revenue_m'] * 1_000_000)  # millions -> raw USD
+                secfs_rev_ends.append(r['period_end'].isoformat())
         except Exception:
-            _secfs_rev = []
-        for r in _secfs_rev:
-            secfs_rev_vals.append(r['revenue_m'] * 1_000_000)  # millions -> raw USD
-            secfs_rev_ends.append(r['period_end'].isoformat())
+            log.warning("code33_engine: %s secfsdstools revenue failed, falling back to edgartools", ticker)
+            secfs_rev_vals, secfs_rev_ends = [], []
 
     rev_yoy_secfs, rev_labels_secfs, _, _, _ = _date_first_yoy(
         secfs_rev_vals, secfs_rev_ends, [], [], None, None, None, None,
@@ -1589,11 +1612,12 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
     if _HAS_EDGARTOOLS_REV and not _use_secfs_rev:
         try:
             _et_rev = sorted(get_quarterly_revenue(ticker, n_quarters=16), key=lambda r: r['period_end'])
+            for r in _et_rev:
+                edgartools_rev_vals.append(r['revenue_m'] * 1_000_000)  # millions -> raw USD
+                edgartools_rev_ends.append(r['period_end'].isoformat())
         except Exception:
-            _et_rev = []
-        for r in _et_rev:
-            edgartools_rev_vals.append(r['revenue_m'] * 1_000_000)  # millions -> raw USD
-            edgartools_rev_ends.append(r['period_end'].isoformat())
+            log.warning("code33_engine: %s edgartools revenue failed, falling back to FMP/EDGAR-raw", ticker)
+            edgartools_rev_vals, edgartools_rev_ends = [], []
 
     rev_yoy_edgartools, rev_labels_edgartools, _, _, _ = _date_first_yoy(
         edgartools_rev_vals, edgartools_rev_ends, [], [], None, None, None, None,
@@ -1636,12 +1660,13 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
     if _HAS_SECFS_MARGIN:
         try:
             _secfs_npm = sorted(get_quarterly_net_margin_secfs(ticker, n_quarters=16), key=lambda r: r['period_end'])
+            for r in _secfs_npm:
+                secfs_npm_vals.append(r['net_margin_pct'])
+                secfs_npm_ends.append(r['period_end'].isoformat())
+                secfs_npm_labels.append(_get_fq_fy(r['period_end'], fy_end_month))
         except Exception:
-            _secfs_npm = []
-        for r in _secfs_npm:
-            secfs_npm_vals.append(r['net_margin_pct'])
-            secfs_npm_ends.append(r['period_end'].isoformat())
-            secfs_npm_labels.append(_get_fq_fy(r['period_end'], fy_end_month))
+            log.warning("code33_engine: %s secfsdstools net margin failed, falling back to edgartools", ticker)
+            secfs_npm_vals, secfs_npm_labels, secfs_npm_ends = [], [], []
 
     _use_secfs_npm = (
         len([x for x in secfs_npm_vals if x is not None]) >= 3
@@ -1655,12 +1680,13 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
     if _HAS_EDGARTOOLS_MARGIN and not _use_secfs_npm:
         try:
             _et_npm = sorted(get_quarterly_net_margin(ticker, n_quarters=16), key=lambda r: r['period_end'])
+            for r in _et_npm:
+                edgartools_npm_vals.append(r['net_margin_pct'])
+                edgartools_npm_ends.append(r['period_end'].isoformat())
+                edgartools_npm_labels.append(_get_fq_fy(r['period_end'], fy_end_month))
         except Exception:
-            _et_npm = []
-        for r in _et_npm:
-            edgartools_npm_vals.append(r['net_margin_pct'])
-            edgartools_npm_ends.append(r['period_end'].isoformat())
-            edgartools_npm_labels.append(_get_fq_fy(r['period_end'], fy_end_month))
+            log.warning("code33_engine: %s edgartools net margin failed, falling back to FMP/EDGAR-raw", ticker)
+            edgartools_npm_vals, edgartools_npm_labels, edgartools_npm_ends = [], [], []
 
     npm_vals_existing, npm_labels_existing, npm_ends_existing = _build_margin_pool(
 
