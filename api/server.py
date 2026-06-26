@@ -37,15 +37,19 @@ app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 @app.get("/")
 async def root():
-    return FileResponse("frontend/screener.html")
+    return FileResponse("frontend/index.html")
 
-@app.get("/overview")
-async def overview():
-    return FileResponse("frontend/overview.html")
+@app.get("/screener")
+async def screener():
+    return FileResponse("frontend/index.html")
 
-@app.get("/portfolio")
-async def portfolio():
-    return FileResponse("frontend/portfolio.html")
+@app.get("/analysis")
+async def analysis():
+    return FileResponse("frontend/index.html")
+
+@app.get("/journal")
+async def journal():
+    return FileResponse("frontend/index.html")
 
 @app.post("/api/scan")
 async def scan(file: UploadFile = File(...)):
@@ -227,9 +231,9 @@ async def ticker_data(ticker: str):
                             status_code=500)
 
 @app.get("/api/chart/{ticker}")
-async def chart_data(ticker: str, period: str = "3mo"):
+async def chart_data(ticker: str, period: str = "3mo", interval: str = "1d"):
     t = ticker.upper()
-    cache_key = f"chart_{t}_{period}"
+    cache_key = f"chart_{t}_{period}_{interval}"
     now = time.time()
     evict_cache()
     
@@ -239,7 +243,7 @@ async def chart_data(ticker: str, period: str = "3mo"):
             return JSONResponse(cached)
     
     try:
-        hist = yf.Ticker(t).history(period=period)
+        hist = yf.Ticker(t).history(period=period, interval=interval)
         if hist.empty:
             return JSONResponse({'error': 'No data'}, 
                                 status_code=404)
