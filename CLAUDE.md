@@ -1,231 +1,149 @@
-# CLAUDE.md — Quant Terminal Master Specification
-> Read this file at the start of EVERY session before touching any code.
-> Last updated: April 13, 2026
+# QUANT TERMINAL — PROJECT BIBLE
+**Location:** `C:\Users\Meet Singh\quant-terminal`
+**GitHub:** Zoron09/quant-terminal (branch: main)
+**Purpose:** Cinematic stock screening terminal based on Minervini SEPA/Code33 methodology.
 
 ---
 
-## 1. Who is the user
-
-- **Name:** Meet Singh, Delhi, India (relocating to NSW Australia June 2026)
-- **Technical level:** Zero coding experience. Cannot read or write code.
-- **Communication:** Short, direct. One step at a time. No long explanations unless asked.
-- **Trading:** Studies Mark Minervini's SEPA methodology (books: "Trade Like a Stock Market Wizard", "Think & Trade Like a Champion")
-
----
-
-## 2. What is this project
-
-A Bloomberg-style FastAPI + vanilla HTML/React stock research terminal built around Minervini's SEPA methodology. Runs locally on Windows PC.
-
-**Start the app:**
-```bash
-cd "C:\Users\Meet Singh\quant-terminal"
-python run.py
-```
+## ABSOLUTE RULES — READ BEFORE TOUCHING ANYTHING
+1. NEVER touch `utils/code33_engine.py` or anything in `utils/` except `secfs_revenue.py` and `secfs_net_margin.py`
+2. NEVER touch world grid CSS or navigation JS in `frontend/index.html`
+3. NEVER use `&&` in PowerShell — use `;` instead
+4. ALWAYS use Python patch approach for frontend changes (decode `__bundler/template` JSON → patch → re-encode with `<\/` escaping → write back)
+5. ALWAYS inspect exact strings before replacing — never guess
+6. ALWAYS run verify script after patching frontend
+7. ALWAYS restart server and confirm at localhost:8000 after changes
+8. ALWAYS commit and push after any confirmed working change
+9. ALWAYS update this CLAUDE.md after any significant change
+10. ONE change at a time — test after each
+11. If something breaks — STOP, revert to last working git commit, document what happened
 
 ---
 
-## 3. Project location
-
-```
-C:\Users\Meet Singh\quant-terminal\
-├── CLAUDE.md              ← This file. Always read first.
-├── app.py                 ← Main entry point (Overview page)
-├── .env                   ← API keys (NEVER commit to Git)
-├── requirements.txt
-├── pages/
-│   ├── 2_Financials.py
-│   ├── 3_Growth_and_Margins.py
-│   ├── 4_Valuation.py
-│   ├── 5_Earnings.py
-│   ├── 6_Analyst_Ratings.py
-│   ├── 7_Ownership.py
-│   ├── 8_Peer_Comparison.py
-│   ├── 9_SEPA_Analysis.py
-│   ├── 10_Screener.py
-│   ├── 11_News_Sentiment.py
-│   ├── 12_Portfolio.py
-│   ├── 13_Market_Dashboard.py
-│   └── 15_stock_detail.py
-├── utils/
-│   ├── alpaca_client.py   ← Alpaca data + WebSocket streaming
-│   ├── data_fetcher.py    ← Routing: Alpaca primary, yfinance fallback
-│   ├── sepa_engine.py     ← All SEPA calculations
-│   ├── screener_db.py     ← SQLite cache for screener
-│   ├── finnhub_client.py  ← News, analyst, earnings data
-│   ├── sec_edgar.py       ← SEC filings
-│   ├── portfolio_engine.py
-│   ├── dcf_model.py
-│   ├── piotroski.py
-│   ├── formatters.py
-│   └── sidebar.py
-├── data/
-│   ├── portfolios.json    ← Meet's actual holdings
-│   ├── sp500_tickers.json
-│   ├── nifty500_tickers.json
-│   ├── price_alerts.json
-│   └── screener_cache.db  ← SQLite SEPA cache
-└── styles/custom.css      ← Bloomberg dark theme
-```
+## TECH STACK
+- **Backend:** FastAPI — start with `.venv\Scripts\python.exe run.py`
+- **Frontend:** Single file `frontend/index.html` (~810KB, Claude Design bundled)
+- **Python for scripts:** `C:\Users\Meet Singh\AppData\Local\Programs\Python\Python314\python.exe`
+- **Venv Python:** `C:\Users\Meet Singh\quant-terminal\.venv\Scripts\python.exe`
+- **Server URL:** `http://localhost:8000`
 
 ---
 
-## 4. API keys (.env)
-
-```
-ALPACA_API_KEY=<key>
-ALPACA_API_SECRET=<secret>
-FINNHUB_API_KEY=<key>
-```
-
-NEVER commit .env to Git. It is in .gitignore.
-
----
-
-## 5. Data architecture
-
-| Data | Primary | Fallback |
-|------|---------|----------|
-| US price history + real-time | Alpaca IEX | yfinance |
-| Financial statements | yfinance | SEC EDGAR |
-| News | Finnhub + Alpaca | — |
-| Analyst ratings + earnings surprises | Finnhub | yfinance |
-| Insider transactions | Finnhub | yfinance |
-| Indian stocks (.NS/.BO) | yfinance only | — |
-| Canadian stocks (.TO) | yfinance only | — |
-| Indices (^GSPC, ^NSEI) | yfinance only | — |
+## DATA SOURCES
+| Source | Used For | Location |
+|--------|----------|----------|
+| secfsdstools | Revenue + Net Margin (primary) | `C:\Users\Meet Singh\secfsdstools\data\` — 426K reports, 69 quarters |
+| edgartools | SEC fallback | pip installed |
+| yfinance | EPS, chart, price, ownership, peers | pip installed |
+| tradingview-scraper | News (primary) | pip installed |
+| yfinance | News fallback | pip installed |
+| FMP | Last resort data fallback | pip installed |
 
 ---
 
-## 6. Design rules (NEVER change these)
+## FRONTEND ARCHITECTURE
+Single file: `frontend/index.html`
+The app code lives inside `<script type="__bundler/template">` as JSON-encoded string.
+All edits: decode JSON → string replace → re-encode with `<\/` escaping → write back.
 
-- Background: #0E1117 (black)
-- Accent: #00FF41 (neon green)
-- Positive values: #00FF41
-- Negative values: #FF4444
-- Warnings: #FFD700
-- Font: Courier New monospace for all numbers
-- Every number right-aligned, every label left-aligned
-- Dark theme only — never light mode
+**World Grid Layout (DO NOT CHANGE):**
+#world { position: absolute; width: 300vw; height: 300vh; top: 0; left: -100vw; }
 
----
+#page-home     { left: 100vw; top: 0;     } ← center hub
 
-## 7. What is already built
+#page-analysis { left: 100vw; top: 100vh; } ← swipe UP from home
 
-### Phase 1 — Stock Research
-- overview.html: Overview — top bar, company snapshot, key statistics, dividends
-- Financial statements (IS, BS, CF) — annual/quarterly toggle
-- Growth & margins charts — revenue, EPS, margin trends
-- Valuation — ratio dashboard, DCF model, Piotroski F-Score
-- Earnings — calendar, history table, surprise chart, estimates
-- Analyst ratings — consensus, price targets, upgrades/downgrades
-- Ownership — insider transactions (Finnhub+yfinance), institutional holders
-- Peer comparison — sector peers, color-coded metrics table
+#page-screener { left: 0;     top: 0;     } ← swipe LEFT from home
 
-### Phase 2 — SEPA Engine
-- SEPA Analysis — full trend template, price chart with MAs, Weinstein stage, RS ranking, VCP detection, earnings acceleration, Code 33 detector, volume dry-up, buy trigger zone
-- screener.html: Screener — full US market scan via Alpaca (~6000-11000 stocks), SQLite cache, instant results, 6 quick scan presets, live WebSocket feed
+#page-journal  { left: 200vw; top: 0;     } ← swipe RIGHT from home
 
-### Phase 3 — News & Sentiment (page 11)
-- Finnhub + Alpaca news feed, SEC filings, price alerts
-
-### Phase 4 — Portfolio (page 12)
-- Holdings: AMD, AMZN, IREN, MELI, MSFT, NFLX, NVDA, QQQ, SOFI, V, XDIV.TO
-- Real-time P&L via Alpaca, optimizer, risk metrics, backtesting, position sizing
-
-### Phase 5 — Market Dashboard (page 13)
-- Index cards, sector heatmap, market breadth, VIX, currencies/commodities
+**Navigation:** `goTo(page)` translates `#world` div. Touch drag `passive: false`. Arrow keys work. DO NOT TOUCH.
 
 ---
 
-## 8. SEPA engine — exact rules
+## DESIGN SYSTEM (locked)
+Background:     #000000 (all pages)
 
-### Trend Template (7+ of 8 = SEPA Qualified)
-1. Price > 150-day MA
-2. Price > 200-day MA
-3. 150-day MA > 200-day MA
-4. 200-day MA trending up >= 1 month
-5. 50-day MA > 150-day MA AND 200-day MA
-6. Price > 50-day MA
-7. Price >= 30% above 52-week low (Minervini's rule — NOT 25%)
-8. Price within 25% of 52-week high
+Cards:          #141416
 
-### SEPA composite score weights
-- Trend Template: 30%
-- RS Rank: 20%
-- Earnings Acceleration: 20%
-- VCP: 15%
-- Volume/Stage: 15%
+Borders:        #2A2A2E
 
-### Score caps
-- Earnings not fetched (fast scan): max 80 naturally
-- Earnings fetched + accelerating: up to 100
-- Earnings fetched + NOT accelerating: hard cap at 55
+Accent gold:    #D4A843
 
-### Weinstein Stage
-- Stage 2 (Advancing): price above rising MA150 → ideal
-- Stage 1 (Basing): price around flat MA150
-- Stage 3 (Topping): price above falling MA150 → caution
-- Stage 4 (Declining): price below falling MA150 → avoid
+Positive:       #34D399
 
-### VCP (Volatility Contraction Pattern)
-- Valid VCP: ALL contractions strictly decreasing left to right
-- Invalid VCP: has 3+ contractions but not all progressive
-- Uses 10-day rolling windows over 60-day lookback
+Negative:       #F87171
 
-### Code 33 (most important signal)
-Requires ALL THREE simultaneously for 3 consecutive quarters:
-- EPS YoY growth RATE accelerating (delta > 0)
-- Revenue YoY growth RATE accelerating (delta > 0)
-- Net Profit Margin expanding (delta > 0)
+Warning:        #FBBF24
 
-Status rules:
-- GREEN = all 3 metrics have positive AND increasing deltas
-- YELLOW = all 3 still positive but at least one delta shrinking
-- RED = any delta turns negative
+Text primary:   #FAFAFA
 
-CRITICAL: High growth but decelerating = RED (the Dell Computer trap).
-Example: EPS growth 80% → 65% → 28% = RED even though growth is positive.
+Text muted:     #52525B
+Fonts: DM Serif Display (headings), Inter (UI), IBM Plex Mono (numbers)
+
+Homepage title: Bodoni Moda 900
 
 ---
 
-## 9. Screener architecture
+## BACKEND API ROUTES
+All routes in `api/server.py`. DO NOT touch engine files.
+GET  /api/ticker/{ticker}          → {price, company_name, change, change_pct, status, market_cap_fmt, pe_ratio, week52_high, week52_low, avg_volume, eps_yoy}
 
-- Phase 0: Load ~6000-11000 US symbols from Alpaca Trading API
-- Phase 1: Bulk real-time snapshots (1000 symbols/call, ~1s each)
-- Phase 2+3: Batch OHLCV bars (500/batch) + SEPA compute
-- Auto-enrich top 200 by SEPA score with yfinance earnings data
-- All results stored in SQLite (screener_cache.db)
-- Subsequent loads instant from SQLite (<3 sec)
-- India fallback: yfinance, Nifty 500 universe
+GET  /api/chart/{ticker}?period=1y&interval=1d → {ticker, period, prices: [{date, close}]}
 
----
+GET  /api/financials/{ticker}      → {earnings: [{date, revenue, rev_yoy, net_margin, net_margin_yoy, eps, eps_yoy}], balance_sheet: {}, cash_flow: {}, valuation: {}}
 
-## 10. Known bugs — DO NOT reintroduce
+GET  /api/news/{ticker}            → {news: [{title, source, url, time}]}
 
-| Bug | Fix applied |
-|-----|-------------|
-| BRK-B crash | Use BRK.B format, binary-split retry on 400 errors |
-| SEPA score too high | Cap at 55 when earnings not accelerating |
-| VCP false positives | Strict left-to-right decreasing validation |
-| Insider missing buy/sell | Map P=Purchase S=Sale A=Award M=Exercise F=Tax |
-| NaN screener crash | NaN-safe helpers (_safe_float, _safe_int, _safe_bool) on all numeric columns |
-| RS timezone mismatch | Strip tz from both Alpaca and yfinance before index intersection |
-| Screener only 50 stocks | Full Alpaca asset list via TradingClient |
+GET  /api/ownership/{ticker}       → {institutional: [{name, pct}], insiders: [{name, role, date, value, type}]}
+
+GET  /api/peers/{ticker}           → {ticker, peers: [{ticker, rev_yoy, npm, status}]}
+
+POST /api/scan                     → {winners: [{ticker, company, sector, mcap, eps, rev, margin, status}], meta: {total, passed, insufficient}}
 
 ---
 
-## 11. Session rules for AI agent
+## CURRENT STATUS (update this after every session)
 
-1. Always read CLAUDE.md first before any code changes
-2. Batch all related changes into single operations
-3. After every change: verify no syntax errors
-4. NEVER modify .env
-5. NEVER break existing working pages
-6. Always end every session with:
-```
-   git add .
-   git commit -m "describe what changed"
-   git push
-```
-7. Use PowerShell `;` instead of `&&` for chaining commands on Windows
+### ✅ WORKING
+- Homepage: pure black, Bodoni Moda title, swipe hints, cube animation placeholder
+- Navigation: all 4 directions, smooth physical slide, touch + keyboard
+- Screener: CSV upload → Code33 scan → GREEN/YELLOW results cards → wired to `/api/scan`
+- Journal: full sin-list trading journal (Analytics, Review, Trades DB, Missed Trades, Milestones) with IndexedDB persistence
+- News: tradingview-scraper primary, yfinance fallback, 60s cache
+- Chart: dynamic color (green/red), period % + $ gain label, YTD/1D/1W/1M/3M/1Y/5Y timeframes, 30s price poll
+
+### ❌ BROKEN / PENDING
+- FIX 2: Financials — Income Statement YoY Growth shows dashes, Net Income $0.0B (secfsdstools integration in progress)
+- FIX 3: loadAnalysis() — ticker search doesn't update the page (fetches but doesn't re-render)
+- FIX 4: Chart doesn't update when ticker changes
+- FIX 5: Balance Sheet + Cash Flow show raw unformatted numbers
+- FIX 6: Stats pills may show mock values instead of live API values
+
+### 🔄 IN PROGRESS
+- Batch Code 33 scan on 381-ticker Minervini CSV (running via direct engine call)
+
+---
+
+## ENGINE STATUS
+- **CACHE_VERSION:** v30 (FINALIZED — DO NOT TOUCH)
+- **Location:** `utils/code33_engine.py`
+- **Signals:** ACTIVE / BROKEN / NOT ACTIVE / INSUFFICIENT / NOT APPLICABLE
+- **Sources:** secfsdstools primary → edgartools fallback → FMP last resort
+- **EPS:** Removed from Code33 signal — manual verification via StockAnalysis.com
+
+---
+
+## GIT WORKFLOW
+git add <files>
+
+git commit -m "type: description"
+
+git push
+Commit before any new change. Commit message must describe what was validated.
+
+---
+
+## LAST UPDATED
+2026-06-27 — Cleaned up junk files (28 deleted), rewrote CLAUDE.md as project bible.
+After writing, run git add CLAUDE.md ; git commit -m "docs: rewrite CLAUDE.md as comprehensive project bible" ; git push
