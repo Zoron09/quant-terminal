@@ -457,7 +457,7 @@ async def news(ticker: str):
                 'title': title,
                 'source': 'Seeking Alpha',
                 'url': a.get('link', '') or a.get('url', ''),
-                'time': _fmt_news_time(pub),
+                'time': _parse_rfc2822(pub) if isinstance(pub, str) else (int(pub) if isinstance(pub, (int, float)) and pub > 0 else 0),
                 'ts': _parse_rfc2822(pub),
             })
     except Exception as e:
@@ -483,7 +483,7 @@ async def news(ticker: str):
                 'title': title,
                 'source': a.get('source', a.get('provider', '')),
                 'url': url,
-                'time': _fmt_news_time(pub),
+                'time': _parse_rfc2822(pub) if isinstance(pub, str) else (int(pub) if isinstance(pub, (int, float)) and pub > 0 else 0),
                 'ts': pub if isinstance(pub, (int, float)) else 0,
             })
     except Exception as e:
@@ -504,7 +504,7 @@ async def news(ticker: str):
                     'title': title,
                     'source': c.get('provider', {}).get('displayName', '') or n.get('publisher', ''),
                     'url': c.get('canonicalUrl', {}).get('url', '') or n.get('link', ''),
-                    'time': _fmt_news_time(pub),
+                    'time': _parse_rfc2822(pub) if isinstance(pub, str) else (int(pub) if isinstance(pub, (int, float)) and pub > 0 else 0),
                     'ts': pub if isinstance(pub, (int, float)) else 0,
                 })
         except Exception as e:
@@ -516,7 +516,7 @@ async def news(ticker: str):
     # Strip internal ts field before returning
     result = {
         'news': [
-            {'title': i['title'], 'source': i['source'], 'url': i['url'], 'time': i['time']}
+            {'title': i['title'], 'source': i['source'], 'url': i['url'], 'time': i['ts']}
             for i in items
         ]
     }
