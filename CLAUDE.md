@@ -17,6 +17,7 @@
 9. ALWAYS update this CLAUDE.md after any significant change
 10. ONE change at a time — test after each
 11. If something breaks — STOP, revert to last working git commit, document what happened
+12. AFTER EVERY CHANGE — update the CURRENT STATUS section in CLAUDE.md to reflect what was done, then commit CLAUDE.md alongside the changed files in the same commit. No commit is complete without an updated CLAUDE.md.
 
 ---
 
