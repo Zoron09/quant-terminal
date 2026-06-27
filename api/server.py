@@ -430,47 +430,129 @@ async def financials(ticker: str):
 
 @app.get("/api/news/{ticker}")
 async def news(ticker: str):
-    import feedparser
     t = ticker.upper()
     cache_key = f"news_{t}"
     now = time.time()
     evict_cache()
-    
     if cache_key in TICKER_CACHE:
         cached, ts = TICKER_CACHE[cache_key]
-        if now - ts < 300:
+        if now - ts < 120:
             return JSONResponse(cached)
-    
+
+    items = []
+    seen_titles = set()
+
+    # Source 1: SeekingAlpha via FinNews — fastest (0.42s), ticker-specific, analyst quality
     try:
-        url = (f"https://feeds.finance.yahoo.com"
-               f"/rss/2.0/headline?s={t}"
-               f"&region=US&lang=en-US")
-        feed = feedparser.parse(url)
-        items = []
-        for entry in feed.entries[:9]:
-            import calendar
-            ts = int(calendar.timegm(
-                entry.published_parsed
-            )) if hasattr(entry, 'published_parsed') \
-              and entry.published_parsed else \
-              int(time.time()) - 3600
-            
+        import FinNews as fn
+        sa = fn.SeekingAlpha(topics=[f'${t}'])
+        sa_news = sa.get_news() or []
+        for a in sa_news[:15]:
+            title = a.get('title', '').strip()
+            if not title or title in seen_titles:
+                continue
+            seen_titles.add(title)
+            pub = a.get('published', '')
             items.append({
-                'title': entry.get('title', ''),
-                'source': entry.get('source', {})
-                    .get('value', 'Yahoo Finance') 
-                    if hasattr(entry, 'source') 
-                    else 'Yahoo Finance',
-                'url': entry.get('link', ''),
-                'time': ts
+                'title': title,
+                'source': 'Seeking Alpha',
+                'url': a.get('link', '') or a.get('url', ''),
+                'time': _fmt_news_time(pub),
+                'ts': _parse_rfc2822(pub),
             })
-        
-        result = {'news': items}
-        TICKER_CACHE[cache_key] = (result, now)
-        return JSONResponse(result)
     except Exception as e:
-        return JSONResponse({'news': [], 
-                            'error': str(e)})
+        print(f"[news] SeekingAlpha failed: {e}")
+
+    # Source 2: tradingview-scraper — ticker-specific, Dow Jones/Barron's/MarketWatch
+    try:
+        from tradingview_scraper.symbols.news import NewsScraper
+        ns = NewsScraper()
+        articles = ns.scrape_headlines(symbol=t, exchange='NASDAQ', sort='latest')
+        if not isinstance(articles, list):
+            articles = articles.get('data', [])
+        for a in articles[:15]:
+            title = a.get('title', '').strip()
+            if not title or title in seen_titles:
+                continue
+            seen_titles.add(title)
+            url = a.get('link', '')
+            if not url and a.get('storyPath'):
+                url = 'https://www.tradingview.com/news' + a['storyPath']
+            pub = a.get('published', 0)
+            items.append({
+                'title': title,
+                'source': a.get('source', a.get('provider', '')),
+                'url': url,
+                'time': _fmt_news_time(pub),
+                'ts': pub if isinstance(pub, (int, float)) else 0,
+            })
+    except Exception as e:
+        print(f"[news] tradingview-scraper failed: {e}")
+
+    # Source 3: yfinance fallback — only if both above return nothing
+    if not items:
+        try:
+            tk = yf.Ticker(t)
+            for n in (tk.news or [])[:12]:
+                c = n.get('content', {})
+                title = (c.get('title', '') or n.get('title', '')).strip()
+                if not title or title in seen_titles:
+                    continue
+                seen_titles.add(title)
+                pub = c.get('pubDate', '') or n.get('providerPublishTime', 0)
+                items.append({
+                    'title': title,
+                    'source': c.get('provider', {}).get('displayName', '') or n.get('publisher', ''),
+                    'url': c.get('canonicalUrl', {}).get('url', '') or n.get('link', ''),
+                    'time': _fmt_news_time(pub),
+                    'ts': pub if isinstance(pub, (int, float)) else 0,
+                })
+        except Exception as e:
+            print(f"[news] yfinance fallback failed: {e}")
+
+    # Sort all items newest first
+    items.sort(key=lambda x: x.get('ts', 0), reverse=True)
+
+    # Strip internal ts field before returning
+    result = {
+        'news': [
+            {'title': i['title'], 'source': i['source'], 'url': i['url'], 'time': i['time']}
+            for i in items
+        ]
+    }
+    TICKER_CACHE[cache_key] = (result, now)
+    return JSONResponse(result)
+
+
+def _fmt_news_time(val):
+    try:
+        from datetime import datetime
+        if isinstance(val, (int, float)) and val > 0:
+            dt = datetime.utcfromtimestamp(val)
+        elif isinstance(val, str) and val:
+            import email.utils
+            parsed = email.utils.parsedate_to_datetime(val)
+            dt = parsed.replace(tzinfo=None)
+        else:
+            return ''
+        diff = datetime.utcnow() - dt
+        mins = int(diff.total_seconds() / 60)
+        if mins < 0: return 'just now'
+        if mins < 60: return f"{mins}m ago"
+        if mins < 1440: return f"{mins//60}h ago"
+        return f"{mins//1440}d ago"
+    except:
+        return ''
+
+
+def _parse_rfc2822(val):
+    try:
+        import email.utils
+        parsed = email.utils.parsedate_to_datetime(val)
+        return int(parsed.timestamp())
+    except:
+        return 0
+
 
 @app.get("/api/ownership/{ticker}")
 async def ownership(ticker: str):
