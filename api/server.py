@@ -14,6 +14,13 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils.code33_engine import get_code33_data, CACHE_VERSION
 
+try:
+    from utils.secfs_revenue import get_quarterly_revenue as _get_secfs_rev
+    from utils.secfs_net_margin import get_quarterly_net_margin as _get_secfs_margin
+    _HAS_SECFS = True
+except Exception:
+    _HAS_SECFS = False
+
 TICKER_CACHE = {}
 CACHE_TTL = 300  # 5 minutes
 
@@ -315,105 +322,112 @@ async def financials(ticker: str):
             f_cf  = executor.submit(lambda: tk.quarterly_cashflow)
             f_info = executor.submit(lambda: tk.info)
             f_cal = executor.submit(lambda: tk.calendar)
-            f_ann = executor.submit(lambda: tk.income_stmt)
-            
+
             inc = f_inc.result()
             bal = f_bal.result()
             cf  = f_cf.result()
             info = f_info.result() or {}
             cal_data = f_cal.result()
-            ann = f_ann.result()
         
+        # --- Build earnings list from secfsdstools + yfinance merge ---
         earnings_list = []
-        if inc is not None and not inc.empty:
-            dates = sorted(inc.columns, reverse=True)[:8]
-            for d in dates:
-                col = inc[d]
-                rev = None
-                for r_key in ['TotalRevenue', 'Total Revenue', 'OperatingRevenue']:
-                    if r_key in col.index and not np.isnan(col[r_key]):
-                        rev = col[r_key].item() if hasattr(col[r_key], 'item') else col[r_key]
-                        break
-                net_income = None
-                for ni_key in ['Net Income', 'NetIncome', 'Net Income Common Stockholders', 'NetIncomeCommonStockholders']:
-                    if ni_key in col.index:
-                        try:
-                            v = col[ni_key]
-                            if not np.isnan(v):
-                                net_income = v.item() if hasattr(v, 'item') else float(v)
-                                break
-                        except (TypeError, ValueError):
-                            pass
-                eps = None
-                for e_key in ['DilutedEPS', 'Diluted EPS', 'BasicEPS', 'Basic EPS']:
-                    if e_key in col.index and not np.isnan(col[e_key]):
-                        eps = col[e_key].item() if hasattr(col[e_key], 'item') else col[e_key]
-                        break
-                if eps is None:
-                    ni_for_eps = net_income
-                    if ni_for_eps is None:
-                        for ni_key2 in ['NetIncomeCommonStockholders']:
-                            if ni_key2 in col.index and not np.isnan(col[ni_key2]):
-                                ni_for_eps = col[ni_key2].item() if hasattr(col[ni_key2], 'item') else col[ni_key2]
-                                break
-                    shares = None
-                    for s_key in ['DilutedAverageShares', 'BasicAverageShares']:
-                        if s_key in col.index and not np.isnan(col[s_key]):
-                            shares = col[s_key].item() if hasattr(col[s_key], 'item') else col[s_key]
-                            break
-                    if ni_for_eps is not None and shares is not None and shares > 0:
-                        eps = ni_for_eps / shares
-                net_margin = None
-                if net_income is not None and rev is not None and rev > 0:
-                    net_margin = (net_income / rev) * 100
-                if eps is None and rev is None:
-                    continue
-                earnings_list.append({
-                    'date': str(d.date() if hasattr(d, 'date') else d).split(' ')[0],
+
+        try:
+            yf_df = inc  # already fetched above
+
+            # EPS from yfinance — up to 5 quarters
+            yf_eps = {}
+            if yf_df is not None and not yf_df.empty:
+                for col in yf_df.columns:
+                    eps_val = None
+                    for field in ['Diluted EPS', 'DilutedEPS', 'Basic EPS', 'BasicEPS']:
+                        if field in yf_df.index:
+                            v = yf_df.loc[field, col]
+                            if v is not None and str(v) != 'nan':
+                                try:
+                                    eps_val = float(v)
+                                    break
+                                except (TypeError, ValueError):
+                                    pass
+                    date_str = col.strftime('%Y-%m-%d') if hasattr(col, 'strftime') else str(col)[:10]
+                    yf_eps[date_str] = eps_val
+
+            # Revenue + net margin from secfsdstools — 12 quarters
+            secfs_rev = {}
+            secfs_margin = {}
+            if _HAS_SECFS:
+                try:
+                    rev_list = _get_secfs_rev(t, n_quarters=12)
+                    for r in rev_list:
+                        d = r['period_end'].isoformat() if hasattr(r['period_end'], 'isoformat') else str(r['period_end'])[:10]
+                        secfs_rev[d] = float(r['revenue_m']) * 1_000_000
+                except Exception as e:
+                    print(f"[financials] secfs_revenue failed: {e}")
+                try:
+                    margin_list = _get_secfs_margin(t, n_quarters=12)
+                    for r in margin_list:
+                        d = r['period_end'].isoformat() if hasattr(r['period_end'], 'isoformat') else str(r['period_end'])[:10]
+                        secfs_margin[d] = float(r['net_margin_pct'])
+                except Exception as e:
+                    print(f"[financials] secfs_margin failed: {e}")
+
+            # Collect all unique dates from all sources
+            all_dates = sorted(set(list(secfs_rev.keys()) + list(yf_eps.keys())), reverse=True)[:12]
+
+            # Build merged quarters
+            raw_quarters = []
+            for d in all_dates:
+                rev = secfs_rev.get(d)
+                # Fallback: yfinance revenue if secfsdstools missing this date
+                if rev is None and yf_df is not None and not yf_df.empty:
+                    try:
+                        for field in ['Total Revenue', 'TotalRevenue']:
+                            if field in yf_df.index:
+                                col_match = [c for c in yf_df.columns if str(c)[:10] == d]
+                                if col_match:
+                                    v = yf_df.loc[field, col_match[0]]
+                                    if v is not None and str(v) != 'nan':
+                                        rev = float(v)
+                                        break
+                    except Exception:
+                        pass
+                margin = secfs_margin.get(d)
+                eps = yf_eps.get(d)
+                raw_quarters.append({
+                    'date': d,
                     'revenue': rev,
                     'rev_yoy': None,
+                    'net_margin': margin,
+                    'net_margin_yoy': None,
                     'eps': eps,
                     'eps_yoy': None,
-                    'net_margin': net_margin,
-                    'net_margin_yoy': None,
                 })
 
-        for i in range(len(earnings_list)):
-            curr_eps = earnings_list[i]['eps']
-            curr_rev = earnings_list[i]['revenue']
-            curr_margin = earnings_list[i]['net_margin']
-            if i + 4 < len(earnings_list):
-                prev_eps = earnings_list[i+4]['eps']
-                if curr_eps is not None and prev_eps is not None and prev_eps != 0:
-                    earnings_list[i]['eps_yoy'] = ((curr_eps - prev_eps) / abs(prev_eps)) * 100
-                prev_rev = earnings_list[i+4]['revenue']
-                if curr_rev is not None and prev_rev is not None and prev_rev != 0:
-                    earnings_list[i]['rev_yoy'] = ((curr_rev - prev_rev) / abs(prev_rev)) * 100
-                prev_margin = earnings_list[i+4]['net_margin']
-                if curr_margin is not None and prev_margin is not None:
-                    earnings_list[i]['net_margin_yoy'] = curr_margin - prev_margin
-            else:
-                curr_date = earnings_list[i]['date']
-                curr_year = int(curr_date.split('-')[0])
-                prior_year = curr_year - 1
-                prev_eps_annual = None
-                if ann is not None and not ann.empty:
-                    for d_ann in ann.columns:
-                        try:
-                            dy = d_ann.year
-                        except:
-                            dy = int(str(d_ann).split('-')[0])
-                        if dy == prior_year:
-                            col_ann = ann[d_ann]
-                            for e_key in ['DilutedEPS', 'Diluted EPS', 'BasicEPS', 'Basic EPS']:
-                                if e_key in col_ann.index and not np.isnan(col_ann[e_key]):
-                                    prev_eps_annual = col_ann[e_key].item() if hasattr(col_ann[e_key], 'item') else col_ann[e_key]
-                                    break
-                            break
-                if prev_eps_annual is not None and prev_eps_annual != 0 and curr_eps is not None:
-                    prev_q = prev_eps_annual / 4
-                    earnings_list[i]['eps_yoy'] = ((curr_eps - prev_q) / abs(prev_q)) * 100
+            # Calculate YoY fields (compare index i vs i+4)
+            for i, q in enumerate(raw_quarters):
+                if i + 4 < len(raw_quarters):
+                    prev_rev = raw_quarters[i+4].get('revenue')
+                    curr_rev = q.get('revenue')
+                    if curr_rev is not None and prev_rev is not None and prev_rev != 0:
+                        q['rev_yoy'] = (curr_rev - prev_rev) / abs(prev_rev) * 100
 
+                    prev_m = raw_quarters[i+4].get('net_margin')
+                    curr_m = q.get('net_margin')
+                    if curr_m is not None and prev_m is not None:
+                        q['net_margin_yoy'] = curr_m - prev_m
+
+                    prev_eps = raw_quarters[i+4].get('eps')
+                    curr_eps = q.get('eps')
+                    if curr_eps is not None and prev_eps is not None and prev_eps != 0:
+                        q['eps_yoy'] = (curr_eps - prev_eps) / abs(prev_eps) * 100
+
+            earnings_list = raw_quarters
+
+        except Exception as e:
+            print(f"[financials] earnings build failed: {e}")
+            earnings_list = []
+
+        # First 8 for display — rest only needed for YoY calculation
         earnings_list = earnings_list[:8]
 
         next_earnings = None
