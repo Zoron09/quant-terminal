@@ -326,7 +326,7 @@ async def financials(ticker: str):
         
         earnings_list = []
         if inc is not None and not inc.empty:
-            dates = sorted(inc.columns, reverse=True)[:12]
+            dates = sorted(inc.columns, reverse=True)[:8]
             for d in dates:
                 col = inc[d]
                 rev = None
@@ -334,40 +334,64 @@ async def financials(ticker: str):
                     if r_key in col.index and not np.isnan(col[r_key]):
                         rev = col[r_key].item() if hasattr(col[r_key], 'item') else col[r_key]
                         break
+                net_income = None
+                for ni_key in ['Net Income', 'NetIncome', 'Net Income Common Stockholders', 'NetIncomeCommonStockholders']:
+                    if ni_key in col.index:
+                        try:
+                            v = col[ni_key]
+                            if not np.isnan(v):
+                                net_income = v.item() if hasattr(v, 'item') else float(v)
+                                break
+                        except (TypeError, ValueError):
+                            pass
                 eps = None
                 for e_key in ['DilutedEPS', 'Diluted EPS', 'BasicEPS', 'Basic EPS']:
                     if e_key in col.index and not np.isnan(col[e_key]):
                         eps = col[e_key].item() if hasattr(col[e_key], 'item') else col[e_key]
                         break
                 if eps is None:
-                    ni = None
-                    for ni_key in ['NetIncomeCommonStockholders']:
-                        if ni_key in col.index and not np.isnan(col[ni_key]):
-                            ni = col[ni_key].item() if hasattr(col[ni_key], 'item') else col[ni_key]
-                            break
+                    ni_for_eps = net_income
+                    if ni_for_eps is None:
+                        for ni_key2 in ['NetIncomeCommonStockholders']:
+                            if ni_key2 in col.index and not np.isnan(col[ni_key2]):
+                                ni_for_eps = col[ni_key2].item() if hasattr(col[ni_key2], 'item') else col[ni_key2]
+                                break
                     shares = None
                     for s_key in ['DilutedAverageShares', 'BasicAverageShares']:
                         if s_key in col.index and not np.isnan(col[s_key]):
                             shares = col[s_key].item() if hasattr(col[s_key], 'item') else col[s_key]
                             break
-                    if ni is not None and shares is not None and shares > 0:
-                        eps = ni / shares
+                    if ni_for_eps is not None and shares is not None and shares > 0:
+                        eps = ni_for_eps / shares
+                net_margin = None
+                if net_income is not None and rev is not None and rev > 0:
+                    net_margin = (net_income / rev) * 100
                 if eps is None and rev is None:
                     continue
                 earnings_list.append({
                     'date': str(d.date() if hasattr(d, 'date') else d).split(' ')[0],
                     'revenue': rev,
-                    'eps': eps
+                    'rev_yoy': None,
+                    'eps': eps,
+                    'eps_yoy': None,
+                    'net_margin': net_margin,
+                    'net_margin_yoy': None,
                 })
-        
+
         for i in range(len(earnings_list)):
-            earnings_list[i]['eps_yoy'] = None
-            curr = earnings_list[i]['eps']
-            if curr is None: continue
+            curr_eps = earnings_list[i]['eps']
+            curr_rev = earnings_list[i]['revenue']
+            curr_margin = earnings_list[i]['net_margin']
             if i + 4 < len(earnings_list):
-                prev = earnings_list[i+4]['eps']
-                if prev is not None and prev != 0:
-                    earnings_list[i]['eps_yoy'] = ((curr - prev) / abs(prev)) * 100
+                prev_eps = earnings_list[i+4]['eps']
+                if curr_eps is not None and prev_eps is not None and prev_eps != 0:
+                    earnings_list[i]['eps_yoy'] = ((curr_eps - prev_eps) / abs(prev_eps)) * 100
+                prev_rev = earnings_list[i+4]['revenue']
+                if curr_rev is not None and prev_rev is not None and prev_rev != 0:
+                    earnings_list[i]['rev_yoy'] = ((curr_rev - prev_rev) / abs(prev_rev)) * 100
+                prev_margin = earnings_list[i+4]['net_margin']
+                if curr_margin is not None and prev_margin is not None:
+                    earnings_list[i]['net_margin_yoy'] = curr_margin - prev_margin
             else:
                 curr_date = earnings_list[i]['date']
                 curr_year = int(curr_date.split('-')[0])
@@ -386,10 +410,10 @@ async def financials(ticker: str):
                                     prev_eps_annual = col_ann[e_key].item() if hasattr(col_ann[e_key], 'item') else col_ann[e_key]
                                     break
                             break
-                if prev_eps_annual is not None and prev_eps_annual != 0:
+                if prev_eps_annual is not None and prev_eps_annual != 0 and curr_eps is not None:
                     prev_q = prev_eps_annual / 4
-                    earnings_list[i]['eps_yoy'] = ((curr - prev_q) / abs(prev_q)) * 100
-        
+                    earnings_list[i]['eps_yoy'] = ((curr_eps - prev_q) / abs(prev_q)) * 100
+
         earnings_list = earnings_list[:8]
 
         next_earnings = None
@@ -477,7 +501,7 @@ async def news(ticker: str):
             seen_titles.add(title)
             url = a.get('link', '')
             if not url and a.get('storyPath'):
-                url = 'https://www.tradingview.com/news' + a['storyPath']
+                url = 'https://www.tradingview.com' + a['storyPath']
             pub = a.get('published', 0)
             items.append({
                 'title': title,
