@@ -34,11 +34,10 @@
 | Source | Used For | Location |
 |--------|----------|----------|
 | secfsdstools | Revenue + Net Margin (primary) | `C:\Users\Meet Singh\secfsdstools\data\` — 426K reports, 69 quarters |
-| edgartools | SEC fallback | pip installed |
-| yfinance | EPS, chart, price, ownership, peers | pip installed |
+| edgartools | Revenue + Net Margin (targeted gap-fill only) | pip installed |
+| yfinance | Chart, price, ownership, peers | pip installed |
 | tradingview-scraper | News (primary) | pip installed |
 | yfinance | News fallback | pip installed |
-| FMP | Last resort data fallback | pip installed |
 
 ---
 
@@ -123,15 +122,35 @@ POST /api/scan                     → {winners: [{ticker, company, sector, mcap
 
 ### 🔄 IN PROGRESS
 - Batch Code 33 scan on 381-ticker Minervini CSV (running via direct engine call)
+- `utils/edgar_revenue.py` / `utils/edgar_net_margin.py` confirmed bug (2026-07-07): quarter
+  assembly only considers quarters strictly between two 10-K filings, so a ticker's newest
+  quarter is invisible whenever it's the first quarter of a still-open fiscal year (confirmed
+  live on NVDA — real 10-Q filed 2026-05-20 for period 2026-04-26, extraction succeeds, but
+  never reaches the output). Fix scoped and pending explicit go-ahead, not yet implemented.
 
 ---
 
 ## ENGINE STATUS
-- **CACHE_VERSION:** v30 (FINALIZED — DO NOT TOUCH)
+- **CACHE_VERSION:** v30
 - **Location:** `utils/code33_engine.py`
 - **Signals:** ACTIVE / BROKEN / NOT ACTIVE / INSUFFICIENT / NOT APPLICABLE
-- **Sources:** secfsdstools primary → edgartools fallback → FMP last resort
-- **EPS:** Removed from Code33 signal — manual verification via StockAnalysis.com
+- **Sources:** secfsdstools primary, edgartools targeted per-quarter gap-fill only (Finnhub
+  and FMP fully removed 2026-07-06; raw hand-rolled SEC-XBRL tier and yfinance rev/NI
+  fallback also removed same day — only two sources remain)
+- **EPS:** Removed from Code33 signal AND no longer fetched at all (was Finnhub/EDGAR;
+  out of scope entirely as of 2026-07-06) — manual verification via StockAnalysis.com
+- **Quarter selection:** quarters-first target-date approach (2026-07-06/07) — computes the
+  8 fiscal quarter-end dates that should exist as of today from each ticker's real
+  `fy_end_month`, checks secfsdstools against that named list, targeted-fills only the named
+  gaps from edgartools, reports genuinely-missing quarters by date via
+  `sources['rev_missing']`/`sources['ni_missing']` instead of a generic INSUFFICIENT.
+  Displayed dates are the real filed period-end, not the synthetic target. Fiscal
+  quarter/year labels (`_get_fq_fy`) computed directly from `fy_end_month` — fixed
+  mislabeling on non-Dec fiscal years (confirmed wrong before fix: CMP/Sept FYE, NVDA/Jan
+  52-53-week FYE; TRT's pre-existing xfail in `tests/test_preflight_checks.py` references
+  this same class of bug).
+- Raw `'ni'` (absolute net income $) is intentionally always empty — neither remaining
+  source exposes it, only the margin ratio.
 
 ---
 
@@ -146,5 +165,8 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
-2026-06-27 — Cleaned up junk files (28 deleted), rewrote CLAUDE.md as project bible.
-After writing, run git add CLAUDE.md ; git commit -m "docs: rewrite CLAUDE.md as comprehensive project bible" ; git push
+2026-07-07 — Removed Finnhub/FMP/raw-XBRL-tier/yfinance-fallback from code33_engine.py;
+redesigned revenue+margin fetch to quarters-first targeted gap-fill; fixed real-filed-date
+and fiscal quarter-label mismatches (CMP, NVDA); deleted 5 confirmed-dead files from the
+Finnhub/FMP era. Confirmed but not yet fixed: edgar_revenue.py/edgar_net_margin.py structural
+bug hiding each ticker's newest quarter until its fiscal year closes (see IN PROGRESS above).

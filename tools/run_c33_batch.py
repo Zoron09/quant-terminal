@@ -29,10 +29,11 @@ INPUT_CSV  = os.path.join(ROOT, "Minervini builder Managed copy_2026-06-23.csv")
 OUTPUT_CSV = os.path.join(ROOT, "Code33_Results_2026-06-23.csv")
 
 from utils.code33_engine import get_code33_data
+from tools.preflight_checks import run_preflight
 
 MAX_WORKERS = 10
 FIELDNAMES = ['Ticker', 'Status', 'Rev_YoY_Q1', 'Rev_YoY_Q2', 'Rev_YoY_Q3',
-              'NPM_Q1', 'NPM_Q2', 'NPM_Q3', 'Source']
+              'NPM_Q1', 'NPM_Q2', 'NPM_Q3', 'Source', 'PreflightFlags']
 
 
 def _last3(vals):
@@ -53,12 +54,14 @@ def scan_one(ticker: str) -> dict:
     npm_q = _last3(data.get('npm', []))
     sources = data.get('sources', {}) or {}
     source = f"rev:{sources.get('rev', '?')}|ni:{sources.get('ni', '?')}"
+    flags = run_preflight(ticker, data)
     return {
         'Ticker': ticker,
         'Status': status,
         'Rev_YoY_Q1': rev_q[0], 'Rev_YoY_Q2': rev_q[1], 'Rev_YoY_Q3': rev_q[2],
         'NPM_Q1': npm_q[0], 'NPM_Q2': npm_q[1], 'NPM_Q3': npm_q[2],
         'Source': source,
+        'PreflightFlags': '; '.join(flags),
     }
 
 
@@ -100,6 +103,7 @@ def main():
                     'Ticker': ticker, 'Status': 'ERROR',
                     'Rev_YoY_Q1': '', 'Rev_YoY_Q2': '', 'Rev_YoY_Q3': '',
                     'NPM_Q1': '', 'NPM_Q2': '', 'NPM_Q3': '', 'Source': '',
+                    'PreflightFlags': '',
                 }
 
             writer.writerow(row)
@@ -107,7 +111,7 @@ def main():
 
             counts[row['Status']] = counts.get(row['Status'], 0) + 1
             if row['Status'] == 'GREEN':
-                green_tickers.append(row['Ticker'])
+                green_tickers.append((row['Ticker'], row['PreflightFlags']))
 
             done += 1
             if done % 50 == 0 or done == total:
@@ -134,9 +138,16 @@ def main():
     print("=" * 65)
     print(f"\nResults saved: {OUTPUT_CSV}\n")
 
+    clean_green = sorted(t for t, flags in green_tickers if not flags)
+    flagged_green = sorted((t, flags) for t, flags in green_tickers if flags)
+
     print("=== GREEN TICKERS ===")
-    if green_tickers:
-        print(", ".join(sorted(green_tickers)))
+    print(", ".join(clean_green) if clean_green else "(none)")
+
+    print("\n=== GREEN — NEEDS REVIEW (pre-flight flagged, not excluded) ===")
+    if flagged_green:
+        for ticker, flags in flagged_green:
+            print(f"  {ticker}: {flags}")
     else:
         print("(none)")
 
