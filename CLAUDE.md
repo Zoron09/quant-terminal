@@ -165,8 +165,42 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
-2026-07-07 — Removed Finnhub/FMP/raw-XBRL-tier/yfinance-fallback from code33_engine.py;
-redesigned revenue+margin fetch to quarters-first targeted gap-fill; fixed real-filed-date
-and fiscal quarter-label mismatches (CMP, NVDA); deleted 5 confirmed-dead files from the
-Finnhub/FMP era. Confirmed but not yet fixed: edgar_revenue.py/edgar_net_margin.py structural
-bug hiding each ticker's newest quarter until its fiscal year closes (see IN PROGRESS above).
+2026-07-09 — Added 4 new preflight detectors to tools/preflight_checks.py, closing gaps
+found across 3 rounds of independent quarter-identification verification against raw SEC
+EDGAR data (data.sec.gov, direct HTTP, no secfsdstools/edgartools). _target_quarter_ends's
+date math itself was confirmed correct throughout (52-ticker systematic sample from
+data/sp500_tickers.json: 96% clean match, zero date-math bugs) — all 4 fixes are
+identity-resolution problems upstream of it:
+  - check_foreign_annual_only: 20-F/40-F annual-only filers (BIDU, BABA) — no 10-Q ever
+    exists, Code33's quarterly methodology structurally doesn't apply.
+  - check_cik_discontinuity: tracked-universe tickers whose *current* CIK has <3 years of
+    real SEC history — catches BlackRock/BLK-type holdco reorgs (confirmed: BLK's current
+    CIK 2012383 only goes back to Feb 2024; the real 2006-2024 history sits under CIK
+    1364742, renamed by SEC itself to "BlackRock Finance, Inc." 2024-09-26). Flags for
+    manual review only — does not attempt to recover pre-reorg history.
+  - check_ticker_resolution: ticker doesn't resolve via SEC's current company_tickers.json
+    at all (renamed or taken private) — reported as a distinct watchlist-maintenance
+    category, not a generic data failure.
+  - check_deregistered: Form 15 in history AND no *operating* filings (10-Q/10-K/8-K/
+    20-F/40-F — excludes third-party SC 13G/13D ownership disclosures, which keep
+    appearing under a dead CIK indefinitely) for 200+ days afterward. A bare Form 15 alone
+    is NOT sufficient signal — 5 tickers (AME, CB, JNJ, LIN, TEAM) have one in their
+    history but still file normally; only CPTP (Form 15 filed 2025-02-11, zero operating
+    filings since) genuinely qualifies.
+
+New standalone tool: tools/watchlist_ticker_audit.py — cross-checks data/sp500_tickers.json
+against SEC's current ticker map. Run once: found 5 stale tickers in the 208-ticker
+watchlist — ABC (renamed COR/Cencora), WBA (taken private), K (Kellanova, acquired by
+Mars), SQ (renamed XYZ/Block), and BRK.B (a false positive — SEC lists it as "BRK-B" with
+a hyphen; utils/sec_edgar.py's get_cik() ticker normalization doesn't handle the dot/hyphen
+convention difference, not a real corporate event). Watchlist cleanup (removing/renaming
+the 4 genuine stale tickers) not yet done — flagged, not actioned, pending go-ahead.
+All 7 preflight detectors verified with real tickers; existing test_preflight_checks.py
+suite still passes unchanged (6 passed, 1 xfailed — TRT, pre-existing).
+
+Prior (2026-07-07): Removed Finnhub/FMP/raw-XBRL-tier/yfinance-fallback from
+code33_engine.py; redesigned revenue+margin fetch to quarters-first targeted gap-fill;
+fixed real-filed-date and fiscal quarter-label mismatches (CMP, NVDA); deleted 5
+confirmed-dead files from the Finnhub/FMP era. Confirmed but not yet fixed:
+edgar_revenue.py/edgar_net_margin.py structural bug hiding each ticker's newest quarter
+until its fiscal year closes (see IN PROGRESS above).
