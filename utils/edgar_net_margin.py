@@ -299,6 +299,33 @@ def _get_ni_quarters(ticker: str, n_quarters: int) -> list[dict]:
                 "source":         "derived_q4",
             })
 
+    # ── Open fiscal year: quarters already filed since the newest 10-K, with
+    # no closing 10-K yet to anchor a window — see utils/edgar_revenue.py's
+    # identical block for the full reasoning (same bug, same shape, mirrored
+    # here for NI). Never attempts Q4 derivation — no annual filing exists yet
+    # for this year. Strict complement of the existing prev_fye < period < fye
+    # test (period > latest fye), so no gap/overlap with the loop above.
+    if annual_list:
+        try:
+            latest_fye = date.fromisoformat(annual_list[0].period_of_report)
+        except (ValueError, TypeError):
+            latest_fye = None
+        if latest_fye is not None:
+            open_qs: list[tuple[date, float]] = sorted(
+                [(date.fromisoformat(p), ni) for p, ni in q_pool.items()
+                 if date.fromisoformat(p) > latest_fye],
+                key=lambda x: x[0],
+            )
+            for qi, (period, ni) in enumerate(open_qs[:3]):
+                if period not in seen:
+                    seen.add(period)
+                    results.append({
+                        "period_end":     period,
+                        "fiscal_quarter": f"Q{qi + 1}",
+                        "net_income_m":   ni,
+                        "source":         "10-Q",
+                    })
+
     results.sort(key=lambda r: r["period_end"], reverse=True)
     return results[:n_quarters]
 

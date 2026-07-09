@@ -293,5 +293,39 @@ def get_quarterly_revenue(ticker: str, n_quarters: int = 8) -> list[dict]:
                 "source":         "derived_q4",
             })
 
+    # ── Open fiscal year: quarters already filed since the newest 10-K, with
+    # no closing 10-K yet to anchor a window. The loop above only ever visits
+    # fiscal years that already have a 10-K (BUG 3's prev_fye/fye pair), so a
+    # quarter sitting in q_pool for the still-open year was never reachable —
+    # confirmed live: NVDA/AMD/MSFT's newest already-filed quarter came back
+    # missing for exactly this reason. This is the strict complement of the
+    # existing `prev_fye < period < fye` test (period > latest fye instead),
+    # so there is no gap or overlap with it — period == fye is the FYE/Q4
+    # date, already exclusively handled by the derived-Q4 branch above. Never
+    # attempts Q4 derivation here: there is no annual filing yet to derive it
+    # from. Filing-driven only (from the already-fetched q_pool) — never
+    # assumes a quarter exists just because calendar time has passed.
+    if annual_list:
+        try:
+            latest_fye = date.fromisoformat(annual_list[0].period_of_report)
+        except (ValueError, TypeError):
+            latest_fye = None
+        if latest_fye is not None:
+            open_qs: list[tuple[date, float]] = sorted(
+                [(date.fromisoformat(p), rev) for p, rev in q_pool.items()
+                 if date.fromisoformat(p) > latest_fye],
+                key=lambda x: x[0],
+            )
+            for qi, (period, rev) in enumerate(open_qs[:3]):
+                if period not in seen:
+                    seen.add(period)
+                    results.append({
+                        "ticker":         ticker,
+                        "period_end":     period,
+                        "fiscal_quarter": f"Q{qi + 1}",
+                        "revenue_m":      rev,
+                        "source":         "10-Q",
+                    })
+
     results.sort(key=lambda r: r["period_end"], reverse=True)
     return results[:n_quarters]
