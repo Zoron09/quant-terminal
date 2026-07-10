@@ -127,6 +127,11 @@ POST /api/scan                     → {winners: [{ticker, company, sector, mcap
   quarter is invisible whenever it's the first quarter of a still-open fiscal year (confirmed
   live on NVDA — real 10-Q filed 2026-05-20 for period 2026-04-26, extraction succeeds, but
   never reaches the output). Fix scoped and pending explicit go-ahead, not yet implemented.
+- **TRT margin output not re-verified under the new NI-tag order (2026-07-09).** TRT carries
+  a `NetIncomeLossAvailableToCommonStockholdersBasic` tag same as CELH, but for TRT it nets
+  out non-controlling interest, not preferred dividends (TRT has no preferred stock — checked
+  its balance sheet directly). Not included in this fix's regression set; no issue expected,
+  but not confirmed either. Needs its own explicit check before trusting TRT's margin output.
 
 ---
 
@@ -165,6 +170,35 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-07-09 — Fixed net-margin numerator: engine was using plain "Net Income" (NetIncomeLoss)
+instead of "Net Income Attributable to Common Stockholders" (post-preferred-dividend) for
+companies with preferred stock. Confirmed via CELH's real Q3 2024 10-Q filing (SEC EDGAR,
+not through edgartools/secfsdstools abstraction): NetIncomeLoss = $6,356,000 vs actual
+attributable-to-common = $(557,000) after $6,913,000 in Series A preferred dividends —
+Macrotrends independently reports the common-stockholders figure, and Minervini's own EPS
+convention always uses it, so margin and EPS now share the same numerator convention.
+  - utils/secfs_revenue.py: reordered `_NI_TAGS` — `NetIncomeLossAvailableToCommonStockholdersBasic`
+    moved from last to first priority.
+  - utils/edgar_net_margin.py (protected file — this counts as the confirmed-bug sign-off
+    under rule 1): swapped Tier 1/Tier 2 in `_ni_row()`, same reorder.
+  - Verified safe as a pure reorder: companies with no preferred stock (checked directly
+    against the local secfsdstools parquet DB, not assumed) never file this tag at all —
+    confirmed absent across 8 quarters each for GOOGL, MU, CMP, PED, CPTP, TEAM, LIN, JNJ,
+    CB, AME, BLK, NVDA, AMD, MSFT, AIP — so lookup falls through to NetIncomeLoss unchanged
+    for them. Regression-tested: all 15 byte-identical before/after.
+  - CELH validated: all 8 quarters' margins shifted as expected; Q3 2024 net income now
+    exact-matches the filing ($-557,000), margin flipped +2.41% → -0.23% (negative, correct
+    direction vs Macrotrends).
+  - TRT investigated as a possible edge case (initially looked like duplicate/ambiguous
+    NetIncomeLossAvailableToCommonStockholdersBasic rows for the same period) but cleared —
+    the duplication was a bug in a throwaway diagnostic script that omitted an XBRL `ddate`
+    filter (conflated the current quarter with the filing's own prior-year comparative
+    column); production code (`_own_period_value`) already pins on `ddate` correctly and was
+    never affected. Real finding: TRT's tag nets out non-controlling interest, not preferred
+    dividends (TRT has no preferred stock) — same tag, different economic adjustment. TRT
+    was deliberately excluded from this fix's regression set and has not been explicitly
+    re-verified under the new tag order (see IN PROGRESS above).
+
 2026-07-09 — Added 4 new preflight detectors to tools/preflight_checks.py, closing gaps
 found across 3 rounds of independent quarter-identification verification against raw SEC
 EDGAR data (data.sec.gov, direct HTTP, no secfsdstools/edgartools). _target_quarter_ends's

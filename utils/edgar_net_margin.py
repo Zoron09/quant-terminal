@@ -66,14 +66,16 @@ def _ni_row(df):
 
     BUG 4 safeguard — 3-tier priority (LITE confirmed):
 
-    Tier 1: standard_concept=='NetIncome' AND concept contains 'NetIncomeLoss'
-            → the real us-gaap_NetIncomeLoss (after-tax).
-            Skips us-gaap_IncomeLossAttributableToParent which edgartools
-            incorrectly maps to standard_concept='NetIncome' for some filers.
+    Tier 1: standard_concept=='NetIncomeToCommonShareholders'
+            → after-preferred-dividends net income attributable to common
+            stockholders (Code33 margin convention — matches Macrotrends and
+            Minervini's EPS numerator; see CELH 2024-09-30 investigation).
 
-    Tier 2: standard_concept=='NetIncomeToCommonShareholders'
-            → used by LITE's 10-K for after-tax NI when no NetIncomeLoss row
-            exists in the filing.
+    Tier 2: standard_concept=='NetIncome' AND concept contains 'NetIncomeLoss'
+            → the real us-gaap_NetIncomeLoss (after-tax, before preferred
+            dividends). Skips us-gaap_IncomeLossAttributableToParent which
+            edgartools incorrectly maps to standard_concept='NetIncome' for
+            some filers.
 
     Tier 3: last standard_concept=='NetIncome' row, undimensioned, non-breakdown
             → after-tax net income always appears below the income tax line
@@ -82,14 +84,14 @@ def _ni_row(df):
     mask = (df["dimension"] == False) & (df["is_breakdown"] == False)
     ni = df[mask & (df["standard_concept"] == "NetIncome")]
 
+    nic = df[mask & (df["standard_concept"] == "NetIncomeToCommonShareholders")]
+    if not nic.empty:
+        return nic.iloc[[-1]]
+
     if not ni.empty and "concept" in df.columns:
         nl = ni[ni["concept"].str.contains("NetIncomeLoss", na=False, case=False)]
         if not nl.empty:
             return nl.iloc[[-1]]
-
-    nic = df[mask & (df["standard_concept"] == "NetIncomeToCommonShareholders")]
-    if not nic.empty:
-        return nic.iloc[[-1]]
 
     if not ni.empty:
         return ni.iloc[[-1]]

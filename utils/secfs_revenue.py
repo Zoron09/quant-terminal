@@ -56,10 +56,10 @@ _REV_TAGS = [
 ]
 
 _NI_TAGS = [
+    'NetIncomeLossAvailableToCommonStockholdersBasic',
     'NetIncomeLoss',
     'NetIncome',
     'ProfitLoss',
-    'NetIncomeLossAvailableToCommonStockholdersBasic',
 ]
 
 # Combined so a single cached quarter-read serves both secfs_revenue and
