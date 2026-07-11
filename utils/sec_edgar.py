@@ -2,7 +2,7 @@
 SEC EDGAR free API — real-time insider filings (Form 4) and recent filings.
 No API key required. Uses https://data.sec.gov and https://efts.sec.gov
 """
-import streamlit as st
+import functools
 import requests
 import pandas as pd
 
@@ -18,9 +18,11 @@ def _get(url: str, params: dict | None = None):
         return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@functools.lru_cache(maxsize=1)
 def _get_ticker_mapping() -> dict | None:
-    """SEC's full ticker->CIK mapping, fetched once per cache window (not per ticker)."""
+    """SEC's full ticker->CIK mapping, fetched once per process (not per ticker) —
+    called by get_cik() on every ticker lookup, so an uncached version refetches
+    this multi-MB file once per ticker in a tight batch loop, hammering sec.gov."""
     return _get('https://www.sec.gov/files/company_tickers.json')
 
 
@@ -36,7 +38,6 @@ def get_cik(ticker: str) -> str | None:
     return None
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def get_recent_filings(ticker: str, form_types: list | None = None) -> pd.DataFrame:
     """Return recent SEC filings for a ticker as a DataFrame."""
     cik = get_cik(ticker)
@@ -70,13 +71,11 @@ def get_recent_filings(ticker: str, form_types: list | None = None) -> pd.DataFr
     return df.head(50).reset_index(drop=True)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def get_insider_filings(ticker: str) -> pd.DataFrame:
     """Form 4 insider transaction filings."""
     return get_recent_filings(ticker, form_types=['4', '4/A'])
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
 def get_key_filings(ticker: str) -> pd.DataFrame:
     """10-K, 10-Q, 8-K filings."""
     return get_recent_filings(ticker, form_types=['10-K', '10-Q', '8-K'])

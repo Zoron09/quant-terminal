@@ -121,12 +121,19 @@ POST /api/scan                     → {winners: [{ticker, company, sector, mcap
 - FIX 6: Stats pills may show mock values instead of live API values
 
 ### 🔄 IN PROGRESS
-- Batch Code 33 scan on 381-ticker Minervini CSV (running via direct engine call)
+- Batch Code 33 scan on 381-ticker Minervini CSV — driving script (`run_batch.py`) removed in
+  the 2026-07-10 cleanup as a stale root-level scratch script; its designated output was never
+  produced (checked: no `code33_results_2026-06-27.csv` ever existed), so nothing was lost. If
+  this batch is still wanted, it needs a new script under `tools/`, not a root one-off.
 - `utils/edgar_revenue.py` / `utils/edgar_net_margin.py` confirmed bug (2026-07-07): quarter
   assembly only considers quarters strictly between two 10-K filings, so a ticker's newest
   quarter is invisible whenever it's the first quarter of a still-open fiscal year (confirmed
   live on NVDA — real 10-Q filed 2026-05-20 for period 2026-04-26, extraction succeeds, but
   never reaches the output). Fix scoped and pending explicit go-ahead, not yet implemented.
+  Re-surfaced during the 2026-07-10 cleanup's regression verification: re-running the same
+  16-ticker check twice ~45min apart produced differing newest-quarter/label results for
+  GOOGL, MU, CMP, PED, CPTP, TEAM, JNJ, CB, AME (one quarter toggling filled/missing at the
+  newest edge each time) — same bug, not a new one, not caused by that cleanup's changes.
 - **TRT margin output not re-verified under the new NI-tag order (2026-07-09).** TRT carries
   a `NetIncomeLossAvailableToCommonStockholdersBasic` tag same as CELH, but for TRT it nets
   out non-controlling interest, not preferred dividends (TRT has no preferred stock — checked
@@ -170,6 +177,60 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-07-10 — Full cleanup pass (stale artifacts + dead caching decorator), user-confirmed
+before deletion. Pre-checks first: grepped all live code for imports reaching into archive/
+(none found), grepped for "streamlit" case-insensitive (found it wasn't just code33_engine.py
+— utils/sec_edgar.py also imports it, with 4 more `@st.cache_data` decorators; requirements.txt
+still declares streamlit>=1.28.0, correctly left alone), checked tests/ for cache-behavior
+tests (none exist, so removal couldn't break a real assertion).
+  - Deleted (git rm, tracked files): `quick_scan.py`, `run_batch.py` (root scratch scripts),
+    `Minervini builder Managed copy_2026-06-23.csv`, `Minervini_builder_Managed_2026-04-28.csv`
+    (superseded ticker-list inputs), `Code33_Results_2026-06-23.csv`,
+    `Code33_Results_2026-05-25.csv` (stale scan outputs sitting in repo root, risked being
+    mistaken for current data), `archive/tools/*.py` (6 old audit scripts, superseded by
+    `tools/engine_accuracy_check.py`/`preflight_checks.py`/`watchlist_ticker_audit.py`),
+    `archive/utils/screener_db.py` (unused SQLite cache module, no db file existed on disk).
+    `archive/` is now gone entirely (both subdirs were emptied).
+  - Deleted all `__pycache__/`/`*.pyc` repo-wide (already gitignored, untracked) — included two
+    orphaned bytecode files whose source `.py` no longer exists (`edgar_net_income.pyc`,
+    `test_code33_regression.pyc` x2), leftover from earlier code removals.
+  - Removed dead `import streamlit as st` + `@st.cache_data` from `code33_engine.py`
+    (`get_code33_data`'s 24h result cache) — the app is FastAPI-only now, no Streamlit runtime
+    ever exists, so this was silently caching in-memory per server process with no way to bust
+    it short of a restart. Real risk confirmed: `CACHE_VERSION` (still 'v30') was NOT bumped
+    across the last 4 NI/revenue logic fix commits (5f680ae, 9c421c5, 186d24d, 8d455cf) — none
+    of them touch `code33_engine.py` — so a long-running server could've served pre-fix cached
+    numbers for up to 24h post-deploy. Pure removal here, no replacement, per plan.
+  - Expanded scope (user-approved) to `utils/sec_edgar.py`'s matching 4 decorators. Removing
+    `_get_ticker_mapping()`'s decorator outright caused a **real regression**, caught by
+    verification, not shipped: that function is zero-arg and fetches SEC's full multi-MB
+    ticker→CIK map; `get_cik()` (called on every single ticker by
+    `secfs_net_margin.py`/`secfs_revenue.py`/`preflight_checks.py`/`watchlist_ticker_audit.py`)
+    calls it every time. With the decorator, one process-lifetime fetch was reused for every
+    ticker in a batch; without it, a 16-ticker verification run refetched that file 16x back to
+    back, and mid-run degraded into rate-limit/timeout failures that cascaded into 11 of 16
+    tickers (LIN, JNJ, CB, AME, BLK, NVDA, AMD, MSFT, AIP, CELH, +partial CMP) coming back fully
+    `insufficient`. Fixed by replacing that one decorator with `functools.lru_cache(maxsize=1)`
+    (explicit stdlib, no streamlit dependency, same one-fetch-per-process effect — this
+    function has no meaningful staleness risk, SEC's ticker map doesn't change within a
+    process's lifetime, so a replacement was correct here unlike code33_engine.py's case). The
+    other 3 decorators (`get_recent_filings`, `get_insider_filings`, `get_key_filings`) had zero
+    callers anywhere in the live codebase — removed clean, no behavior change possible.
+  - Re-verified after the lru_cache fix: all 10 previously-collapsed tickers back to matching
+    baseline exactly (LIN, BLK, NVDA, AMD, MSFT, AIP, CELH byte-identical). Residual diffs on
+    GOOGL/MU/CMP/PED/CPTP/TEAM/JNJ/CB/AME are the pre-existing newest-quarter edgartools bug
+    above, not new — confirmed same shape (one quarter at the edge, filled/missing toggling)
+    across two runs 45min apart, unrelated to any file this cleanup touched.
+  - Server boot-tested: `run.py` starts clean, no import errors; `GET /api/ticker/MU` over real
+    HTTP returned 200 with full data; server stopped cleanly after.
+  - `tests/test_preflight_checks.py`: 6 passed, 1 xfailed (TRT, pre-existing) — unchanged from
+    documented baseline.
+  - `requirements.txt` untouched (out of scope for this cleanup) — worth noting though: after
+    both files' edits, `streamlit` is no longer imported anywhere in the live codebase at all
+    (checked: zero hits repo-wide outside `.venv`), so the `streamlit>=1.28.0` line is now a
+    genuinely unused dependency, not just an unused import. Flagging, not removing — a
+    dependency-list change is a separate decision from this cleanup.
+
 2026-07-09 — Fixed net-margin numerator: engine was using plain "Net Income" (NetIncomeLoss)
 instead of "Net Income Attributable to Common Stockholders" (post-preferred-dividend) for
 companies with preferred stock. Confirmed via CELH's real Q3 2024 10-Q filing (SEC EDGAR,

@@ -6,7 +6,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta, date
-import streamlit as st
 from dotenv import load_dotenv
 
 log = logging.getLogger(__name__)
@@ -252,7 +251,6 @@ def _insufficient_result(ticker: str, reason: str = 'unhandled error') -> dict:
     }
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
 def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
     """Fetch Revenue + Net Margin for Code 33 analysis. EPS is out of scope (not fetched).
 
