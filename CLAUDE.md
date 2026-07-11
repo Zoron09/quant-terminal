@@ -125,15 +125,18 @@ POST /api/scan                     → {winners: [{ticker, company, sector, mcap
   the 2026-07-10 cleanup as a stale root-level scratch script; its designated output was never
   produced (checked: no `code33_results_2026-06-27.csv` ever existed), so nothing was lost. If
   this batch is still wanted, it needs a new script under `tools/`, not a root one-off.
-- `utils/edgar_revenue.py` / `utils/edgar_net_margin.py` confirmed bug (2026-07-07): quarter
-  assembly only considers quarters strictly between two 10-K filings, so a ticker's newest
-  quarter is invisible whenever it's the first quarter of a still-open fiscal year (confirmed
-  live on NVDA — real 10-Q filed 2026-05-20 for period 2026-04-26, extraction succeeds, but
-  never reaches the output). Fix scoped and pending explicit go-ahead, not yet implemented.
-  Re-surfaced during the 2026-07-10 cleanup's regression verification: re-running the same
-  16-ticker check twice ~45min apart produced differing newest-quarter/label results for
-  GOOGL, MU, CMP, PED, CPTP, TEAM, JNJ, CB, AME (one quarter toggling filled/missing at the
-  newest edge each time) — same bug, not a new one, not caused by that cleanup's changes.
+- **Count-gate double-merge redundancy** (found 2026-07-11 during META testing):
+  `secfs_revenue.py`/`secfs_net_margin.py`'s inner secfsdstools→edgartools fallback gates on
+  `len(merged) >= n_quarters` (a pure count, no recency check), so it wrongly skips edgartools
+  whenever secfsdstools already has ≥16 *old* quarters but is missing the single newest one —
+  the normal steady state, since the local secfsdstools bulk dataset lags live filings by ~1
+  quarter by design. `code33_engine.py`'s own separate date-aware target-quarter check catches
+  the gap and re-fetches via edgartools itself, so this is currently a **performance cost only,
+  not a correctness bug** (confirmed: NVDA's 2026-04-26 quarter still reaches output, just after
+  a redundant ~19-33s/metric live re-fetch). Hits 13 of 16 regression tickers. Plan (not
+  implemented): give the inner check the same recency-awareness instead of a bare count, then
+  delete code33_engine.py's now-redundant outer retry block. See `bug_report.md` for full
+  writeup — "Solution prepared, not yet implemented".
 - **TRT margin output not re-verified under the new NI-tag order (2026-07-09).** TRT carries
   a `NetIncomeLossAvailableToCommonStockholdersBasic` tag same as CELH, but for TRT it nets
   out non-controlling interest, not preferred dividends (TRT has no preferred stock — checked
@@ -177,6 +180,17 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-07-11 — Corrected a stale IN PROGRESS note. The "newest quarter invisible" bug in
+`edgar_revenue.py`/`edgar_net_margin.py` (originally confirmed 2026-07-07) was actually fixed
+two days later in commit `9c421c5` (2026-07-09) — CLAUDE.md was never updated to reflect that,
+so it sat listed as "pending explicit go-ahead, not yet implemented" for two days after
+shipping. Re-verified live again today during NVDA reproduction testing: newest quarter
+2026-04-26 confirmed present in `get_code33_data("NVDA")`'s output. RESOLVED, not open — see
+`bug_report.md` for the full writeup. (Separately, a *different*, still-open bug in
+`secfs_revenue.py`/`secfs_net_margin.py` was found today and now occupies the IN PROGRESS slot
+below — confirmed via commit diff and live testing to be an unrelated mechanism, not a
+resurfacing of the 07-07 bug.)
+
 2026-07-10 — Full cleanup pass (stale artifacts + dead caching decorator), user-confirmed
 before deletion. Pre-checks first: grepped all live code for imports reaching into archive/
 (none found), grepped for "streamlit" case-insensitive (found it wasn't just code33_engine.py
@@ -298,4 +312,4 @@ code33_engine.py; redesigned revenue+margin fetch to quarters-first targeted gap
 fixed real-filed-date and fiscal quarter-label mismatches (CMP, NVDA); deleted 5
 confirmed-dead files from the Finnhub/FMP era. Confirmed but not yet fixed:
 edgar_revenue.py/edgar_net_margin.py structural bug hiding each ticker's newest quarter
-until its fiscal year closes (see IN PROGRESS above).
+until its fiscal year closes — [fixed 2026-07-09, commit 9c421c5; see 2026-07-11 entry above].
