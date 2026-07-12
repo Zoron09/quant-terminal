@@ -82,6 +82,50 @@ net-margin bug (JPM-type) is known, deliberately deferred, and also out of scope
   (`edgar_*`). Recommend consolidating into a single shared utility function so a future fix
   can't diverge again the same way.
 
+### /api/financials/{ticker} endpoint — newest-quarter margin null, wrong dates
+- **Commit:** `<fill in after commit>` (2026-07-12)
+- **What it was:** `/api/financials/{ticker}` called `secfs_revenue.py`/`secfs_net_margin.py`
+  directly instead of going through `code33_engine.py`'s date-aware gap detection. Confirmed
+  live on 16 of 20 tracked tickers: newest-quarter `net_margin` was `null` (no fallback for
+  margin at all), and revenue — where present — came only from a yfinance fallback that uses
+  yfinance's own calendar-normalized quarter-end date, not the real SEC-filed date (e.g. NVDA
+  showed `2026-04-30` instead of the real `2026-04-26`; FN showed `2026-03-31` instead of the
+  real `2026-03-27`).
+- **Root cause:** this endpoint was a second, independent caller of
+  `secfs_revenue.py`/`secfs_net_margin.py` with no compensating layer — unlike
+  `code33_engine.py`'s callers, which are protected by its own `_target_quarter_ends`/
+  `_fill_target_quarters` date-aware gap-fill. See the "Count-gate double-merge redundancy"
+  entry above for the underlying mechanism this endpoint had no protection against.
+- **How fixed:** routed the endpoint through `get_code33_data(t, n_quarters=12)` instead —
+  added an optional `n_quarters` parameter to `get_code33_data()`/`_get_code33_data_inner()`
+  (default 8, so every existing caller is unaffected) so this endpoint can request its own
+  12-quarter buffer (8 display quarters + 4 for its own index-based YoY calc) through the
+  same date-aware path everything else already trusts. Added a `_closest_date()` proximity
+  matcher (10-day tolerance) so `get_code33_data`'s real filed dates correctly merge with
+  yfinance's own EPS-only date series instead of splitting the same quarter into two
+  incomplete rows. Dropped the old yfinance-revenue-fallback block — no longer needed.
+- **Verification method — note for future sessions:** verified via a **fresh Python
+  interpreter per ticker calling `api.server.financials()` directly**, not real HTTP against
+  a running `uvicorn --reload` server. Real-HTTP verification produced false "still broken"
+  results earlier in this same work session: the `--reload` worker process did not reliably
+  restart on file changes, so requests kept hitting pre-fix code (TRT briefly appeared to
+  still show its Commit-1-fixed garbage margin, purely because the live worker was stale) —
+  wasted significant time chasing a phantom regression that didn't exist in the actual code.
+  If verifying this endpoint again via real HTTP, explicitly confirm the worker PID is fresh
+  (check `Started server process [PID]` in the boot log against `Get-Process`) before trusting
+  any response — don't assume `--reload` picked up an edit.
+- **Verified (fresh-interpreter method):** NVDA (margin 71.46, date corrected to 2026-04-26),
+  META (margin 47.54), FN (margin 10.31, date corrected to 2026-03-27), TRT (margin -0.23,
+  confirms Commit 1's fix holds through this path), GOOGL (56.94) and CELH (10.87) both fully
+  complete, nothing lost. Test suite unchanged (6 passed, 1 xfailed). Server boots clean.
+- **Known, bounded gap — not fixed here, closed by Commit 3:** BLK, MU, and CMP lose their
+  newest-quarter revenue and/or margin under this routing (BLK: revenue null, margin fine;
+  MU: both null — its true newest quarter isn't inside `get_code33_data`'s expected window
+  yet, a timing edge case, not a bug; CMP: showed margin null with revenue present on this
+  verification run, but CMP's exact missing field varies run to run — it's the ticker most
+  exposed to the pre-existing, separately-tracked count-gate flakiness above, unrelated to
+  this fix). These three are a known interim state, to be closed by Commit 3.
+
 ### Newest-quarter-missing bug — edgar_revenue.py / edgar_net_margin.py open-fiscal-year gap
 - **Commit:** `9c421c5` (2026-07-09)
 - **What it was:** A ticker's newest already-filed quarter silently never reached output

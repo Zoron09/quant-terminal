@@ -251,22 +251,28 @@ def _insufficient_result(ticker: str, reason: str = 'unhandled error') -> dict:
     }
 
 
-def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
+def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION, n_quarters: int = 8) -> dict:
     """Fetch Revenue + Net Margin for Code 33 analysis. EPS is out of scope (not fetched).
 
     Revenue + Net Margin: secfsdstools primary, edgartools fallback. No other sources.
     Need minimum 8 raw quarters per metric to compute 4 YoY rates (3 acceleration deltas).
 
+    n_quarters: how many of the most recent fiscal quarters to target (default 8, the
+    Code 33 signal's own requirement). Callers needing a longer display/lookback window
+    (e.g. api/server.py's /api/financials endpoint, which needs a buffer for its own
+    index-based YoY calc) can pass a larger value — purely additive, existing callers
+    are unaffected by the default.
+
     Never raises — any unhandled error falls back to an INSUFFICIENT result so callers
     (screener batch runs, server endpoints, pages) never crash on a single bad ticker."""
     try:
-        return _get_code33_data_inner(ticker, cache_v)
+        return _get_code33_data_inner(ticker, cache_v, n_quarters)
     except Exception:
         log.exception("code33_engine: %s unhandled error in get_code33_data", ticker)
         return _insufficient_result(ticker, 'unhandled exception')
 
 
-def _get_code33_data_inner(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
+def _get_code33_data_inner(ticker: str, cache_v: str = CACHE_VERSION, n_quarters: int = 8) -> dict:
     import yfinance as yf
 
 
@@ -427,7 +433,7 @@ def _get_code33_data_inner(ticker: str, cache_v: str = CACHE_VERSION) -> dict:
         missing = [t.isoformat() for t, v in rows if v is None]
         return vals, ends, missing
 
-    _targets = _target_quarter_ends(fy_end_month, datetime.utcnow().date())
+    _targets = _target_quarter_ends(fy_end_month, datetime.utcnow().date(), n=n_quarters)
 
     # ── Revenue: check secfsdstools against the named target quarters first;
     # only call edgartools if secfsdstools actually has a gap to fill ────────

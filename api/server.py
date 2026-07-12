@@ -9,17 +9,11 @@ import sys
 import os
 import yfinance as yf
 from functools import lru_cache
+from datetime import datetime
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils.code33_engine import get_code33_data, CACHE_VERSION
-
-try:
-    from utils.secfs_revenue import get_quarterly_revenue as _get_secfs_rev
-    from utils.secfs_net_margin import get_quarterly_net_margin as _get_secfs_margin
-    _HAS_SECFS = True
-except Exception:
-    _HAS_SECFS = False
 
 TICKER_CACHE = {}
 CACHE_TTL = 300  # 5 minutes
@@ -352,65 +346,84 @@ async def financials(ticker: str):
                     date_str = col.strftime('%Y-%m-%d') if hasattr(col, 'strftime') else str(col)[:10]
                     yf_eps[date_str] = eps_val
 
-            # Revenue + net margin from secfsdstools — 12 quarters
-            secfs_rev = {}
-            secfs_margin = {}
-            if _HAS_SECFS:
-                try:
-                    rev_list = _get_secfs_rev(t, n_quarters=12)
-                    for r in rev_list:
-                        d = r['period_end'].isoformat() if hasattr(r['period_end'], 'isoformat') else str(r['period_end'])[:10]
-                        secfs_rev[d] = float(r['revenue_m']) * 1_000_000
-                except Exception as e:
-                    print(f"[financials] secfs_revenue failed: {e}")
-                try:
-                    margin_list = _get_secfs_margin(t, n_quarters=12)
-                    for r in margin_list:
-                        d = r['period_end'].isoformat() if hasattr(r['period_end'], 'isoformat') else str(r['period_end'])[:10]
-                        secfs_margin[d] = float(r['net_margin_pct'])
-                except Exception as e:
-                    print(f"[financials] secfs_margin failed: {e}")
+            # Revenue + net margin from get_code33_data() — date-aware gap
+            # detection (real filed dates, correct edgartools coverage for
+            # the newest quarter). n_quarters=12: 8 display quarters + 4
+            # buffer for this endpoint's own index-based margin/EPS YoY below.
+            c33_rev_by_date = {}
+            c33_rev_yoy_by_date = {}
+            c33_margin_by_date = {}
+            try:
+                c33 = get_code33_data(t, n_quarters=12)
+                rev_dates = c33.get('rev_end_dates') or []
+                rev_vals = c33.get('rev') or []
+                rev_yoy_vals = c33.get('rev_yoy') or []
+                for d, v in zip(rev_dates, rev_vals):
+                    c33_rev_by_date[d] = v
+                # rev_yoy is only positionally aligned with rev_end_dates when
+                # every target quarter has a value — guard rather than assume.
+                if len(rev_yoy_vals) == len(rev_dates):
+                    for d, v in zip(rev_dates, rev_yoy_vals):
+                        c33_rev_yoy_by_date[d] = v
+                npm_dates = c33.get('npm_ends') or []
+                npm_vals = c33.get('npm') or []
+                for d, v in zip(npm_dates, npm_vals):
+                    c33_margin_by_date[d] = v
+            except Exception as e:
+                print(f"[financials] get_code33_data failed: {e}")
 
-            # Collect all unique dates from all sources
-            all_dates = sorted(set(list(secfs_rev.keys()) + list(yf_eps.keys())), reverse=True)[:12]
+            # get_code33_data's real filed dates and yfinance's own
+            # calendar-normalized quarter dates rarely match exactly (e.g.
+            # NVDA's real 2026-04-26 vs yfinance's 2026-04-30) — match by
+            # proximity, not exact string equality, or the same quarter
+            # splits into two incomplete rows instead of one complete one.
+            def _closest_date(target_str, candidates, tolerance_days=10):
+                try:
+                    target = datetime.strptime(target_str, '%Y-%m-%d').date()
+                except Exception:
+                    return None
+                best, best_diff = None, tolerance_days + 1
+                for c in candidates:
+                    try:
+                        diff = abs((datetime.strptime(c, '%Y-%m-%d').date() - target).days)
+                    except Exception:
+                        continue
+                    if diff <= tolerance_days and diff < best_diff:
+                        best, best_diff = c, diff
+                return best
+
+            # Collect all unique dates: c33's real filed dates are
+            # authoritative; only pull in a yfinance date if nothing in c33
+            # is close to it (keeps any EPS-only history c33 doesn't cover).
+            c33_dates = set(c33_rev_by_date.keys()) | set(c33_margin_by_date.keys())
+            eps_keys = list(yf_eps.keys())
+            unmatched_eps_dates = {
+                ek for ek in eps_keys if _closest_date(ek, c33_dates) is None
+            }
+            all_dates = sorted(c33_dates | unmatched_eps_dates, reverse=True)[:12]
 
             # Build merged quarters
             raw_quarters = []
             for d in all_dates:
-                rev = secfs_rev.get(d)
-                # Fallback: yfinance revenue if secfsdstools missing this date
-                if rev is None and yf_df is not None and not yf_df.empty:
-                    try:
-                        for field in ['Total Revenue', 'TotalRevenue']:
-                            if field in yf_df.index:
-                                col_match = [c for c in yf_df.columns if str(c)[:10] == d]
-                                if col_match:
-                                    v = yf_df.loc[field, col_match[0]]
-                                    if v is not None and str(v) != 'nan':
-                                        rev = float(v)
-                                        break
-                    except Exception:
-                        pass
-                margin = secfs_margin.get(d)
-                eps = yf_eps.get(d)
+                rev = c33_rev_by_date.get(d)
+                margin = c33_margin_by_date.get(d)
+                eps_key = _closest_date(d, eps_keys)
+                eps = yf_eps.get(eps_key) if eps_key else None
                 raw_quarters.append({
                     'date': d,
                     'revenue': rev,
-                    'rev_yoy': None,
+                    'rev_yoy': c33_rev_yoy_by_date.get(d),
                     'net_margin': margin,
                     'net_margin_yoy': None,
                     'eps': eps,
                     'eps_yoy': None,
                 })
 
-            # Calculate YoY fields (compare index i vs i+4)
+            # Calculate YoY fields (compare index i vs i+4) — margin/EPS only.
+            # Revenue YoY comes pre-computed from get_code33_data above
+            # (fiscal-period-matched, not this naive index lookback).
             for i, q in enumerate(raw_quarters):
                 if i + 4 < len(raw_quarters):
-                    prev_rev = raw_quarters[i+4].get('revenue')
-                    curr_rev = q.get('revenue')
-                    if curr_rev is not None and prev_rev is not None and prev_rev != 0:
-                        q['rev_yoy'] = (curr_rev - prev_rev) / abs(prev_rev) * 100
-
                     prev_m = raw_quarters[i+4].get('net_margin')
                     curr_m = q.get('net_margin')
                     if curr_m is not None and prev_m is not None:
