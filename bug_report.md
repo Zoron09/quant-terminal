@@ -83,7 +83,7 @@ net-margin bug (JPM-type) is known, deliberately deferred, and also out of scope
   can't diverge again the same way.
 
 ### /api/financials/{ticker} endpoint — newest-quarter margin null, wrong dates
-- **Commit:** `<fill in after commit>` (2026-07-12)
+- **Commit:** `64a5757` (2026-07-12)
 - **What it was:** `/api/financials/{ticker}` called `secfs_revenue.py`/`secfs_net_margin.py`
   directly instead of going through `code33_engine.py`'s date-aware gap detection. Confirmed
   live on 16 of 20 tracked tickers: newest-quarter `net_margin` was `null` (no fallback for
