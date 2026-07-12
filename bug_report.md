@@ -35,7 +35,7 @@ net-margin bug (JPM-type) is known, deliberately deferred, and also out of scope
   sign vs Macrotrends.
 
 ### _to_m() unit-conversion bug — sub-$1M values corrupted or silently zeroed
-- **Commit:** `<fill in after commit>` (2026-07-12)
+- **Commit:** `8f620c4` (2026-07-12)
 - **What it was:** Two separate defects in the same helper function, existing as four
   independent copies across `edgar_revenue.py`, `edgar_net_margin.py`, `secfs_revenue.py`,
   `secfs_net_margin.py`:
