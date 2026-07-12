@@ -118,13 +118,79 @@ net-margin bug (JPM-type) is known, deliberately deferred, and also out of scope
   META (margin 47.54), FN (margin 10.31, date corrected to 2026-03-27), TRT (margin -0.23,
   confirms Commit 1's fix holds through this path), GOOGL (56.94) and CELH (10.87) both fully
   complete, nothing lost. Test suite unchanged (6 passed, 1 xfailed). Server boots clean.
-- **Known, bounded gap — not fixed here, closed by Commit 3:** BLK, MU, and CMP lose their
-  newest-quarter revenue and/or margin under this routing (BLK: revenue null, margin fine;
-  MU: both null — its true newest quarter isn't inside `get_code33_data`'s expected window
-  yet, a timing edge case, not a bug; CMP: showed margin null with revenue present on this
-  verification run, but CMP's exact missing field varies run to run — it's the ticker most
-  exposed to the pre-existing, separately-tracked count-gate flakiness above, unrelated to
-  this fix). These three are a known interim state, to be closed by Commit 3.
+- **Known, bounded gap at the time — closed (mechanism-wise) by Commit 3** (see below): BLK,
+  MU, and CMP lost newest-quarter revenue and/or margin under this routing.
+
+### yfinance revenue fallback — third leg for gaps secfsdstools/edgartools can't fill
+- **Commit:** `<fill in after commit>` (2026-07-12)
+- **What it closes:** the BLK/MU/CMP "known, bounded gap" flagged in the entry above.
+- **Design:** added a third leg to `get_code33_data()`'s revenue pipeline —
+  secfsdstools → edgartools → **yfinance** — living inside `code33_engine.py` itself (not
+  `api/server.py`), so every consumer of the engine benefits. Constraints, all verified:
+  - **Fill-only:** `_fill_target_quarters()` gained an optional `tertiary_pairs` parameter,
+    only consulted for a target quarter when both `primary_pairs` (secfsdstools) and
+    `secondary_pairs` (edgartools) have no match — never overrides an existing value.
+  - **Revenue-only:** no yfinance NI/margin leg was added. Margin stays `null` when
+    unavailable — that's correct, not a bug, per the mixed-accounting-basis concern.
+  - **Provenance-tagged:** `sources['rev']` gets a `+yfinance` suffix when it contributes,
+    and a new `sources['rev_yfinance_filled']` list names exactly which target quarters
+    (by date) yfinance filled — empty for every ticker that doesn't need it.
+  - **Unit discipline:** added `_yf_to_m()`, matching Commit 1's fixed `_to_m()` precision
+    (divide unconditionally, round to 4 decimals) — yfinance's `quarterly_income_stmt`
+    already returns raw USD like the other two sources, so there's no skip-bug to inherit,
+    but routing through the same discipline keeps precision uniform across all three legs.
+- **Proof the mechanism works — EDRY:** secfsdstools has zero quarters for EDRY, and
+  edgartools throws an exception for it (confirmed in an earlier session). Before this
+  commit: 8 of 8 target quarters missing. After: yfinance filled 5 of 8 (the 5 most recent —
+  yfinance's `quarterly_income_stmt` only returns roughly its 5 newest quarters, confirmed
+  by direct inspection). Cross-checked against Macrotrends: yfinance's 4 most recent
+  quarters sum to ≈$55.8M, consistent with Macrotrends' reported TTM-as-of-2026-03-31 of
+  $0.06B (~$60M) at that page's rounding precision — no scaling error, the kind of bug
+  Commit 1 fixed.
+- **Honest result on the three originally-named tickers — none were actually exercised on
+  verification day, for three different, unrelated reasons (mechanism confirmed correct via
+  EDRY above; these three just didn't happen to need it *today*):**
+  - **BLK:** its specific gap dates (2024-06-30, 2024-12-31) are older than yfinance's
+    ~5-quarter lookback window — confirmed by direct inspection of
+    `_yfinance_revenue_pairs('BLK')`, which only returns 2025-03-31 through 2026-03-31. A
+    real data-availability limit, not a bug in this fix. BLK's revenue stays `insufficient`
+    at `n_quarters=12` (and even at the default 8) — this is unchanged from before this
+    commit (verified byte-identical against pre-Commit-3 code) and is itself a pre-existing
+    characteristic of BLK's sparse history under its current (post-reorg) CIK, not something
+    this or any revenue-fallback commit can fix.
+  - **MU:** its true newest quarter (2026-05-31) still isn't inside `get_code33_data`'s
+    expected target window (the existing 45-day filing-lag buffer in `_target_quarter_ends`
+    hasn't been crossed yet as of this verification) — so the fallback is correctly never
+    even attempted for it yet. Not a bug; will self-resolve once the quarter is due, or the
+    yfinance leg will pick it up if secfsdstools/edgartools still lag it at that point.
+  - **CMP:** the separately-tracked, pre-existing count-gate flakiness (see "Count-gate
+    double-merge redundancy" above) meant edgartools itself happened to succeed on this
+    verification run, so revenue was already fully covered before yfinance was ever
+    consulted (`rev_yfinance_filled: []`).
+- **Unexpected (but correct) bonus — CPTP:** regression-checking the other 16 tracked
+  tickers turned up one surprise: CPTP unexpectedly showed `+yfinance` with 5 quarters
+  filled. Investigated rather than assumed a problem: `edgartools`'s `Company()` resolution
+  is entirely independent of `utils/sec_edgar.py::get_cik()` (which secfsdstools relies on,
+  and which returns `None` for CPTP — confirmed in an earlier session, CPTP is delisted/
+  deregistered per its Form 15). edgartools's own internal ticker database still resolves
+  CPTP, so it was already getting edgartools-only revenue before this commit; yfinance now
+  correctly fills the specific quarters edgartools itself couldn't reach. Fill-only behavior
+  working exactly as designed, on a ticker beyond the three originally named — not a
+  regression. CPTP's broader data-quality status remains a separate, already-tracked concern
+  (`check_deregistered` in `tools/preflight_checks.py`), unaffected by this note.
+- **Regression check:** the other 16 tracked tickers (GOOGL, PED, TEAM, LIN, JNJ, CB, AME,
+  NVDA, AMD, MSFT, AIP, CELH, FN, META, TRT, plus CPTP as the one fill-only exception above)
+  — 15 of 16 show zero yfinance involvement (`rev_yfinance_filled: []`, no `+yfinance`
+  suffix), confirming the new leg is inert for every ticker that doesn't need it, exactly as
+  designed (it only even calls yfinance when `_rev_missing_after_edgar` is non-empty).
+- **Verification:** test suite unchanged (6 passed, 1 xfailed). Server boots clean, one
+  tracked boot/stop cycle confirmed both PIDs actually dead afterward (per the Commit 2
+  lesson).
+- **Dependency note:** this adds a new `yfinance` call path inside `code33_engine.py`
+  itself (previously yfinance was only used for `.info`/sector/FYE lookups and, separately,
+  in `api/server.py` for price/EPS/balance-sheet data — never for revenue inside the engine's
+  own pipeline). A broader review of yfinance's overall role and reliability across the
+  codebase is planned separately — out of scope for this commit.
 
 ### Newest-quarter-missing bug — edgar_revenue.py / edgar_net_margin.py open-fiscal-year gap
 - **Commit:** `9c421c5` (2026-07-09)

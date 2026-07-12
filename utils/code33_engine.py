@@ -80,6 +80,47 @@ def _get_fq_fy(dt, fy_end_m=12) -> str:
     except Exception:
         return ""
 
+def _yf_to_m(val: float) -> float:
+    """Same conversion discipline as the Commit-1-fixed _to_m() in
+    secfs_revenue.py/edgar_revenue.py — divide unconditionally, round to 4
+    decimals, not 1. yfinance's quarterly_income_stmt already returns raw
+    USD (same as the other two sources), so there's no skip-bug to inherit
+    here, but routing through this keeps precision handling identical
+    across all three revenue sources rather than giving yfinance silently
+    different (uncapped) precision."""
+    return round(val / 1_000_000, 4)
+
+def _yfinance_revenue_pairs(ticker: str) -> list:
+    """Raw (date, revenue_usd) pairs from yfinance's quarterly income
+    statement — third-leg fallback only, called when secfsdstools and
+    edgartools both still have a gap. Fill-only: never overrides an
+    existing value, only used by _fill_target_quarters for target dates
+    neither of the first two sources covered. Revenue only — no NI/margin
+    equivalent (mixing yfinance NI into margin calculations would mix
+    accounting bases and complicate Macrotrends cross-verification)."""
+    import yfinance as yf
+    pairs = []
+    try:
+        df = yf.Ticker(ticker.upper()).quarterly_income_stmt
+        if df is None or df.empty:
+            return pairs
+        row_name = next((f for f in ('Total Revenue', 'TotalRevenue') if f in df.index), None)
+        if row_name is None:
+            return pairs
+        for col in df.columns:
+            v = df.loc[row_name, col]
+            if _nan(v):
+                continue
+            try:
+                d = col.date() if hasattr(col, 'date') else date.fromisoformat(str(col)[:10])
+                raw = _yf_to_m(float(v)) * 1_000_000
+                pairs.append((d, raw))
+            except Exception:
+                continue
+    except Exception:
+        log.warning("code33_engine: %s yfinance revenue fallback failed", ticker)
+    return pairs
+
 def _date_first_yoy(primary_vals, primary_ends, edgar_vals, edgar_ends, primary_fy=None, primary_fp=None, edgar_fy=None, edgar_fp=None, fy_end_m=12, src_primary='primary', src_fallback='EDGAR', append_none=False):
     """Calculate YoY growth using strict fiscal-period matching first, fallback to date matching.
     Prevents source-mixing and historical data deletion bugs."""
@@ -398,11 +439,12 @@ def _get_code33_data_inner(ticker: str, cache_v: str = CACHE_VERSION, n_quarters
                 y -= 1
         return results
 
-    def _fill_target_quarters(targets, primary_pairs, secondary_pairs, tolerance_days=45):
+    def _fill_target_quarters(targets, primary_pairs, secondary_pairs, tertiary_pairs=None, tolerance_days=45):
         """For each target date: primary_pairs (secfsdstools) wins if it has a
         match within tolerance_days; else secondary_pairs (edgartools) fills
-        it; else the slot is None and its date is reported as missing.
-        primary_pairs/secondary_pairs are lists of (date, value).
+        it; else tertiary_pairs (currently: yfinance, revenue only) fills it
+        if given; else the slot is None and its date is reported as missing.
+        primary_pairs/secondary_pairs/tertiary_pairs are lists of (date, value).
         Target dates drive matching only — the displayed end date is the real
         filed date from whichever source matched, never the synthetic target
         (a real filing can land ~26-45 days from its target, and for a fiscal
@@ -422,6 +464,8 @@ def _get_code33_data_inner(ticker: str, cache_v: str = CACHE_VERSION, n_quarters
             match = _find(target, primary_pairs)
             if match is None:
                 match = _find(target, secondary_pairs)
+            if match is None and tertiary_pairs:
+                match = _find(target, tertiary_pairs)
             if match is None:
                 rows.append((target, None))
             else:
@@ -459,10 +503,23 @@ def _get_code33_data_inner(ticker: str, cache_v: str = CACHE_VERSION, n_quarters
             log.warning("code33_engine: %s edgartools revenue failed", ticker)
             edgartools_rev_pairs = []
 
-    rev_target_vals, rev_target_ends, rev_missing = _fill_target_quarters(
+    _rev_vals_after_edgar, _, _rev_missing_after_edgar = _fill_target_quarters(
         _targets, secfs_rev_pairs, edgartools_rev_pairs
     )
-    _rev_edgar_contributed = bool(edgartools_rev_pairs) and len(rev_missing) < len(_rev_missing_precheck)
+    _rev_edgar_contributed = bool(edgartools_rev_pairs) and len(_rev_missing_after_edgar) < len(_rev_missing_precheck)
+
+    # ── Revenue, third leg: yfinance, fill-only — only called when
+    # secfsdstools and edgartools both still leave a gap. Never overrides a
+    # value either already provided. Revenue only, no NI/margin equivalent.
+    yfinance_rev_pairs = []
+    if _rev_missing_after_edgar:
+        yfinance_rev_pairs = _yfinance_revenue_pairs(ticker)
+
+    rev_target_vals, rev_target_ends, rev_missing = _fill_target_quarters(
+        _targets, secfs_rev_pairs, edgartools_rev_pairs, yfinance_rev_pairs
+    )
+    _rev_yfinance_contributed = bool(yfinance_rev_pairs) and len(rev_missing) < len(_rev_missing_after_edgar)
+    _rev_yfinance_filled = sorted(set(_rev_missing_after_edgar) - set(rev_missing))
 
     rev_yoy_final, rev_labels_final, _, _, _ = _date_first_yoy(
         rev_target_vals, rev_target_ends, [], [], None, None, None, None,
@@ -482,6 +539,11 @@ def _get_code33_data_inner(ticker: str, cache_v: str = CACHE_VERSION, n_quarters
             sources['rev'] = 'secfsdstools+EDGAR-edgartools'
         else:
             sources['rev'] = 'secfsdstools'
+        if _rev_yfinance_contributed:
+            sources['rev'] += '+yfinance'
+        # Provenance: which specific target quarters yfinance filled (empty
+        # list for the vast majority of tickers, which never reach this leg).
+        sources['rev_yfinance_filled'] = _rev_yfinance_filled
     else:
         rev_yoy_final, rev_labels_final = [], []
         rev_raw_final, rev_raw_ends_final = [], []
