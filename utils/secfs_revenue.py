@@ -106,17 +106,25 @@ def _load_quarter_tags(full_path: str) -> pd.DataFrame:
 
 def _to_m(val: float) -> float:
     """
-    Convert raw USD value to millions, rounded to 1 decimal.
+    Convert raw USD value to millions, rounded to 4 decimals.
 
-    Always divides — unlike edgar_revenue.py's same-named helper, which skips
-    the division below $1M. That heuristic assumes "small raw value means
-    it's already in millions," which is wrong: a small-cap's actual quarterly
-    NI/revenue can legitimately be sub-$1M in raw dollars (confirmed: ASYS NI
-    of $312,000 was left as 312000.0 instead of 0.3, producing a >500,000%
-    net margin). XBRL num.txt values are always raw USD regardless of
-    company size, so there's no case where skipping the division is correct.
+    Always divides — unlike edgar_revenue.py's same-named helper (before its
+    own fix), which skipped the division below $1M. That heuristic assumes
+    "small raw value means it's already in millions," which is wrong: a
+    small-cap's actual quarterly NI/revenue can legitimately be sub-$1M in
+    raw dollars (confirmed: ASYS NI of $312,000 was left as 312000.0 instead
+    of 0.3, producing a >500,000% net margin). XBRL num.txt values are always
+    raw USD regardless of company size, so there's no case where skipping
+    the division is correct.
+
+    Rounds to 4 decimals, not 1: this function DID always divide, but
+    rounding to 1 decimal has the same erasure effect for sub-$1M values —
+    confirmed live on TRT: -$38,000 in millions is -0.038, and round(-0.038,
+    1) is -0.0, silently losing sign and magnitude (looks like a healthy 0%
+    margin instead of a real small loss). 4 decimals preserves correct
+    sign/magnitude down to roughly $100 raw.
     """
-    return round(val / 1_000_000, 1)
+    return round(val / 1_000_000, 4)
 
 
 def _is_implausible(q4: float, q1: float, q2: float, q3: float) -> bool:

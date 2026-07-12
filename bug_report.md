@@ -1,7 +1,7 @@
 # Bug Report — Quant Terminal Engine
 
 Authoritative bug-status reference for the current engine version. Scope: bugs found
-during the manual ticker-testing initiative, 2026-07-09 to 2026-07-11, tied to the
+during the manual ticker-testing initiative, 2026-07-09 to 2026-07-12, tied to the
 current engine only. Older/historical bugs (ESOA, EDRY, PED, KEWL, WSR, sector-exclusion
 gaps, etc.) are out of scope here — tracked elsewhere. The financial-sector/bank
 net-margin bug (JPM-type) is known, deliberately deferred, and also out of scope.
@@ -33,6 +33,54 @@ net-margin bug (JPM-type) is known, deliberately deferred, and also out of scope
   reorder is a no-op for them (byte-identical output before/after, 15/15). CELH itself:
   net income now exact-matches the filing ($-557,000); margin flipped +2.41% → -0.23%, correct
   sign vs Macrotrends.
+
+### _to_m() unit-conversion bug — sub-$1M values corrupted or silently zeroed
+- **Commit:** `<fill in after commit>` (2026-07-12)
+- **What it was:** Two separate defects in the same helper function, existing as four
+  independent copies across `edgar_revenue.py`, `edgar_net_margin.py`, `secfs_revenue.py`,
+  `secfs_net_margin.py`:
+  1. `edgar_revenue.py`/`edgar_net_margin.py`'s `_to_m()` skipped the division for any raw
+     value under $1,000,000 (`return val if abs(val) < 1_000_000 else val/1_000_000`),
+     assuming "small raw value means it's already in millions." Wrong: XBRL values are
+     always raw USD regardless of company size. A real -$38,000 net income was left as
+     `-38000.0` and then treated downstream as *-38000.0 million dollars* — a
+     unit-magnitude error of exactly 10^6.
+  2. `secfs_revenue.py`/`secfs_net_margin.py`'s `_to_m()` already divided unconditionally
+     (this exact skip bug was fixed here once before — see the ASYS case below) but rounded
+     to 1 decimal place, which has the same erasure effect for sub-$1M values: -$38,000 in
+     millions is -0.038, and `round(-0.038, 1)` is `-0.0` — silently losing sign and
+     magnitude, displaying as a healthy 0% margin instead of a real small loss.
+- **Root cause / how found:** Confirmed live on TRT: `get_code33_data('TRT')` produced
+  `npm = -230303.03` for its newest quarter (2026-03-31) — implying a ~$38 billion net loss
+  on $16.5M revenue. Pulled TRT's actual 10-Q directly from SEC EDGAR (accession
+  `0001437749-26-016914`, filed 2026-05-14): real reported net income is **-$38,000**.
+  `-38000 / 1_000_000 × 100 / 16.5 = -230303.03` — exact match, confirming defect #1 above
+  as the live mechanism. Checked the sibling `secfs_*` modules for the same class of problem
+  even though they don't have the skip bug — found defect #2 (1-decimal rounding) live with
+  the identical TRT numbers, confirming both needed the same fix.
+  This is the same bug class documented once before and only half-fixed: `secfs_revenue.py`'s
+  own `_to_m()` docstring already recorded the ASYS case (real NI $312,000 left unconverted,
+  producing a >500,000% margin) and was fixed in the `secfs_*` pair — but that fix never got
+  ported to the `edgar_*` pair, which is why the same bug class recurred, now confirmed on TRT.
+- **How fixed:** All four `_to_m()` implementations now divide unconditionally and round to
+  4 decimal places (not 1) — sub-$1M values keep correct sign and magnitude down to roughly
+  $100 raw. Downstream margin-percentage rounding (2dp) was checked and is fine now that its
+  input is correct.
+- **Verification:** TRT's newest quarter now shows `npm = -0.23` — exact match to the real
+  filed number (-$38,000 / $16.5M × 100 = -0.230303...%), correct sign and magnitude, not
+  -230,303% and not 0.0%. Spot-checked AIP, CELH, TEAM, PED, CMP (other small-caps flagged as
+  exposed to this bug class) — no absurd (>1000%) or suspiciously-exact-zero margins on any
+  quarter. Regression: NVDA, MSFT, GOOGL byte-identical to their pre-fix baseline (their NI is
+  always well over $1M, so they never hit the broken branch either way).
+- **Call-site audit:** confirmed every call site of `_to_m()` in both `edgar_revenue.py` and
+  `edgar_net_margin.py` feeds only dollar-denominated Revenue/Net-Income rows — nothing
+  per-share or already-ratio-valued flows through it, so the unconditional-divide fix is safe
+  everywhere it's used.
+- **Follow-up / tech debt (not done in this commit):** four independent copies of `_to_m()`
+  exist across these two module pairs. This exact bug class recurred specifically *because* a
+  fix landed in one pair (`secfs_*`, for the ASYS case) and never propagated to the other
+  (`edgar_*`). Recommend consolidating into a single shared utility function so a future fix
+  can't diverge again the same way.
 
 ### Newest-quarter-missing bug — edgar_revenue.py / edgar_net_margin.py open-fiscal-year gap
 - **Commit:** `9c421c5` (2026-07-09)
@@ -165,23 +213,22 @@ net-margin bug (JPM-type) is known, deliberately deferred, and also out of scope
 
 ## No solution yet / open
 
-### TRT margin output not re-verified under the new NI-tag priority order
-- **Background:** TRT carries a `NetIncomeLossAvailableToCommonStockholdersBasic` tag, same
-  as CELH — but for TRT that tag nets out non-controlling interest, not preferred dividends
-  (TRT has no preferred stock, confirmed directly against its balance sheet). Same XBRL tag,
-  different economic adjustment underneath it.
-- **Status:** An earlier concern — that TRT showed duplicate/ambiguous rows for the same
-  period under this tag — was investigated and cleared: the duplication was a bug in a
-  throwaway diagnostic script that omitted an XBRL `ddate` filter, conflating the current
-  quarter with the filing's own prior-year comparative column. Production code
-  (`_own_period_value`) already pins on `ddate` correctly and was never affected.
-- **What's still open:** TRT was deliberately excluded from the CELH fix's (`5f680ae`)
-  regression set and has never been explicitly re-verified under the new tag-priority order.
-  Low risk expected — the tag-order change is a pure reorder that's a no-op for tickers
-  without the tag, and TRT does have the tag but for an unrelated reason — but this hasn't
-  been positively confirmed, only reasoned about.
-- **Next step:** Run TRT specifically through the current engine and manually cross-check its
-  margin output against its own filings before trusting it.
+*(None currently — the one item that was here is closed out below.)*
+
+### TRT margin output not re-verified under the new NI-tag priority order — RESOLVED
+**Closed out 2026-07-12** — the "next step" this item asked for (run TRT through the engine,
+cross-check against its own filings) was done as part of investigating a different, more
+urgent TRT symptom (a -230,303% margin). Result: TRT's NI *tag selection* was never the
+problem — the extracted value exact-matched TRT's real filed net income ($-38,000). The
+actual defect was the unrelated `_to_m()` unit-conversion bug (see Resolved section above).
+Background/status kept for the record:
+- TRT carries a `NetIncomeLossAvailableToCommonStockholdersBasic` tag, same as CELH — but for
+  TRT that tag nets out non-controlling interest, not preferred dividends (TRT has no
+  preferred stock, confirmed directly against its balance sheet). Same XBRL tag, different
+  economic adjustment underneath it. This is fine — the tag choice was never wrong.
+- An earlier, separate concern (duplicate/ambiguous rows under this tag) was investigated and
+  cleared previously: a throwaway diagnostic script bug (missing XBRL `ddate` filter), not a
+  production issue — `_own_period_value` already pins on `ddate` correctly.
 
 ---
 

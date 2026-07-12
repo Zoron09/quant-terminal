@@ -37,9 +37,11 @@ log = logging.getLogger(__name__)
 # ── Private helpers ───────────────────────────────────────────────────────────
 
 def _to_m(val: float) -> float:
-    """Convert raw USD value to millions, rounded to 1 decimal. See
-    secfs_revenue._to_m() docstring — always divides, no small-value skip."""
-    return round(val / 1_000_000, 1)
+    """Convert raw USD value to millions, rounded to 4 decimals (not 1 — see
+    secfs_revenue._to_m() docstring). Always divides, no small-value skip;
+    4 decimals avoids that same rounding erasing sign/magnitude for sub-$1M
+    values (confirmed live on TRT: -$38,000 -> -0.038, not -0.0)."""
+    return round(val / 1_000_000, 4)
 
 
 def _is_implausible_ni(q4: float, annual: float) -> bool:

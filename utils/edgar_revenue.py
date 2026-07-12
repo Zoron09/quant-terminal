@@ -61,8 +61,23 @@ def _revenue_row(df):
 
 
 def _to_m(val: float) -> float:
-    """Convert raw USD value to millions, rounded to 1 decimal."""
-    return round(val / 1_000_000, 1) if abs(val) >= 1_000_000 else round(val, 1)
+    """
+    Convert raw USD value to millions, rounded to 4 decimals.
+
+    Always divides — no small-value skip. The previous version left values
+    under $1M unconverted (assuming "small raw value means it's already in
+    millions"), which is wrong: XBRL num.txt values are always raw USD
+    regardless of company size. Confirmed live on TRT: real -$38,000 net
+    income was left as -38000.0 "millions", producing a -230,303% margin
+    instead of the real -0.23%. Same bug pattern as the historical ASYS case
+    (secfs_revenue.py's _to_m() docstring) — that fix never got ported here.
+
+    Rounds to 4 decimals, not 1: a sub-$1M raw value like -$38,000 becomes
+    -0.038 in millions — round(-0.038, 1) is -0.0, silently erasing sign and
+    magnitude (looks like a healthy 0% margin instead of a real small loss).
+    4 decimals preserves correct sign/magnitude down to roughly $100 raw.
+    """
+    return round(val / 1_000_000, 4)
 
 
 def _is_implausible(q4: float, q1: float, q2: float, q3: float) -> bool:
