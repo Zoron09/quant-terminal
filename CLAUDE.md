@@ -185,7 +185,7 @@ full chain — `8f620c4` fixed the root-cause `_to_m()` unit-conversion bug (4 d
 copies across secfs_*/edgar_* modules), `64a5757` routed `/api/financials/{ticker}` through
 `code33_engine.py`'s own date-aware gap detection instead of calling secfsdstools/edgartools
 directly, `9753f34` added a yfinance third-leg revenue fallback (fill-only, revenue-only,
-provenance-tagged) for gaps neither SEC-sourced tool can fill, and this commit adds a
+provenance-tagged) for gaps neither SEC-sourced tool can fill, and `990bcba` adds a
 `±1000%` plausibility guard on margin values as a last line of defense against the same bug
 class recurring silently. Full detail, including honest verification notes (BLK/MU/CMP
 weren't actually exercised by the yfinance leg on verification day, for three separate

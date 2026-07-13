@@ -193,7 +193,7 @@ net-margin bug (JPM-type) is known, deliberately deferred, and also out of scope
   codebase is planned separately — out of scope for this commit.
 
 ### Margin plausibility guard — defense-in-depth against a repeat of the TRT bug class
-- **Commit:** `<fill in after commit>` (2026-07-13)
+- **Commit:** `990bcba` (2026-07-13)
 - **What it is:** a tripwire, not primarily a nuller — the 4th and final commit in the
   sequence that started with the TRT `-230,303%` corruption (Commit 1). Rather than trust
   every margin percentage that reaches `code33_engine.py`, any value outside roughly
