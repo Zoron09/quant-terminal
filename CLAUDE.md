@@ -180,6 +180,17 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-07-13 — **4-commit sequence complete**: TRT's `-230,303%` margin corruption led to a
+full chain — `8f620c4` fixed the root-cause `_to_m()` unit-conversion bug (4 duplicate
+copies across secfs_*/edgar_* modules), `64a5757` routed `/api/financials/{ticker}` through
+`code33_engine.py`'s own date-aware gap detection instead of calling secfsdstools/edgartools
+directly, `9753f34` added a yfinance third-leg revenue fallback (fill-only, revenue-only,
+provenance-tagged) for gaps neither SEC-sourced tool can fill, and this commit adds a
+`±1000%` plausibility guard on margin values as a last line of defense against the same bug
+class recurring silently. Full detail, including honest verification notes (BLK/MU/CMP
+weren't actually exercised by the yfinance leg on verification day, for three separate
+reasons; CPTP unexpectedly was), in `bug_report.md`.
+
 2026-07-11 — Corrected a stale IN PROGRESS note. The "newest quarter invisible" bug in
 `edgar_revenue.py`/`edgar_net_margin.py` (originally confirmed 2026-07-07) was actually fixed
 two days later in commit `9c421c5` (2026-07-09) — CLAUDE.md was never updated to reflect that,

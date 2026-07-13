@@ -192,6 +192,47 @@ net-margin bug (JPM-type) is known, deliberately deferred, and also out of scope
   own pipeline). A broader review of yfinance's overall role and reliability across the
   codebase is planned separately — out of scope for this commit.
 
+### Margin plausibility guard — defense-in-depth against a repeat of the TRT bug class
+- **Commit:** `<fill in after commit>` (2026-07-13)
+- **What it is:** a tripwire, not primarily a nuller — the 4th and final commit in the
+  sequence that started with the TRT `-230,303%` corruption (Commit 1). Rather than trust
+  every margin percentage that reaches `code33_engine.py`, any value outside roughly
+  `±1000%` is now rejected before it can reach output, on the reasoning that no
+  screener-meaningful margin lands out there — real one-time gains or tax benefits can
+  legitimately push margin past ±200%, so the bound is deliberately loose: it's meant to
+  catch a future scaling/extraction bug like Commit 1's, not flag unusual-but-real quarters.
+- **Where:** added `_is_plausible_margin()` in `code33_engine.py`, called at the two points
+  where `net_margin_pct` is pulled in from `secfs_net_margin.py`/`edgar_net_margin.py` into
+  `code33_engine.py`'s own merge pipeline. Note on placement: `code33_engine.py` doesn't
+  actually compute margin from NI/revenue anywhere itself — that division happens upstream,
+  in those two files — so this guards the point where `code33_engine.py` *ingests* an
+  already-computed value, which is the earliest point inside `code33_engine.py` where a
+  bad value could be intercepted, and (since nothing else currently calls those two
+  functions directly) covers every real caller of `get_code33_data()` today.
+- **On rejection:** the pair is excluded from that source's list entirely, not replaced with
+  a null placeholder — this leaves the quarter open for the *other* source (secfsdstools vs.
+  edgartools) to fill instead, and it only ends up `null` in the final output if neither
+  source has a plausible value for that quarter. Logs loudly on rejection
+  (`code33_engine: %s period=%s implausible margin %.2f%% rejected...`) — ticker, period,
+  and the computed margin.
+- **Known limitation, stated plainly:** the log line does **not** include raw NI/revenue,
+  only the already-computed percentage — `secfs_net_margin.py`/`edgar_net_margin.py`'s
+  return dicts don't carry the raw dollar components alongside `net_margin_pct`, only the
+  final ratio, so they aren't available to log at this ingestion point. If deeper
+  diagnostics are ever needed, the raw values would need to be threaded through those two
+  functions' return shape — not done here, kept to the ticketed scope.
+- **Verification (minimal, per this commit's own scope — full automated regression
+  intentionally skipped; user is verifying manually via ticker-by-ticker testing instead):**
+  syntax/import check clean; TRT's real `-0.23%` (the exact value Commit 1 fixed) confirmed
+  to pass through untouched, no rejection logged; `get_code33_data()` runs without error for
+  MU (status `green`, margins in a normal range) as a second smoke check.
+
+**4-commit sequence complete** (`8f620c4` → `64a5757` → `9753f34` → this commit): unit-
+conversion bug fixed at the source, the endpoint routed through the engine's own
+date-aware gap detection, a third-leg fallback added for gaps no SEC-sourced tool can
+fill, and a plausibility guard added as a last line of defense against the same bug class
+recurring silently.
+
 ### Newest-quarter-missing bug — edgar_revenue.py / edgar_net_margin.py open-fiscal-year gap
 - **Commit:** `9c421c5` (2026-07-09)
 - **What it was:** A ticker's newest already-filed quarter silently never reached output

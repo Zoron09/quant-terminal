@@ -121,6 +121,37 @@ def _yfinance_revenue_pairs(ticker: str) -> list:
         log.warning("code33_engine: %s yfinance revenue fallback failed", ticker)
     return pairs
 
+_MARGIN_PLAUSIBLE_BOUND_PCT = 1000.0
+
+def _is_plausible_margin(pct, ticker: str, period_end) -> bool:
+    """Tripwire, not primarily a nuller: catches a wrong margin value (e.g.
+    a scaling/extraction bug like Commit 1's TRT case, -230,303% instead of
+    -0.23%) before it reaches output, rather than asserting any specific
+    quarter's margin is definitely wrong. Deliberately loose (+-1000%) —
+    real one-time gains or tax benefits can legitimately push margin past
+    +-200%, so this only rejects values outside any screener-meaningful
+    range, not merely unusual-but-real quarters.
+
+    Called at ingestion (where code33_engine.py pulls net_margin_pct from
+    secfsdstools/edgartools into its own merge pipeline), not at the
+    upstream computation point in secfs_net_margin.py/edgar_net_margin.py —
+    so only ticker/period/computed-margin are available to log here, not
+    the raw NI/revenue that produced it (those aren't returned by either
+    upstream function). Returns False so the caller excludes the pair
+    entirely rather than including a null placeholder — that leaves the
+    date open for the other source (secfsdstools vs edgartools) to fill
+    instead, and only ends up null if neither has a plausible value."""
+    if pct is None:
+        return True
+    if abs(pct) > _MARGIN_PLAUSIBLE_BOUND_PCT:
+        log.warning(
+            "code33_engine: %s period=%s implausible margin %.2f%% rejected "
+            "(outside +-%.0f%%) — excluded, not passed through",
+            ticker, period_end, pct, _MARGIN_PLAUSIBLE_BOUND_PCT
+        )
+        return False
+    return True
+
 def _date_first_yoy(primary_vals, primary_ends, edgar_vals, edgar_ends, primary_fy=None, primary_fp=None, edgar_fy=None, edgar_fp=None, fy_end_m=12, src_primary='primary', src_fallback='EDGAR', append_none=False):
     """Calculate YoY growth using strict fiscal-period matching first, fallback to date matching.
     Prevents source-mixing and historical data deletion bugs."""
@@ -559,7 +590,8 @@ def _get_code33_data_inner(ticker: str, cache_v: str = CACHE_VERSION, n_quarters
         try:
             _secfs_npm = get_quarterly_net_margin_secfs(ticker, n_quarters=16)
             for r in _secfs_npm:
-                secfs_npm_pairs.append((r['period_end'], r['net_margin_pct']))
+                if _is_plausible_margin(r['net_margin_pct'], ticker, r['period_end']):
+                    secfs_npm_pairs.append((r['period_end'], r['net_margin_pct']))
         except Exception:
             log.warning("code33_engine: %s secfsdstools net margin failed", ticker)
             secfs_npm_pairs = []
@@ -571,7 +603,8 @@ def _get_code33_data_inner(ticker: str, cache_v: str = CACHE_VERSION, n_quarters
         try:
             _et_npm = get_quarterly_net_margin(ticker, n_quarters=16)
             for r in _et_npm:
-                edgartools_npm_pairs.append((r['period_end'], r['net_margin_pct']))
+                if _is_plausible_margin(r['net_margin_pct'], ticker, r['period_end']):
+                    edgartools_npm_pairs.append((r['period_end'], r['net_margin_pct']))
         except Exception:
             log.warning("code33_engine: %s edgartools net margin failed", ticker)
             edgartools_npm_pairs = []
