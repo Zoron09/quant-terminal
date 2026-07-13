@@ -122,7 +122,7 @@ net-margin bug (JPM-type) is known, deliberately deferred, and also out of scope
   MU, and CMP lost newest-quarter revenue and/or margin under this routing.
 
 ### yfinance revenue fallback — third leg for gaps secfsdstools/edgartools can't fill
-- **Commit:** `<fill in after commit>` (2026-07-12)
+- **Commit:** `9753f34` (2026-07-12)
 - **What it closes:** the BLK/MU/CMP "known, bounded gap" flagged in the entry above.
 - **Design:** added a third leg to `get_code33_data()`'s revenue pipeline —
   secfsdstools → edgartools → **yfinance** — living inside `code33_engine.py` itself (not
