@@ -10,7 +10,11 @@ import os
 import yfinance as yf
 from functools import lru_cache
 from datetime import datetime
+from pathlib import Path
 import time
+
+# tools/ — not served by StaticFiles, unlike frontend/ (mounted at /static below)
+TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils.code33_engine import get_code33_data, CACHE_VERSION
@@ -51,6 +55,36 @@ async def analysis():
 @app.get("/journal")
 async def journal():
     return FileResponse("frontend/index.html")
+
+@app.get("/api/journal/wealthsimple-latest")
+async def wealthsimple_latest():
+    """Read-only. Serves whatever tools/wealthsimple_export.py has already written
+    to disk. Does NOT trigger the script and never touches Wealthsimple credentials
+    or session.json — login/2FA stays a manual terminal run of that script."""
+    trades_file = TOOLS_DIR / "ws_import_latest.json"
+    review_file = TOOLS_DIR / "needs_review.json"
+
+    trades = None
+    if trades_file.exists():
+        try:
+            trades = json.loads(trades_file.read_text())
+        except Exception:
+            trades = None
+
+    needs_review = None
+    if review_file.exists():
+        try:
+            needs_review = json.loads(review_file.read_text())
+        except Exception:
+            needs_review = None
+
+    if trades is None and needs_review is None:
+        return JSONResponse(
+            {'error': 'No Wealthsimple export found. Run tools/wealthsimple_export.py first.'},
+            status_code=404,
+        )
+
+    return JSONResponse({'trades': trades, 'needs_review': needs_review})
 
 @app.post("/api/scan")
 async def scan(file: UploadFile = File(...)):

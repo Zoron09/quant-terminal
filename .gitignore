@@ -5,3 +5,8 @@ data/screener_cache.db
 .streamlit/secrets.toml
 .venv/
 .venv-secfsdstools/
+
+# Wealthsimple export — live OAuth session + real trade history, never commit
+tools/session.json
+tools/ws_import_*.json
+tools/needs_review.json

@@ -9,3 +9,6 @@ requests>=2.31.0
 finnhub-python>=2.4.18
 python-dotenv>=1.0.0
 alpaca-py>=0.20.0
+
+# Unofficial, reverse-engineered Wealthsimple API client (not an official SDK) — used by tools/wealthsimple_export.py
+ws-api
