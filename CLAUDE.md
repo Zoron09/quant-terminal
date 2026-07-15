@@ -18,6 +18,7 @@
 10. ONE change at a time — test after each
 11. If something breaks — STOP, revert to last working git commit, document what happened
 12. AFTER EVERY CHANGE — update the CURRENT STATUS section in CLAUDE.md to reflect what was done, then commit CLAUDE.md alongside the changed files in the same commit. No commit is complete without an updated CLAUDE.md.
+13. NEVER ask Meet to run a live Wealthsimple login (`tools/wealthsimple_export.py` without a valid cached `tools/session.json`) as a routine verification step. Any change to that script or to `/api/journal/wealthsimple-latest` gets verified with `--dry-run` or the cached session first — real 2FA/credential entry is a rare, deliberate, Meet-initiated action only, never something asked for just to confirm a code change works.
 
 ---
 
