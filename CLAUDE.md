@@ -107,9 +107,9 @@ POST /api/scan                     → {winners: [{ticker, company, sector, mcap
 
 ### ✅ WORKING
 - Homepage: pure black, Bodoni Moda title, swipe hints, cube animation placeholder
-- Navigation: all 4 directions, smooth physical slide, touch + keyboard
+- Navigation: home/analysis/screener still slide (touch + keyboard); journal direction now redirects to `/journal` (real page load) instead of sliding, since the working journal lives outside the `#world` grid — see Journal entry below
 - Screener: CSV upload → Code33 scan → GREEN/YELLOW results cards → wired to `/api/scan`
-- Journal: full sin-list trading journal (Analytics, Review, Trades DB, Missed Trades, Milestones) with IndexedDB persistence
+- Journal: separate standalone page at `frontend/journal.html` (sin-list's original file, own green theme, own everything — not merged into the bundled SPA). `GET /journal` serves it directly; `nav('journal')` in the SPA's bundled `nav()` redirects there (`window.location.href = '/journal'`) instead of sliding the world grid. Synced against `/api/journal/wealthsimple-latest` (reads whatever `tools/wealthsimple_export.py` has written to disk — no credentials touch the server).
 - News: tradingview-scraper primary, yfinance fallback, 60s cache
 - Chart: dynamic color (green/red), period % + $ gain label, YTD/1D/1W/1M/3M/1Y/5Y timeframes, 30s price poll
 
@@ -121,6 +121,12 @@ POST /api/scan                     → {winners: [{ticker, company, sector, mcap
 - FIX 6: Stats pills may show mock values instead of live API values
 
 ### 🔄 IN PROGRESS
+- **Dead code flagged, not removed:** `frontend/index.html`'s bundled `#page-journal` div and
+  `renderJournal()` (+ its ~71 supporting functions, `.sin-journal` CSS block) are now
+  unreachable — `nav('journal')` redirects to the real `/journal` page (`frontend/journal.html`)
+  before ever touching `PAGES.journal`/`#page-journal`. Left in place deliberately (not deleted
+  this session) so it doesn't quietly rot as confusing dead code without a record — cleanup
+  candidate for a future session, not urgent.
 - Batch Code 33 scan on 381-ticker Minervini CSV — driving script (`run_batch.py`) removed in
   the 2026-07-10 cleanup as a stale root-level scratch script; its designated output was never
   produced (checked: no `code33_results_2026-06-27.csv` ever existed), so nothing was lost. If

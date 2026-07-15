@@ -54,7 +54,7 @@ async def analysis():
 
 @app.get("/journal")
 async def journal():
-    return FileResponse("frontend/index.html")
+    return FileResponse("frontend/journal.html")
 
 @app.get("/api/journal/wealthsimple-latest")
 async def wealthsimple_latest():
