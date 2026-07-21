@@ -19,6 +19,7 @@
 11. If something breaks — STOP, revert to last working git commit, document what happened
 12. AFTER EVERY CHANGE — update the CURRENT STATUS section in CLAUDE.md to reflect what was done, then commit CLAUDE.md alongside the changed files in the same commit. No commit is complete without an updated CLAUDE.md.
 13. NEVER ask Meet to run a live Wealthsimple login (`tools/wealthsimple_export.py` without a valid cached `tools/session.json`) as a routine verification step. Any change to that script or to `/api/journal/wealthsimple-latest` gets verified with `--dry-run` or the cached session first — real 2FA/credential entry is a rare, deliberate, Meet-initiated action only, never something asked for just to confirm a code change works.
+14. ALWAYS reuse the SAME `--start-date` across repeated `tools/wealthsimple_export.py` runs (account inception, or a fixed date picked once) — never a rolling/shifting window. FIFO leg-matching has no state persisted between runs, so a wider or shifted range can pair the same closing leg with a different opener than a prior run did, producing a different `trade_id` for what's economically the same trade. Re-running the *same* range is always safe; this is a usage convention, not something the script validates or blocks.
 
 ---
 
@@ -27,7 +28,11 @@
 - **Frontend:** Single file `frontend/index.html` (~810KB, Claude Design bundled)
 - **Python for scripts:** `C:\Users\Meet Singh\AppData\Local\Programs\Python\Python314\python.exe`
 - **Venv Python:** `C:\Users\Meet Singh\quant-terminal\.venv\Scripts\python.exe`
-- **Server URL:** `http://localhost:8000`
+- **Server URL:** `http://localhost:8000` — bound to `127.0.0.1` only as of 2026-07-15 (was `0.0.0.0`).
+  **If you've been reaching this app from another device on your LAN (phone, another PC via
+  your machine's real IP), that access is now gone** — only this machine can reach it. Change
+  `--host` back in `run.py` if that LAN access is actually wanted; this wasn't silently assumed
+  to be fine, it's a deliberate tradeoff for the Wealthsimple auto-sync feature below.
 
 ---
 
@@ -110,7 +115,9 @@ POST /api/scan                     → {winners: [{ticker, company, sector, mcap
 - Homepage: pure black, Bodoni Moda title, swipe hints, cube animation placeholder
 - Navigation: home/analysis/screener still slide (touch + keyboard); journal direction now redirects to `/journal` (real page load) instead of sliding, since the working journal lives outside the `#world` grid — see Journal entry below
 - Screener: CSV upload → Code33 scan → GREEN/YELLOW results cards → wired to `/api/scan`
-- Journal: separate standalone page at `frontend/journal.html` (sin-list's original file, own green theme, own everything — not merged into the bundled SPA). `GET /journal` serves it directly; `nav('journal')` in the SPA's bundled `nav()` redirects there (`window.location.href = '/journal'`) instead of sliding the world grid. Synced against `/api/journal/wealthsimple-latest` (reads whatever `tools/wealthsimple_export.py` has written to disk — no credentials touch the server).
+- Journal: separate standalone page at `frontend/journal.html` (sin-list's original file, restyled to quant-terminal's monochrome/white accent + underline tabs, own everything else — not merged into the bundled SPA). `GET /journal` serves it directly; `nav('journal')` in the SPA's bundled `nav()` redirects there (`window.location.href = '/journal'`) instead of sliding the world grid.
+- Wealthsimple auto-sync (2026-07-15): `/api/journal/wealthsimple-latest` now also triggers a debounced background refresh (5 min minimum between attempts, single-worker `ThreadPoolExecutor`, genuinely fire-and-forget — the handler never calls `.result()`/awaits it, proven via concurrent-request testing that other requests stay fast while a fetch is in flight) using `tools/wealthsimple_export.py`'s `get_cached_api_or_none()` / `run_export_with_cached_session()`. **Only ever uses the existing cached `tools/session.json`** — no password/2FA path exists in this code at all; missing/expired session degrades to serving last-known-good cached data with `live_sync: {last_attempt_ok: false}` in the response, never a crash or hang. Auto-refresh reuses whichever `--start-date` the most recent manual `ws_import_<start>_<end>.json` used (rule 14 — never a shifting window) and does nothing if no manual export has ever been run yet. `_atomic_write_json` (in `wealthsimple_export.py`) now qualifies its temp filename with the process PID so the server's auto-fetch and a manual CLI run can never collide on the same temp file.
+- Current Capital stat card (2026-07-15): a real Wealthsimple NAV (`financials.currentCombined.netLiquidationValue`), not derived from trade P&L — this field is already returned by the same `get_accounts()` call `_build_account_labels()`/`_get_account_ids()` already make (no new API scope, no extra network call). New `_build_account_balances(api, account_labels)` writes `tools/account_balances.json` (gitignored — real balance data) as a sibling to `ws_import_latest.json`, keyed by the same resolved label used for `trade.acc`, **summed** (not overwritten) when two raw accounts resolve to the same label — confirmed against real data that this actually happens (two of Meet's cash sub-accounts both carry the nickname "Meet"); naively overwriting silently dropped one account's real dollar balance. Frontend's "Combined" sums only the accounts the switcher itself tracks (labels actually present in `TRADES`), not every Wealthsimple account on the profile — Meet's FHSA/RRSP/unrelated cash accounts don't inflate it.
 - News: tradingview-scraper primary, yfinance fallback, 60s cache
 - Chart: dynamic color (green/red), period % + $ gain label, YTD/1D/1W/1M/3M/1Y/5Y timeframes, 30s price poll
 
