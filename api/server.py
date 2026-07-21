@@ -7,6 +7,9 @@ import json
 import io
 import sys
 import os
+import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import yfinance as yf
 from functools import lru_cache
 from datetime import datetime
@@ -26,6 +29,89 @@ def evict_cache():
     now = time.time()
     expired = [k for k, v in list(TICKER_CACHE.items()) if now - v[1] > CACHE_TTL]
     for k in expired: TICKER_CACHE.pop(k, None)
+
+
+# ---------------------------------------------------------------------------
+# Wealthsimple auto-refresh — background-only, cached-session-only.
+# Never prompts for credentials (get_cached_api_or_none() has no input()/
+# getpass() path at all). Fetch always runs off the event loop thread via
+# a dedicated single-worker executor, and this endpoint's handler never
+# calls .result()/await on it — it's genuinely fire-and-forget, not just
+# offloaded-but-still-blocking (the /api/financials ThreadPoolExecutor
+# pattern elsewhere in this file calls .result() synchronously inside an
+# async def, which still blocks the single event loop for the fetch's
+# full duration — not copying that here, since the whole point is that
+# OTHER requests must keep working while a Wealthsimple fetch is in flight).
+# ---------------------------------------------------------------------------
+
+WS_REFRESH_INTERVAL_SECONDS = 300  # 5 min — manual trading activity doesn't
+# change fast enough to need more, and ws_api has zero built-in rate-limit
+# handling (confirmed during the hardening investigation), so erring toward
+# fewer background calls is the safer default.
+
+_ws_fetch_executor = ThreadPoolExecutor(max_workers=1)  # never more than one fetch in flight
+_ws_fetch_lock = threading.Lock()
+_ws_fetch_in_progress = False
+_ws_last_fetch_attempt = 0.0
+_ws_last_fetch_ok = None  # None = never attempted yet; True/False = last attempt's outcome
+
+
+def _discover_ws_start_date():
+    """Find the start date to reuse from the most recently modified
+    ws_import_<start>_<end>.json already in tools/ — per CLAUDE.md rule 14,
+    always reuse the same start date rather than a shifting window,
+    otherwise FIFO leg-matching can pair the same closing leg with a
+    different opener than a prior run did. Returns None if no dated export
+    exists yet, meaning there's no established baseline to auto-refresh."""
+    pattern = re.compile(r"^ws_import_(\d{4}-\d{2}-\d{2})_\d{4}-\d{2}-\d{2}\.json$")
+    matches = []
+    for f in TOOLS_DIR.glob("ws_import_*.json"):
+        if f.name == "ws_import_latest.json":
+            continue
+        m = pattern.match(f.name)
+        if m:
+            matches.append((f.stat().st_mtime, m.group(1)))
+    if not matches:
+        return None
+    matches.sort(key=lambda x: x[0])
+    return matches[-1][1]
+
+
+def _run_ws_background_fetch():
+    """Runs on a worker thread. Never raises out to the executor — any
+    failure (no session, network error, matching error) is caught and
+    recorded, never crashes the thread pool or the server."""
+    global _ws_fetch_in_progress, _ws_last_fetch_ok
+    try:
+        from tools.wealthsimple_export import run_export_with_cached_session
+        start_date = _discover_ws_start_date()
+        if start_date is None:
+            _ws_last_fetch_ok = False
+            return
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        _ws_last_fetch_ok = run_export_with_cached_session(start_date, end_date)
+    except Exception as e:
+        print(f"[wealthsimple auto-fetch] failed: {e}")
+        _ws_last_fetch_ok = False
+    finally:
+        with _ws_fetch_lock:
+            _ws_fetch_in_progress = False
+
+
+def _maybe_trigger_ws_refresh():
+    """Fire-and-forget: submits a background fetch if the debounce interval
+    has passed and nothing's already running. Never awaited/joined by the
+    caller — the request handler returns immediately regardless."""
+    global _ws_fetch_in_progress, _ws_last_fetch_attempt
+    now = time.time()
+    with _ws_fetch_lock:
+        if _ws_fetch_in_progress:
+            return
+        if now - _ws_last_fetch_attempt < WS_REFRESH_INTERVAL_SECONDS:
+            return
+        _ws_fetch_in_progress = True
+        _ws_last_fetch_attempt = now
+    _ws_fetch_executor.submit(_run_ws_background_fetch)
 
 
 app = FastAPI()
@@ -58,11 +144,20 @@ async def journal():
 
 @app.get("/api/journal/wealthsimple-latest")
 async def wealthsimple_latest():
-    """Read-only. Serves whatever tools/wealthsimple_export.py has already written
-    to disk. Does NOT trigger the script and never touches Wealthsimple credentials
-    or session.json — login/2FA stays a manual terminal run of that script."""
+    """Serves whatever tools/wealthsimple_export.py has already written to
+    disk — always immediately, never waiting on a network fetch. Separately
+    (fire-and-forget, never awaited) triggers a debounced background
+    refresh using ONLY the cached session — never prompts for credentials,
+    never touches session.json beyond reading/refreshing it via the
+    existing cached token. If there's no valid cached session, or the
+    debounce interval hasn't passed, or a fetch is already running, this
+    is a silent no-op and cached data is served exactly as before."""
+    _maybe_trigger_ws_refresh()
+
     trades_file = TOOLS_DIR / "ws_import_latest.json"
     review_file = TOOLS_DIR / "needs_review.json"
+    balances_file = TOOLS_DIR / "account_balances.json"
+    positions_file = TOOLS_DIR / "open_positions.json"
 
     trades = None
     if trades_file.exists():

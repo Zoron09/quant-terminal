@@ -6,6 +6,15 @@ Fetches Wealthsimple option trades and exports them to the sin-list JSON schema.
 Usage:
     python wealthsimple_export.py --dry-run --start-date 2026-06-01
     python wealthsimple_export.py --start-date 2026-06-01 --end-date 2026-06-17
+
+IMPORTANT - pick one --start-date and reuse it on every future run (e.g.
+account inception, or a fixed date chosen once) rather than a rolling/
+shifting window. FIFO leg-matching has no state persisted between runs --
+a wider or shifted window can expose an earlier opening leg that wasn't
+visible in a prior run, pairing the same closing leg with a different
+opener and producing a different trade_id for what's economically the same
+trade. Re-running the *same* range is always safe; changing the start date
+between runs is what risks divergent pairings for overlapping trades.
 """
 
 import argparse
@@ -33,6 +42,28 @@ DOW_MAP = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
 
 
 # ---------------------------------------------------------------------------
+# Atomic write helper
+# ---------------------------------------------------------------------------
+
+def _atomic_write_json(path, text):
+    """Write text to path atomically: write to a sibling .tmp file, then
+    Path.replace() it onto the target. Path.replace() is a single atomic
+    rename on both Windows and POSIX, so the target is always either the
+    complete previous version or the complete new version -- never a
+    truncated/partial file, even if the process dies mid-write.
+
+    The temp filename is qualified with this process's PID so two writers
+    targeting the same file at the same time (e.g. the API server's
+    background auto-fetch and Meet running this script by hand) never
+    collide on the same temp file -- each writer gets its own temp file,
+    each replace() is independently atomic, and whichever finishes last
+    simply wins. No torn/partial file is ever possible either way."""
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(text)
+    tmp_path.replace(path)
+
+
+# ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------
 
@@ -48,7 +79,7 @@ def _load_session():
 
 
 def _save_session(sess):
-    SESSION_FILE.write_text(sess if isinstance(sess, str) else sess.to_json())
+    _atomic_write_json(SESSION_FILE, sess if isinstance(sess, str) else sess.to_json())
 
 
 def _get_api():
@@ -79,6 +110,32 @@ def _get_api():
     _save_session(sess)
     api.start_session(sess)
     return api
+
+
+def get_cached_api_or_none():
+    """Like _get_api(), but NEVER falls back to interactive login -- no
+    input()/getpass() calls anywhere in this function, guaranteed. Returns
+    an authenticated WealthsimpleAPI using ONLY the existing cached
+    session.json (refreshing the access token via the cached refresh_token
+    if needed, which is not a fresh login -- no credentials involved), or
+    None if there's no session file, it's invalid, or it can't be refreshed.
+
+    This is the only entry point safe to call from a long-running server
+    process: a fresh login prompt reaching input()/getpass() inside a
+    server process would hang that worker on stdin forever, which is
+    exactly the failure mode this function exists to make impossible."""
+    from ws_api import WealthsimpleAPI
+
+    sess = _load_session()
+    if sess is None:
+        return None
+
+    api = WealthsimpleAPI.from_token(sess, persist_session_fct=_save_session)
+    try:
+        api.check_oauth_token(persist_session_fct=_save_session)
+        return api
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -524,15 +581,15 @@ def main():
     review_filename = SCRIPT_DIR / "needs_review.json"
 
     trade_json = json.dumps(trades, indent=2, default=str)
-    import_filename.write_text(trade_json)
+    _atomic_write_json(import_filename, trade_json)
     print(f"Written: {import_filename}")
 
     latest_filename = SCRIPT_DIR / "ws_import_latest.json"
-    latest_filename.write_text(trade_json)
+    _atomic_write_json(latest_filename, trade_json)
     print(f"Written: {latest_filename}")
 
     review_data = _needs_review_serializable(needs_review)
-    review_filename.write_text(json.dumps(review_data, indent=2, default=str))
+    _atomic_write_json(review_filename, json.dumps(review_data, indent=2, default=str))
     print(f"Written: {review_filename} ({len(review_data)} item(s))")
 
 
