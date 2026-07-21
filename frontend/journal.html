@@ -529,6 +529,23 @@
             <label>Notes</label>
             <textarea name="notes" placeholder="What happened, what you'd do differently…"></textarea>
           </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label>Thesis</label>
+            <textarea name="thesis" placeholder="Why did I take this trade? What was I expecting to happen?"></textarea>
+          </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label>Chart Screenshot</label>
+            <div class="drop-zone screenshot-dropzone" id="screenshot-dropzone" tabindex="0"
+                 onclick="triggerScreenshotPicker(event)" onpaste="handleScreenshotPaste(event)">
+              <div id="screenshot-placeholder">paste a screenshot (ctrl+v) or click to upload</div>
+              <div id="screenshot-preview-wrap" style="display:none">
+                <img id="screenshot-preview-img" alt="Chart screenshot">
+                <button type="button" class="screenshot-remove-btn" onclick="clearScreenshot(event)">×</button>
+              </div>
+            </div>
+            <input type="file" id="screenshot-file-input" accept="image/*" style="display:none" onchange="handleScreenshotFile(this)">
+            <input type="hidden" name="screenshot" id="screenshot-data">
+          </div>
         </div>
         <input type="hidden" name="id" id="edit-id">
       </form>
@@ -556,24 +573,25 @@
   </div>
 </div>
 
-<!-- Pre-Trade Checklist Modal -->
-<div class="modal-backdrop" id="checklist-modal" style="display:none" onclick="if(event.target===this)closeChecklistModal()">
-  <div class="modal" style="max-width:480px">
+<!-- Attachment View Modal (thesis + screenshot, read-only) -->
+<div class="modal-backdrop" id="attachment-modal" style="display:none" onclick="if(event.target===this)closeAttachmentModal()">
+  <div class="modal" style="max-width:600px">
     <div class="modal-header">
-      <h2>Pre-Trade Checklist</h2>
-      <button class="modal-close" onclick="closeChecklistModal()">×</button>
+      <h2>Thesis &amp; Screenshot</h2>
+      <button class="modal-close" onclick="closeAttachmentModal()">×</button>
     </div>
     <div class="modal-body">
-      <ul style="list-style:none;display:flex;flex-direction:column;gap:12px;font-size:13px">
-        <li>☐ BOS / CHoCH confirmed</li>
-        <li>☐ FVG identified</li>
-        <li>☐ Liquidity sweep noted</li>
-        <li>☐ Stop level set</li>
-        <li>☐ Profit target set</li>
-      </ul>
+      <div id="attachment-thesis-wrap" style="margin-bottom:14px">
+        <div class="label" style="margin-bottom:6px">Thesis</div>
+        <p id="attachment-thesis-text" style="font-size:13px;color:var(--text);white-space:pre-wrap"></p>
+      </div>
+      <div id="attachment-screenshot-wrap">
+        <div class="label" style="margin-bottom:6px">Screenshot</div>
+        <img id="attachment-screenshot-img" style="max-width:100%;border-radius:8px;border:1px solid var(--border-card)">
+      </div>
     </div>
     <div class="modal-footer">
-      <button onclick="closeChecklistModal()">Close</button>
+      <button onclick="closeAttachmentModal()">Close</button>
     </div>
   </div>
 </div>
@@ -877,6 +895,7 @@ function renderTable() {
       <td>${escHtml(t.model || '')}</td>
       <td>${ptags}${ntags}</td>
       <td class="actions">
+        ${(t.thesis || t.screenshot) ? `<button class="icon-btn" title="View thesis/screenshot" onclick="openAttachmentView('${escHtml(t.id)}')" style="width:26px;height:26px"><i class="ti ti-paperclip"></i></button>` : ''}
         <button onclick="openEditModal('${escHtml(t.id)}')" style="padding:4px 8px;font-size:11px">Edit</button>
         <button class="danger" onclick="deleteTrade('${escHtml(t.id)}')" style="padding:4px 8px;font-size:11px">Del</button>
       </td>
@@ -908,6 +927,7 @@ function openAddModal() {
   const form = document.getElementById('trade-form');
   form.reset();
   document.getElementById('edit-id').value = '';
+  clearScreenshot();
   // Default date to today
   form.date.value = new Date().toISOString().slice(0, 10);
   document.getElementById('trade-modal').style.display = 'flex';
@@ -922,17 +942,114 @@ function openEditModal(id) {
   form.reset();
   document.getElementById('edit-id').value = id;
 
-  const fields = ['date','pairs','dir','contracts','entry','entryTime','exit','exitTime','pnl','acc','session','model','ew','rating','notes'];
+  const fields = ['date','pairs','dir','contracts','entry','entryTime','exit','exitTime','pnl','acc','session','model','ew','rating','notes','thesis'];
   fields.forEach(f => { if (form[f]) form[f].value = trade[f] != null ? trade[f] : ''; });
   if (form.fp) form.fp.checked = !!trade.fp;
   if (form.be) form.be.checked = !!trade.be;
   if (form.ptags) form.ptags.value = (trade.ptags || []).join(', ');
   if (form.ntags) form.ntags.value = (trade.ntags || []).join(', ');
+  if (trade.screenshot) { _setScreenshot(trade.screenshot); } else { clearScreenshot(); }
   document.getElementById('trade-modal').style.display = 'flex';
 }
 
 function closeModal() {
   document.getElementById('trade-modal').style.display = 'none';
+}
+
+// =============================================================================
+// Chart Screenshot (Thesis field is a plain textarea, no JS needed -- this
+// is just the image dropzone: paste or click-to-upload, both funnel into
+// the same _processScreenshotFile() -> canvas downscale -> hidden input)
+// =============================================================================
+const SCREENSHOT_MAX_DIM = 1200; // long-edge cap in px before storing, so a
+// full-res screen capture doesn't quietly bloat IndexedDB -- always
+// re-encoded as JPEG q=0.85 too, not just resized when "too big", so
+// storage size is predictable regardless of the source image.
+
+function triggerScreenshotPicker(event) {
+  if (event && event.target.closest && event.target.closest('.screenshot-remove-btn')) return;
+  document.getElementById('screenshot-file-input').click();
+}
+
+function handleScreenshotFile(input) {
+  const file = input.files && input.files[0];
+  if (file) _processScreenshotFile(file);
+  input.value = ''; // allow re-selecting the same file again later
+}
+
+function handleScreenshotPaste(event) {
+  const cd = event.clipboardData || window.clipboardData;
+  if (!cd) return;
+  for (const item of cd.items || []) {
+    if (item.type && item.type.startsWith('image/')) {
+      const file = item.getAsFile();
+      if (file) { _processScreenshotFile(file); event.preventDefault(); return; }
+    }
+  }
+}
+
+function _processScreenshotFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if (w > SCREENSHOT_MAX_DIM || h > SCREENSHOT_MAX_DIM) {
+        const scale = SCREENSHOT_MAX_DIM / Math.max(w, h);
+        w = Math.round(w * scale);
+        h = Math.round(h * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      _setScreenshot(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function _setScreenshot(dataUrl) {
+  document.getElementById('screenshot-data').value = dataUrl;
+  document.getElementById('screenshot-placeholder').style.display = 'none';
+  document.getElementById('screenshot-preview-wrap').style.display = 'inline-flex';
+  document.getElementById('screenshot-preview-img').src = dataUrl;
+}
+
+function clearScreenshot(event) {
+  if (event) event.stopPropagation();
+  document.getElementById('screenshot-data').value = '';
+  document.getElementById('screenshot-preview-img').src = '';
+  document.getElementById('screenshot-preview-wrap').style.display = 'none';
+  document.getElementById('screenshot-placeholder').style.display = 'block';
+}
+
+// =============================================================================
+// Attachment View (read-only thesis/screenshot popup from the Trades DB table)
+// =============================================================================
+function openAttachmentView(id) {
+  const trade = TRADES.find(t => t.id === id);
+  if (!trade) return;
+  const thesisWrap = document.getElementById('attachment-thesis-wrap');
+  const shotWrap = document.getElementById('attachment-screenshot-wrap');
+  if (trade.thesis) {
+    thesisWrap.style.display = 'block';
+    document.getElementById('attachment-thesis-text').textContent = trade.thesis;
+  } else {
+    thesisWrap.style.display = 'none';
+  }
+  if (trade.screenshot) {
+    shotWrap.style.display = 'block';
+    document.getElementById('attachment-screenshot-img').src = trade.screenshot;
+  } else {
+    shotWrap.style.display = 'none';
+  }
+  document.getElementById('attachment-modal').style.display = 'flex';
+}
+
+function closeAttachmentModal() {
+  document.getElementById('attachment-modal').style.display = 'none';
 }
 
 async function submitTrade(e) {
@@ -966,6 +1083,8 @@ async function submitTrade(e) {
     ptags: parseTags(fd.get('ptags')),
     ntags: parseTags(fd.get('ntags')),
     notes: fd.get('notes') || '',
+    thesis: fd.get('thesis') || '',
+    screenshot: fd.get('screenshot') || '',
     dow: dowFromDate(dateStr),
   };
 
