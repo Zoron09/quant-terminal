@@ -163,6 +163,155 @@ def _get_account_ids(api):
     return [acc.get("id") or acc.get("accountId") for acc in accounts if acc.get("id") or acc.get("accountId")]
 
 
+def _build_account_balances(api, account_labels):
+    """Return {label: USD cash balance (float)} using get_account_balances()'s
+    'sec-c-usd' field per account -- the actual segregated USD cash sitting
+    in the account (real buying power for US options), NOT
+    financials.currentCombined.netLiquidationValue (confirmed by direct
+    investigation to be a blended CAD total that also includes position
+    value, not just cash -- a materially different and misleading number
+    for "what can I actually trade US options with").
+
+    Unlike netLiquidationValue, this needs one get_account_balances() call
+    PER account -- not free/riding on get_accounts()'s already-fetched
+    response. Same cached session, no new auth scope, just an extra
+    network round-trip per account. A failure on any one account's balance
+    call is skipped, not fatal -- one flaky account's balance call must not
+    take down the whole sync (trades still need to write either way).
+
+    Keyed by the SAME resolved label _match_legs() puts into trade.acc
+    (account_labels.get(acc_id, acc_id) -- nickname if one exists, else the
+    raw account ID), not by the raw account ID directly. Getting this wrong
+    silently breaks any account whose nickname differs from its ID (e.g.
+    "Khich ke") while accidentally appearing to work for accounts with no
+    nickname (where the label just falls back to being the raw ID) --
+    confirmed by testing against real data, not assumed.
+
+    Labels are summed, not overwritten, when two different raw accounts
+    resolve to the same label -- confirmed against real data that this
+    actually happens (two of Meet's own cash sub-accounts both carry the
+    nickname "Meet"), and naively overwriting silently dropped one
+    account's real dollar balance from the total. Summing is the only
+    choice that never loses money regardless of what labels collide."""
+    accounts = api.get_accounts(open_only=True)
+    balances = {}
+    for acc in accounts:
+        acc_id = acc.get("id") or acc.get("accountId", "")
+        if not acc_id:
+            continue
+        try:
+            acc_balances = api.get_account_balances(acc_id)
+            usd_cash = float(acc_balances.get("sec-c-usd") or 0)
+        except Exception:
+            continue
+        label = account_labels.get(acc_id, acc_id)
+        balances[label] = balances.get(label, 0.0) + usd_cash
+    return balances
+
+
+def _build_open_positions(api, account_labels):
+    """Fetch LIVE option positions (current market value/unrealized P&L,
+    not historical) via the FetchIdentityPositions GraphQL query -- confirmed
+    working via direct investigation, cached session, no new login/scope.
+
+    Calls do_graphql_query() directly rather than the get_identity_positions()
+    convenience wrapper, because that wrapper hardcodes includeSecurity to its
+    schema default (false) -- without it, optionDetails/quoteV2 never resolve
+    and every position would look identical (no strike/expiry/bid/ask). This
+    was confirmed by testing both ways during the investigation.
+
+    Filters to genuine option positions only (security.optionDetails present)
+    -- excludes fractional ETF/DRIP shares (e.g. XDIV, confirmed present on
+    Meet's real account) which are not options and have optionDetails: null.
+
+    A failure here is skipped, not fatal -- same as _build_account_balances,
+    so one flaky call can't take down the whole sync (trades still need to
+    write either way)."""
+    try:
+        raw_positions = api.do_graphql_query(
+            "FetchIdentityPositions",
+            {
+                "identityId": api.get_token_info().get("identity_canonical_id"),
+                "currency": "USD",
+                "filter": {"securityIds": None},
+                "includeAccountData": True,
+                "includeSecurity": True,
+            },
+            "identity.financials.current.positions.edges",
+            "array",
+        )
+    except Exception:
+        return []
+
+    def _amt(money_field):
+        m = money_field or {}
+        return float(m["amount"]) if m.get("amount") is not None else None
+
+    positions = []
+    for pos in raw_positions or []:
+        security = pos.get("security") or {}
+        option_details = security.get("optionDetails")
+        if not option_details:
+            continue  # not an option position (e.g. fractional ETF shares)
+
+        accounts = pos.get("accounts") or []
+        acc_id = accounts[0].get("id") if accounts else ""
+        acc_label = account_labels.get(acc_id, acc_id)
+
+        underlying_stock = (option_details.get("underlyingSecurity") or {}).get("stock") or {}
+        quote = security.get("quoteV2") or {}
+
+        positions.append({
+            "ticker": underlying_stock.get("symbol", ""),
+            "optionType": (option_details.get("optionType") or "").upper(),
+            "strike": option_details.get("strikePrice"),
+            "expiry": option_details.get("expiryDate"),
+            "acc": acc_label,
+            "quantity": pos.get("quantity"),
+            "bookValue": _amt(pos.get("bookValue")),
+            "averagePrice": _amt(pos.get("averagePrice")),
+            "totalValue": _amt(pos.get("totalValue")),
+            "unrealizedReturns": _amt(pos.get("unrealizedReturns")),
+            "bid": quote.get("bid"),
+            "ask": quote.get("ask"),
+            "last": quote.get("last"),
+            "mid": quote.get("mid"),
+            "quotedAsOf": quote.get("quotedAsOf"),
+            "entryDate": None,
+            "entryTime": None,
+        })
+    return positions
+
+
+def _enrich_positions_with_entry_date(positions, needs_review):
+    """PositionV2 (the live positions query) has no 'opened on' field -- it's
+    a live snapshot, not a historical record. The real open date/time DOES
+    exist, in this same run's needs_review data (the activity-feed leg that
+    never got a matching closer), so this cross-references by
+    ticker+strike+expiry to attach a real entry date rather than leaving it
+    blank or guessing."""
+    open_legs = [
+        item for item in needs_review
+        if item.get("reason") == "open position with no closing leg in date range"
+    ]
+    for pos in positions:
+        for item in open_legs:
+            leg = item.get("leg") or {}
+            if (
+                (leg.get("assetSymbol") or "").upper() == (pos["ticker"] or "").upper()
+                and str(leg.get("strikePrice", "")) == str(pos["strike"])
+                and leg.get("expiryDate") == pos["expiry"]
+            ):
+                open_dt = _parse_occurred_at(leg.get("occurredAt", ""))
+                sentinel = datetime.min.replace(tzinfo=timezone.utc)
+                if open_dt != sentinel:
+                    open_dt_et = open_dt.astimezone(_ET)
+                    pos["entryDate"] = open_dt_et.strftime("%Y-%m-%d")
+                    pos["entryTime"] = _fmt_et(open_dt)
+                break
+    return positions
+
+
 # ---------------------------------------------------------------------------
 # Activity fetch + filter
 # ---------------------------------------------------------------------------
@@ -393,6 +542,14 @@ def _match_legs(option_acts, account_labels, debug=False):
                     close_cid = close_leg.get("canonicalId", "")
                     trade_id = f"{open_cid}_{close_cid}"
 
+                    currency = open_leg.get("currency") or close_leg.get("currency") or ""
+                    if currency and currency != "USD":
+                        print(
+                            f"[currency] WARNING: {symbol} trade ({open_cid}_{close_cid}) is {currency}, not USD -- "
+                            f"journal currently assumes USD throughout; this trade needs manual review.",
+                            file=sys.stderr,
+                        )
+
                     trade = {
                         "id": trade_id,
                         "_close_cid": close_cid,  # used by _merge_fills; stripped before export
@@ -400,6 +557,7 @@ def _match_legs(option_acts, account_labels, debug=False):
                         "pairs": symbol,
                         "session": "",
                         "model": "",
+                        "currency": currency,
                         "dir": "LONG" if (open_leg.get("contractType") or "").lower() == "call" else "SHORT",
                         "pnl": pnl,
                         "contracts": int(matched_qty),
@@ -533,13 +691,61 @@ def _needs_review_serializable(needs_review):
     return out
 
 
+def run_export_with_cached_session(start_date_str, end_date_str, ticker_filter=""):
+    """Run the full fetch -> match -> merge -> write pipeline using ONLY the
+    cached session (get_cached_api_or_none() -- never prompts, never logs in).
+    Reuses the exact same fetch/match/merge/write building blocks as main(),
+    nothing duplicated.
+
+    Returns True if a cached session was available and the run completed
+    (files written), False if there's no valid cached session (caller should
+    treat existing on-disk data as stale rather than attempt anything else).
+    Any other failure (network, matching) raises -- caller decides how to
+    log/handle it; this function does not swallow errors silently."""
+    api = get_cached_api_or_none()
+    if api is None:
+        return False
+
+    start_dt = datetime.strptime(start_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    end_dt = datetime.strptime(end_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+
+    account_ids = _get_account_ids(api)
+    if not account_ids:
+        return False
+
+    account_labels = _build_account_labels(api)
+    account_balances = _build_account_balances(api, account_labels)
+    option_acts = _fetch_option_activities(api, account_ids, start_dt, end_dt)
+    if ticker_filter:
+        option_acts = [a for a in option_acts if (a.get("assetSymbol") or "").upper() == ticker_filter.upper()]
+
+    trades, needs_review = _match_legs(option_acts, account_labels)
+    trades = _merge_fills(trades)
+    open_positions = _build_open_positions(api, account_labels)
+    open_positions = _enrich_positions_with_entry_date(open_positions, needs_review)
+
+    import_filename = SCRIPT_DIR / f"ws_import_{start_date_str}_{end_date_str}.json"
+    review_filename = SCRIPT_DIR / "needs_review.json"
+    latest_filename = SCRIPT_DIR / "ws_import_latest.json"
+    balances_filename = SCRIPT_DIR / "account_balances.json"
+    positions_filename = SCRIPT_DIR / "open_positions.json"
+
+    trade_json = json.dumps(trades, indent=2, default=str)
+    _atomic_write_json(import_filename, trade_json)
+    _atomic_write_json(latest_filename, trade_json)
+    _atomic_write_json(review_filename, json.dumps(_needs_review_serializable(needs_review), indent=2, default=str))
+    _atomic_write_json(balances_filename, json.dumps(account_balances, indent=2))
+    _atomic_write_json(positions_filename, json.dumps(open_positions, indent=2, default=str))
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Export Wealthsimple option trades to sin-list JSON schema.")
-    parser.add_argument("--start-date", required=True, help="Start date YYYY-MM-DD")
+    parser.add_argument("--start-date", required=True, help="Start date YYYY-MM-DD. Reuse the SAME start date on every future run (don't shift the window) -- see module docstring for why.")
     parser.add_argument("--end-date", default=datetime.now().strftime("%Y-%m-%d"), help="End date YYYY-MM-DD (default: today)")
     parser.add_argument("--dry-run", action="store_true", help="Print summary only, write no files")
     parser.add_argument("--debug", action="store_true", help="Print raw leg records for each matched trade")

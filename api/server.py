@@ -173,13 +173,36 @@ async def wealthsimple_latest():
         except Exception:
             needs_review = None
 
+    account_balances = None
+    if balances_file.exists():
+        try:
+            account_balances = json.loads(balances_file.read_text())
+        except Exception:
+            account_balances = None
+
+    open_positions = None
+    if positions_file.exists():
+        try:
+            open_positions = json.loads(positions_file.read_text())
+        except Exception:
+            open_positions = None
+
     if trades is None and needs_review is None:
         return JSONResponse(
             {'error': 'No Wealthsimple export found. Run tools/wealthsimple_export.py first.'},
             status_code=404,
         )
 
-    return JSONResponse({'trades': trades, 'needs_review': needs_review})
+    return JSONResponse({
+        'trades': trades,
+        'needs_review': needs_review,
+        'account_balances': account_balances,
+        'open_positions': open_positions,
+        'live_sync': {
+            'last_attempt': _ws_last_fetch_attempt or None,
+            'last_attempt_ok': _ws_last_fetch_ok,
+        },
+    })
 
 @app.post("/api/scan")
 async def scan(file: UploadFile = File(...)):

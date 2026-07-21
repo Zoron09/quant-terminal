@@ -10,3 +10,6 @@ data/screener_cache.db
 tools/session.json
 tools/ws_import_*.json
 tools/needs_review.json
+tools/account_balances.json
+tools/open_positions.json
+tools/*.tmp
