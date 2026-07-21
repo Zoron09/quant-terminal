@@ -4,24 +4,45 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>sin-list — Options Trading Journal</title>
+
+<!-- ================================================================
+     EXTERNAL FONT/ICON DEPENDENCIES — do not remove, reorder, or
+     "clean up" any of these 6 lines without checking with Meet first.
+     This exact block has broken (icons rendering as empty boxes,
+     Boska silently falling back) TWICE already this project from
+     edits elsewhere in <head> that didn't touch this block directly
+     but still need this comment as a tripwire. Each pair below is
+     [preconnect hint] + [actual stylesheet link] — keep them paired.
+     If icons/fonts break again: first check these 3 URLs resolve
+     with `curl`, THEN suspect the markup/CSS, in that order — the
+     jsdelivr/Fontshare CDNs have shown transient timeouts under a
+     short curl --max-time before; a slow real load looks identical
+     to a code regression but isn't one.
+     ================================================================ -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://api.fontshare.com">
+<link href="https://api.fontshare.com/v2/css?f[]=boska@400,500,600,700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.44.0/dist/tabler-icons.min.css">
+<!-- ================================================================ -->
+
 <style>
   :root {
-    --bg: #0E0E10;
-    --bg2: #161618;
+    --bg: #000000;
+    --bg2: #141416;
     --border-card: #2A2A2E;
-    --border-btn: #27272A;
-    --border-line: #1E1E22;
+    --border-btn: #2A2A2E;
+    --border-line: #1A1A1E;
     --text: #FAFAFA;
     --muted: #A1A1AA;
     --muted2: #52525B;
     --muted3: #3F3F46;
     --green: #34D399;
     --red: #F87171;
-    --yellow: #d29922;
+    --yellow: #FBBF24;
     --blue: #58a6ff;
-    --accent: #34D399;
+    --accent: #FAFAFA;
     --radius: 6px;
     --radius-card: 8px;
     --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
@@ -38,19 +59,36 @@
   ::-webkit-scrollbar-thumb { background: var(--border-btn); border-radius: 4px; }
 
   /* Layout */
-  header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-  header h1 { font-family: var(--font-serif); font-style: italic; font-size: 20px; font-weight: 400; letter-spacing: -0.2px; flex: 1; line-height: 1; display: flex; align-items: center; gap: 10px; }
+  header { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 10px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-family: 'Boska', var(--font-serif); color: #FAFAFA; font-style: italic; font-size: 32px; font-weight: 400; letter-spacing: -0.2px; line-height: 1; display: flex; align-items: baseline; gap: 10px; }
+  header h1 .logo-link { color: inherit; font: inherit; cursor: pointer; transition: opacity 0.15s; }
+  header h1 .logo-link:hover { opacity: 0.8; }
   header h1 .sep { font-family: var(--font-sans); font-style: normal; color: var(--muted3); font-size: 12px; }
   header h1 span { font-family: var(--font-sans); font-style: normal; color: var(--muted3); font-weight: 400; font-size: 11px; letter-spacing: 0.03em; }
-  header { position: sticky; top: 0; z-index: 50; background: rgba(14,14,16,0.97); backdrop-filter: blur(20px); }
-  #header-date { font-family: var(--font-mono); font-size: 10px; color: var(--muted3); margin-right: 4px; }
+  header { position: sticky; top: 0; z-index: 50; background: rgba(0,0,0,0.97); backdrop-filter: blur(20px); }
+  .header-left { display: flex; align-items: baseline; gap: 14px; flex: 1; min-width: 0; }
+  .sync-status { display: flex; align-items: center; gap: 6px; font-family: var(--font-sans); font-size: 11px; color: var(--muted2); white-space: nowrap; }
+  .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted3); flex-shrink: 0; }
+  .sync-dot.ok { background: #34D399; }
+  .sync-dot.fail { background: var(--yellow); }
+  .header-actions { display: flex; align-items: center; gap: 14px; flex-shrink: 0; flex-wrap: nowrap; }
+  .icon-group { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border-btn); border-radius: 999px; padding: 7px 14px; }
+  .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; background: transparent; border: 1px solid var(--border-btn); border-radius: var(--radius); color: var(--muted2); cursor: pointer; transition: all 0.15s; }
+  .icon-btn:hover { color: var(--text); border-color: var(--muted2); }
+  .icon-btn i { font-size: 16px; line-height: 1; }
+  .icon-btn-danger { color: rgba(248,113,113,0.75); border-color: rgba(248,113,113,0.25); }
+  .icon-btn-danger:hover { color: var(--red); border-color: var(--red); }
+  .account-switcher { display: flex; align-items: center; gap: 18px; margin-left: auto; }
+  .account-opt { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; transition: color 0.15s; white-space: nowrap; }
+  .account-opt:hover { color: var(--text); }
+  .account-opt.active { color: #FAFAFA; font-weight: 600; }
+  .account-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 
   /* Top tab bar */
-  .tabbar { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 10px 20px; display: flex; gap: 8px; flex-wrap: wrap; }
-  .tab { background: var(--bg3); border: 1px solid var(--border); border-radius: 999px; padding: 8px 16px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 7px; cursor: pointer; transition: all 0.15s; }
-  .tab:hover { color: var(--text); border-color: var(--text); }
-  .tab.active { background: rgba(52,211,153,0.15); border-color: var(--green); color: var(--green); }
-  .tab-icon { font-size: 14px; line-height: 1; }
+  .tabbar { background: transparent; border-bottom: 1px solid var(--border-line); padding: 10px 20px; display: flex; gap: 24px; flex-wrap: wrap; }
+  .tab { background: transparent; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 0 12px; font-size: 13px; color: var(--muted); cursor: pointer; transition: all 0.15s; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: #FAFAFA; border-bottom-color: #FAFAFA; }
 
   main.content { padding: 20px; max-width: 1600px; margin: 0 auto; }
   .page { display: none; }
@@ -97,13 +135,12 @@
   .neutral { color: var(--text); }
 
   /* Controls */
-  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
   button { background: transparent; color: var(--muted2); border: 1px solid var(--border-btn); border-radius: var(--radius); padding: 7px 14px; font-size: 12px; font-family: inherit; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
   button:hover { color: var(--text); border-color: var(--muted2); }
-  button.primary { background: var(--green); border-color: var(--green); color: #0A0A0C; font-weight: 700; }
-  button.primary:hover { background: #2bbd87; border-color: #2bbd87; color: #0A0A0C; }
+  button.primary { background: #FAFAFA; border-color: #FAFAFA; color: #000000; font-weight: 700; }
+  button.primary:hover { background: #E4E4E7; border-color: #E4E4E7; color: #000000; }
   button.danger { background: transparent; border-color: rgba(248,113,113,0.25); color: rgba(248,113,113,0.75); }
-  button.danger:hover { background: var(--red); border-color: var(--red); color: #0A0A0C; }
+  button.danger:hover { background: var(--red); border-color: var(--red); color: #000000; }
   input, select, textarea { background: var(--bg2); color: var(--text); border: 1px solid var(--border-btn); border-radius: var(--radius); padding: 7px 10px; font-size: 13px; font-family: inherit; outline: none; }
   input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   select option { background: var(--bg3); }
@@ -143,7 +180,6 @@
   .form-group label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .form-group input, .form-group select, .form-group textarea { width: 100%; }
   .form-group textarea { resize: vertical; min-height: 80px; }
-  .form-row { display: flex; gap: 10px; align-items: center; }
   .checkbox-group { display: flex; gap: 16px; align-items: center; }
   .checkbox-label { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
   .checkbox-label input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); }
@@ -201,24 +237,24 @@
   .cal-swatch-pos { background: rgba(52,211,153,0.15); border: 1px solid rgba(52,211,153,0.4); }
   .cal-swatch-neg { background: rgba(248,113,113,0.15); border: 1px solid rgba(248,113,113,0.4); }
   .cal-swatch-none { background: var(--border-line); border: 1px solid var(--border-btn); }
-
-  /* Goal / milestone progress */
-  .milestone-progress-wrap { width: 100%; height: 7px; background: var(--border-btn); border-radius: 5px; overflow: hidden; }
-  .milestone-progress-bar { height: 100%; width: 0%; background: var(--green); transition: width 0.3s; }
-  .thin-progress { background: var(--border-btn); border-radius: 3px; height: 4px; overflow: hidden; }
-  .thin-progress > div { height: 100%; border-radius: 3px; }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>sin-list <span class="sep">/</span><span>options journal</span></h1>
-  <div class="controls" style="flex:0">
-    <span id="header-date"></span>
-    <button onclick="triggerImport()" title="Import ws_import_*.json">Import</button>
-    <button onclick="syncLatest()" title="Fetch latest Wealthsimple export from server">Sync</button>
-    <button onclick="triggerReviewImport()" title="View needs_review.json">Needs Review</button>
-    <button class="danger" onclick="clearAllTrades()">Clear All</button>
+  <div class="header-left">
+    <h1><span class="logo-link" onclick="showPage('analytics')">sin-list</span> <span class="sep">/</span><span>options journal</span></h1>
+    <div class="sync-status" id="sync-status">
+      <span class="sync-dot" id="sync-dot"></span>
+      <span id="sync-text">checking…</span>
+    </div>
+  </div>
+  <div class="header-actions">
+    <div class="icon-group">
+      <button class="icon-btn" onclick="triggerImport()" title="Import" aria-label="Import"><i class="ti ti-upload"></i></button>
+      <button class="icon-btn" onclick="triggerReviewImport()" title="Needs review" aria-label="Needs review"><i class="ti ti-alert-circle"></i></button>
+      <button class="icon-btn icon-btn-danger" onclick="clearAllTrades()" title="Clear all" aria-label="Clear all"><i class="ti ti-trash"></i></button>
+    </div>
     <button class="primary" onclick="openAddModal()">+ Add Trade</button>
     <input type="file" id="ws-import-input" accept=".json" style="display:none" onchange="handleImportFile(this)">
     <input type="file" id="review-import-input" accept=".json" style="display:none" onchange="handleReviewFile(this)">
@@ -389,42 +425,6 @@
     </div>
   </section>
 
-  <!-- ============================ PAGE: Missed Trades ============================ -->
-  <section id="page-missed" class="page">
-    <div class="chart-card" style="margin-bottom:10px">
-      <h3 style="font-size:10px;margin-bottom:14px">Log Missed Trade</h3>
-      <p style="color:var(--muted3);font-size:11px;margin-bottom:14px">Setups you saw but didn't take. Stored locally, separate from your trade log — does not affect P&amp;L or any Trades DB stats.</p>
-      <div class="form-row" style="flex-wrap:wrap;gap:10px">
-        <input type="date" id="missed-date" style="width:140px">
-        <input type="text" id="missed-ticker" placeholder="Ticker" style="width:100px;text-transform:uppercase">
-        <input type="text" id="missed-reason" placeholder="Why didn't you take it? FOMO, hesitation, no setup…" style="flex:1;min-width:200px">
-        <input type="text" id="missed-notes" placeholder="Notes" style="flex:1;min-width:180px">
-        <button class="primary" onclick="addMissedTrade()">Log Missed Trade</button>
-      </div>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Date</th><th>Ticker</th><th>Reason</th><th>Notes</th><th>Actions</th></tr></thead>
-        <tbody id="missed-tbody"><tr><td colspan="5" class="empty-state">No missed trades logged.</td></tr></tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- ============================ PAGE: Milestones ============================ -->
-  <section id="page-milestones" class="page">
-    <div class="chart-card" style="max-width:560px">
-      <h3 style="font-size:10px;margin-bottom:22px">Monthly Profit Goal</h3>
-      <div class="form-row" style="margin-bottom:28px">
-        <span style="color:var(--muted2);font-size:12px">Target ($)</span>
-        <input type="number" id="milestone-goal" step="0.01" style="width:160px;font-family:var(--font-mono);font-size:15px;font-weight:500">
-        <button class="primary" onclick="saveMilestoneGoal()">Save Goal</button>
-      </div>
-      <div class="milestone-progress-wrap">
-        <div class="milestone-progress-bar" id="milestone-progress-bar"></div>
-      </div>
-      <div id="milestone-label" style="margin-top:12px;font-family:var(--font-mono);font-size:12px;color:var(--muted2)">Set a profit goal to track progress.</div>
-    </div>
-  </section>
 
 </main>
 
@@ -712,6 +712,68 @@ function updateAccFilter() {
 }
 
 // =============================================================================
+// Account switcher — Combined / per-account scope for the whole Analytics tab.
+// Reuses the exact same distinct-account discovery expression as
+// updateAccFilter() above ([...new Set(TRADES.map(t => t.acc).filter(Boolean))])
+// rather than a separate mechanism.
+// =============================================================================
+let activeAccount = 'combined';
+let excludeOutlierEnabled = false; // Cumulative P&L chart's "Exclude outlier" toggle -- off by default
+
+const ACCOUNT_META = {
+  'tfsa-IZ4djB0B3g': { label: 'TFSA', color: '#3B82F6' },
+  'Khich ke': { label: 'Khich ke', color: '#A78BFA' },
+};
+const COMBINED_COLOR = '#FAFAFA';
+const UNMAPPED_ACCOUNT_COLOR = '#71717A'; // fallback if a new account shows up that isn't in ACCOUNT_META yet
+
+function getAccountLabel(acc) {
+  return (ACCOUNT_META[acc] && ACCOUNT_META[acc].label) || acc;
+}
+
+function getAccountColor(acc) {
+  return (ACCOUNT_META[acc] && ACCOUNT_META[acc].color) || UNMAPPED_ACCOUNT_COLOR;
+}
+
+// The single source of truth every Analytics-tab computation reads from
+// instead of the raw TRADES array — Trades DB is untouched and keeps
+// reading TRADES/getFilteredTrades() directly, per the ticket's own scope.
+function getScopedTrades() {
+  if (activeAccount === 'combined') return TRADES;
+  return TRADES.filter(t => t.acc === activeAccount);
+}
+
+function renderAccountSwitcher() {
+  const el = document.getElementById('account-switcher');
+  if (!el) return;
+  const accs = [...new Set(TRADES.map(t => t.acc).filter(Boolean))].sort();
+  const options = ['combined', ...accs];
+  el.innerHTML = options.map(acc => {
+    const isCombined = acc === 'combined';
+    const label = isCombined ? 'Combined' : getAccountLabel(acc);
+    const color = isCombined ? COMBINED_COLOR : getAccountColor(acc);
+    const active = acc === activeAccount ? ' active' : '';
+    return `<div class="account-opt${active}" onclick="setActiveAccount('${escHtml(acc)}')"><span class="account-dot" style="background:${color}"></span>${escHtml(label)}</div>`;
+  }).join('');
+}
+
+function setActiveAccount(acc) {
+  activeAccount = acc;
+  renderAccountSwitcher();
+  // One-way sync into Trades DB's own existing filter dropdown, so the two
+  // controls don't silently disagree about which account is in view. Trades
+  // DB's dropdown can still be changed independently afterward (e.g. to dig
+  // into a different account while Analytics stays on the global selection)
+  // -- that's intentional, not a bug; see the accompanying report.
+  const sel = document.getElementById('filter-acc');
+  if (sel) {
+    sel.value = (acc === 'combined') ? '' : acc;
+    renderTable();
+  }
+  renderAnalyticsPage();
+}
+
+// =============================================================================
 // Sorting & filtering
 // =============================================================================
 function sortBy(col) {
@@ -912,6 +974,7 @@ async function submitTrade(e) {
     const idx = TRADES.findIndex(t => t.id === trade.id);
     if (idx >= 0) TRADES[idx] = trade; else TRADES.push(trade);
     updateAccFilter();
+    renderAccountSwitcher();
     renderTable();
     closeModal();
     showToast(editingId ? 'Trade updated.' : 'Trade added.', 'success');
@@ -926,6 +989,7 @@ async function clearAllTrades() {
     await dbClear();
     TRADES = [];
     updateAccFilter();
+    renderAccountSwitcher();
     renderTable();
     showToast('All trades deleted.', 'info');
   } catch (err) {
@@ -939,6 +1003,7 @@ async function deleteTrade(id) {
     await dbDelete(id);
     TRADES = TRADES.filter(t => t.id !== id);
     updateAccFilter();
+    renderAccountSwitcher();
     renderTable();
     showToast('Trade deleted.', 'info');
   } catch (err) {
@@ -994,6 +1059,7 @@ async function importTrades(data) {
     }
   }
   updateAccFilter();
+  renderAccountSwitcher();
   renderTable();
   showToast(`Imported ${imported} trade${imported !== 1 ? 's' : ''}, skipped ${skipped} duplicate${skipped !== 1 ? 's' : ''}.`, imported > 0 ? 'success' : 'info');
 }
@@ -1048,17 +1114,6 @@ function closeReviewModal() {
 }
 
 // =============================================================================
-// Pre-trade checklist modal (static, read-only for now)
-// =============================================================================
-function openChecklistModal() {
-  document.getElementById('checklist-modal').style.display = 'flex';
-}
-
-function closeChecklistModal() {
-  document.getElementById('checklist-modal').style.display = 'none';
-}
-
-// =============================================================================
 // Toast
 // =============================================================================
 function showToast(msg, type = 'info') {
@@ -1072,6 +1127,41 @@ function showToast(msg, type = 'info') {
     t.classList.remove('show');
     setTimeout(() => t.remove(), 300);
   }, 3500);
+}
+
+// =============================================================================
+// Live sync status indicator (dot + "synced X ago")
+// =============================================================================
+let _lastSyncInfo = null;
+
+function _relativeTimeAgo(unixSeconds) {
+  const sec = Math.max(0, Math.floor(Date.now() / 1000 - unixSeconds));
+  if (sec < 10) return 'just now';
+  if (sec < 60) return sec + ' sec ago';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return min + ' min ago';
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return hr + ' hour' + (hr !== 1 ? 's' : '') + ' ago';
+  const day = Math.floor(hr / 24);
+  return day + ' day' + (day !== 1 ? 's' : '') + ' ago';
+}
+
+function renderSyncStatus() {
+  const dot = document.getElementById('sync-dot');
+  const text = document.getElementById('sync-text');
+  if (!dot || !text) return;
+  if (!_lastSyncInfo || !_lastSyncInfo.last_attempt) {
+    dot.className = 'sync-dot fail';
+    text.textContent = 'not synced yet';
+    return;
+  }
+  dot.className = 'sync-dot ' + (_lastSyncInfo.last_attempt_ok ? 'ok' : 'fail');
+  text.textContent = 'synced ' + _relativeTimeAgo(_lastSyncInfo.last_attempt);
+}
+
+function updateSyncStatus(liveSync) {
+  _lastSyncInfo = liveSync || null;
+  renderSyncStatus();
 }
 
 // =============================================================================
@@ -1113,6 +1203,7 @@ async function syncLatest(silent = false) {
   }
   if (imported > 0) {
     updateAccFilter();
+    renderAccountSwitcher();
     renderTable();
     renderAnalyticsPage();
     showToast(`Synced ${imported} new trade${imported !== 1 ? 's' : ''}.`, 'success');
@@ -1130,10 +1221,7 @@ async function syncLatest(silent = false) {
 // =============================================================================
 const PAGE_RENDERERS = {
   analytics: () => renderAnalyticsPage(),
-  review: () => loadReviewNotes(),
   trades: () => renderTable(),
-  missed: () => renderMissedTable(),
-  milestones: () => loadMilestone(),
 };
 
 function showPage(name) {
@@ -1282,7 +1370,8 @@ function _fmtShortDate(dateStr) {
 }
 
 function renderAnalyticsStats() {
-  const s = computeStats(TRADES);
+  const trades = getScopedTrades();
+  const s = computeStats(trades);
   const wrEl = document.getElementById('an-stat-winrate');
   wrEl.textContent = s.n ? s.winRate.toFixed(1) + '%' : '—';
   wrEl.className = 'big-value ' + (s.n && s.winRate >= 50 ? 'pos' : s.n ? 'neg' : 'neutral');
@@ -1653,10 +1742,11 @@ function renderMilestoneProgress(goal) {
 // =============================================================================
 (async () => {
   try {
-    document.getElementById('header-date').textContent = new Date().toLocaleString('en-US', { month: 'short', year: 'numeric' });
+    setInterval(renderSyncStatus, 30000); // keep "X ago" advancing without a new fetch
     await openDB();
     TRADES = await dbGetAll();
     updateAccFilter();
+    renderAccountSwitcher();
     renderTable();
     syncLatest(true); // silent on boot — only toast if new trades found
     showPage('analytics'); // Analytics is the default landing view
