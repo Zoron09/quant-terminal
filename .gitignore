@@ -13,3 +13,9 @@ tools/needs_review.json
 tools/account_balances.json
 tools/open_positions.json
 tools/*.tmp
+
+# secfsdstools config — contains contact email; copy from .secfsdstools.cfg.example
+.secfsdstools.cfg
+
+# background scan job checkpoints (runtime artifacts)
+data/scan_jobs/

@@ -1,0 +1,13 @@
+[DEFAULT]
+# Shares code33-screener's VALIDATED dataset (absolute paths — the cfg is read
+# from cwd, and quant-terminal's server runs from the project root).
+# Deliberately NOT the ~/.secfsdstools.cfg dataset: that one was built with
+# noparallelprocessing=False, the setting responsible for the historic 32%%
+# silent-quarter-loss bug. The flags below match code33-screener's exactly.
+downloaddirectory = C:\Users\Meet Singh\code33-screener\data\dld
+dbdirectory = C:\Users\Meet Singh\code33-screener\data\db
+parquetdirectory = C:\Users\Meet Singh\code33-screener\data\parquet
+useragentemail = your-email@example.com
+autoupdate = True
+keepzipfiles = True
+noparallelprocessing = True

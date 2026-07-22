@@ -20,7 +20,8 @@ import time
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from utils.code33_engine import get_code33_data, CACHE_VERSION
+from utils.code33_adapter import get_code33_data, CACHE_VERSION
+from fastapi.concurrency import run_in_threadpool
 
 TICKER_CACHE = {}
 CACHE_TTL = 300  # 5 minutes
@@ -239,81 +240,171 @@ async def scan(file: UploadFile = File(...)):
             for _, row in df.iterrows()
         }
 
-    import time
-    start = time.time()
-    
     tickers = df['Symbol'].str.upper().tolist() \
         if 'Symbol' in df.columns else []
 
     print(f"[SCAN] START - file received: {file.filename}")
     print(f"[SCAN] tickers count: {len(tickers)}")
-    print(f"[SCAN] first 5 tickers: {tickers[:5]}")
 
-    import concurrent.futures
+    return _start_scan_job(tickers, sector_map, company_map, mcap_map)
 
+
+# ── Background scan job — sequential, checkpointed, resumable ────────────────
+# The pipeline is strictly sequential (never validated under concurrency), so
+# a 300-500 ticker scan runs 1.5-5+ hours. One daemon thread walks the list,
+# one ticker at a time, appending each result to a per-job checkpoint CSV as
+# it lands. A scan interrupted by a server restart resumes from the checkpoint
+# when the same ticker list is uploaded again (job identity = hash of the
+# sorted ticker list). The frontend polls GET /api/scan/status for progress.
+import csv as _csv
+import hashlib
+import time
+
+SCAN_JOBS_DIR = Path(__file__).resolve().parent.parent / 'data' / 'scan_jobs'
+SCAN_FIELDS = ['ticker', 'status', 'rev_yoy', 'margin']
+
+_scan_lock = threading.Lock()   # guards _scan_state / thread start, NOT the pipeline
+_scan_state = {'running': False, 'job_id': None, 'total': 0, 'completed': 0,
+               'passed': 0, 'excluded_banks': 0, 'insufficient': 0,
+               'current_ticker': None, 'done': False, 'error': None}
+_scan_maps = {'sector': {}, 'company': {}, 'mcap': {}}
+
+
+def _safe3(lst):
+    if not lst: return [0, 0, 0]
+    lst = [x for x in lst if x is not None]
+    if len(lst) < 3:
+        lst = ([0] * (3 - len(lst))) + lst
+    return [round(x, 1) for x in lst[-3:]]
+
+
+def _job_checkpoint_path(job_id: str) -> Path:
+    return SCAN_JOBS_DIR / f"scan_{job_id}.csv"
+
+
+def _read_checkpoint(job_id: str) -> dict:
+    path = _job_checkpoint_path(job_id)
+    if not path.exists():
+        return {}
+    with path.open(newline='', encoding='utf-8') as fh:
+        return {row['ticker']: row for row in _csv.DictReader(fh)}
+
+
+def _scan_worker(job_id: str, tickers: list):
+    done_rows = _read_checkpoint(job_id)
+    path = _job_checkpoint_path(job_id)
+    write_header = not path.exists()
+    try:
+        with path.open('a', newline='', encoding='utf-8') as fh:
+            writer = _csv.DictWriter(fh, fieldnames=SCAN_FIELDS)
+            if write_header:
+                writer.writeheader()
+                fh.flush()
+            for t in tickers:
+                if t in done_rows:
+                    continue
+                with _scan_lock:
+                    _scan_state['current_ticker'] = t
+                try:
+                    # Adapter's internal lock serializes this against every
+                    # other endpoint's pipeline call — strictly one at a time.
+                    data = get_code33_data(t, CACHE_VERSION)
+                    status = data.get('status', 'insufficient')
+                    row = {
+                        'ticker': t, 'status': status,
+                        'rev_yoy': ';'.join(str(x) for x in _safe3(data.get('rev_yoy', []))),
+                        'margin': ';'.join(str(x) for x in _safe3(data.get('npm', []))),
+                    }
+                except Exception as e:
+                    print(f"[SCAN ERROR] {t}: {e}")
+                    row = {'ticker': t, 'status': 'insufficient', 'rev_yoy': '', 'margin': ''}
+                writer.writerow(row)
+                fh.flush()
+                done_rows[t] = row
+                with _scan_lock:
+                    _scan_state['completed'] = len(done_rows)
+                    if row['status'] in ('green', 'yellow'):
+                        _scan_state['passed'] += 1
+                    elif row['status'] == 'excluded_bank':
+                        _scan_state['excluded_banks'] += 1
+                    elif row['status'] == 'insufficient':
+                        _scan_state['insufficient'] += 1
+        with _scan_lock:
+            _scan_state['running'] = False
+            _scan_state['done'] = True
+            _scan_state['current_ticker'] = None
+        print(f"[SCAN] COMPLETE - {len(done_rows)}/{len(tickers)} tickers")
+    except Exception as e:
+        with _scan_lock:
+            _scan_state['running'] = False
+            _scan_state['error'] = str(e)
+        print(f"[SCAN] FATAL: {e}")
+
+
+def _start_scan_job(tickers, sector_map, company_map, mcap_map):
+    job_id = hashlib.sha1(','.join(sorted(set(tickers))).encode()).hexdigest()[:12]
+    with _scan_lock:
+        if _scan_state['running']:
+            return JSONResponse(
+                {'error': 'scan already running', 'job_id': _scan_state['job_id']},
+                status_code=409,
+            )
+        SCAN_JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        already = len(_read_checkpoint(job_id))
+        _scan_state.update({
+            'running': True, 'job_id': job_id, 'total': len(tickers),
+            'completed': already, 'passed': 0, 'excluded_banks': 0,
+            'insufficient': 0, 'current_ticker': None, 'done': False, 'error': None,
+        })
+        # Recount stats from checkpoint so resume shows correct running totals
+        for row in _read_checkpoint(job_id).values():
+            if row['status'] in ('green', 'yellow'):
+                _scan_state['passed'] += 1
+            elif row['status'] == 'excluded_bank':
+                _scan_state['excluded_banks'] += 1
+            elif row['status'] == 'insufficient':
+                _scan_state['insufficient'] += 1
+        _scan_maps['sector'] = sector_map
+        _scan_maps['company'] = company_map
+        _scan_maps['mcap'] = mcap_map
+    threading.Thread(target=_scan_worker, args=(job_id, tickers), daemon=True).start()
+    return JSONResponse({'job_id': job_id, 'total': len(tickers),
+                         'resumed_from': already, 'running': True})
+
+
+@app.get("/api/scan/status")
+async def scan_status():
+    with _scan_lock:
+        state = dict(_scan_state)
     winners = []
-    insufficient = 0
-    crashes = 0
-    count_green = 0
-    count_yellow = 0
-    count_red = 0
-    total = len(tickers)
-
-    def safe3(lst):
-        if not lst: return [0, 0, 0]
-        lst = [x for x in lst if x is not None]
-        if len(lst) < 3:
-            lst = ([0] * (3 - len(lst))) + lst
-        return [round(x, 1) for x in lst[-3:]]
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-        future_to_ticker = {executor.submit(get_code33_data, t, CACHE_VERSION): t for t in tickers}
-        for future in concurrent.futures.as_completed(future_to_ticker):
-            ticker = future_to_ticker[future]
-            try:
-                data = future.result(timeout=15)
-                if not data:
-                    insufficient += 1
-                    continue
-                
-                status = data.get('status', 'insufficient')
-                if status == 'green': count_green += 1
-                elif status == 'yellow': count_yellow += 1
-                elif status == 'red': count_red += 1
-                elif status == 'insufficient': insufficient += 1
-
-                if status not in ('green', 'yellow'):
-                    continue
-
+    excluded = []
+    if state['job_id']:
+        for t, row in _read_checkpoint(state['job_id']).items():
+            if row['status'] in ('green', 'yellow'):
                 winners.append({
-                    'ticker':  ticker,
-                    'company': company_map.get(ticker, '') or data.get('company_name', ticker),
-                    'sector':  sector_map.get(ticker, 'Unknown'),
-                    'mcap':    mcap_map.get(ticker, 'N/A'),
-                    'eps':     safe3(data.get('eps_yoy', [])),
-                    'rev':     safe3(data.get('rev_yoy', [])),
-                    'margin':  safe3(data.get('npm', [])),
-                    'status':  status,
+                    'ticker': t,
+                    'company': _scan_maps['company'].get(t, '') or t,
+                    'sector': _scan_maps['sector'].get(t, 'Unknown'),
+                    'mcap': _scan_maps['mcap'].get(t, 'N/A'),
+                    'eps': [0, 0, 0],
+                    'rev': [float(x) for x in row['rev_yoy'].split(';')] if row['rev_yoy'] else [0, 0, 0],
+                    'margin': [float(x) for x in row['margin'].split(';')] if row['margin'] else [0, 0, 0],
+                    'status': row['status'],
                 })
-            except concurrent.futures.TimeoutError:
-                print(f"[SCAN ERROR] {ticker}: Timeout")
-                insufficient += 1
-                crashes += 1
-            except Exception as e:
-                print(f"[SCAN ERROR] {ticker}: {e}")
-                insufficient += 1
-                crashes += 1
-
-    print(f"[SCAN] COMPLETE - green: {count_green}, yellow: {count_yellow}, red: {count_red}, insufficient: {insufficient}, crashes: {crashes}")
-    print(f"[SCAN] first winner: {winners[0] if winners else 'none'}")
-    print(f"[SCAN] duration: {time.time()-start:.1f}s")
+            elif row['status'] == 'excluded_bank':
+                excluded.append(t)
     return JSONResponse({
+        'running': state['running'], 'done': state['done'], 'error': state['error'],
+        'total': state['total'], 'completed': state['completed'],
+        'current_ticker': state['current_ticker'],
         'winners': winners,
+        'excluded_banks': excluded,
         'meta': {
-            'total': total,
+            'total': state['total'],
             'passed': len(winners),
-            'insufficient': insufficient,
-        }
+            'insufficient': state['insufficient'],
+            'excluded_banks': len(excluded),
+        },
     })
 
 @app.get("/api/ticker/{ticker}")
@@ -328,9 +419,11 @@ async def ticker_data(ticker: str):
             return JSONResponse(cached)
     
     try:
-        data = get_code33_data(t, CACHE_VERSION)
+        # Offloaded so the event loop stays free; the adapter's global lock
+        # still guarantees only one pipeline call runs at a time server-wide.
+        data = await run_in_threadpool(get_code33_data, t, CACHE_VERSION)
         if not data:
-            return JSONResponse({'error': 'No data'}, 
+            return JSONResponse({'error': 'No data'},
                                 status_code=404)
         
         data['status'] = data.get('status', 'insufficient')
@@ -506,7 +599,7 @@ async def financials(ticker: str):
             c33_rev_yoy_by_date = {}
             c33_margin_by_date = {}
             try:
-                c33 = get_code33_data(t, n_quarters=12)
+                c33 = await run_in_threadpool(get_code33_data, t, CACHE_VERSION, 12)
                 rev_dates = c33.get('rev_end_dates') or []
                 rev_vals = c33.get('rev') or []
                 rev_yoy_vals = c33.get('rev_yoy') or []
@@ -810,7 +903,7 @@ async def ownership(ticker: str):
 
 @app.get("/api/peers/{ticker}")
 async def peers(ticker: str):
-    from utils.code33_engine import get_code33_data, CACHE_VERSION
+    from utils.code33_adapter import get_code33_data, CACHE_VERSION
     try:
         info = yf.Ticker(ticker.upper()).info
         # Get peers from recommendationKey or sector peers
@@ -839,7 +932,7 @@ async def peers(ticker: str):
         peers_data = []
         for p in peer_tickers:
             try:
-                d = get_code33_data(p, CACHE_VERSION)
+                d = await run_in_threadpool(get_code33_data, p, CACHE_VERSION)
                 if not d:
                     continue
                 last_eps = next((x for x in reversed(
