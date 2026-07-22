@@ -6,7 +6,12 @@
 ---
 
 ## ABSOLUTE RULES — READ BEFORE TOUCHING ANYTHING
-1. NEVER touch `utils/code33_engine.py` or anything in `utils/` except `secfs_revenue.py` and `secfs_net_margin.py`
+1. The Code 33 engine lives in the EXTERNAL `code33-screener` project (installed editable
+   into `.venv`); `utils/code33_adapter.py` is the only in-repo engine file. NEVER touch
+   the `code33-screener` repo from quant-terminal work sessions — engine changes happen
+   there, under its own regression suite (`tools/regression_check.py`, 19-ticker baseline).
+   (Old rule "never touch utils/code33_engine.py" retired 2026-07-22 — that file and its
+   5 helper modules were deleted in the code33-swap branch by explicit owner instruction.)
 2. NEVER touch world grid CSS or navigation JS in `frontend/index.html`
 3. NEVER use `&&` in PowerShell — use `;` instead
 4. ALWAYS use Python patch approach for frontend changes (decode `__bundler/template` JSON → patch → re-encode with `<\/` escaping → write back)
@@ -105,7 +110,9 @@ GET  /api/ownership/{ticker}       → {institutional: [{name, pct}], insiders: 
 
 GET  /api/peers/{ticker}           → {ticker, peers: [{ticker, rev_yoy, npm, status}]}
 
-POST /api/scan                     → {winners: [{ticker, company, sector, mcap, eps, rev, margin, status}], meta: {total, passed, insufficient}}
+POST /api/scan                     → starts background job: {job_id, total, resumed_from, running} (409 {error, job_id} if one is already running)
+
+GET  /api/scan/status              → {running, done, error, total, completed, current_ticker, winners: [{ticker, company, sector, mcap, eps, rev, margin, status}], excluded_banks: [tickers], meta: {total, passed, insufficient, excluded_banks}}
 
 ---
 
@@ -160,26 +167,33 @@ POST /api/scan                     → {winners: [{ticker, company, sector, mcap
 ---
 
 ## ENGINE STATUS
-- **CACHE_VERSION:** v30
-- **Location:** `utils/code33_engine.py`
-- **Signals:** ACTIVE / BROKEN / NOT ACTIVE / INSUFFICIENT / NOT APPLICABLE
-- **Sources:** secfsdstools primary, edgartools targeted per-quarter gap-fill only (Finnhub
-  and FMP fully removed 2026-07-06; raw hand-rolled SEC-XBRL tier and yfinance rev/NI
-  fallback also removed same day — only two sources remain)
-- **EPS:** Removed from Code33 signal AND no longer fetched at all (was Finnhub/EDGAR;
-  out of scope entirely as of 2026-07-06) — manual verification via StockAnalysis.com
-- **Quarter selection:** quarters-first target-date approach (2026-07-06/07) — computes the
-  8 fiscal quarter-end dates that should exist as of today from each ticker's real
-  `fy_end_month`, checks secfsdstools against that named list, targeted-fills only the named
-  gaps from edgartools, reports genuinely-missing quarters by date via
-  `sources['rev_missing']`/`sources['ni_missing']` instead of a generic INSUFFICIENT.
-  Displayed dates are the real filed period-end, not the synthetic target. Fiscal
-  quarter/year labels (`_get_fq_fy`) computed directly from `fy_end_month` — fixed
-  mislabeling on non-Dec fiscal years (confirmed wrong before fix: CMP/Sept FYE, NVDA/Jan
-  52-53-week FYE; TRT's pre-existing xfail in `tests/test_preflight_checks.py` references
-  this same class of bug).
-- Raw `'ni'` (absolute net income $) is intentionally always empty — neither remaining
-  source exposes it, only the margin ratio.
+- **CACHE_VERSION:** v31-code33-screener
+- **Location:** external `code33-screener` project (`pip install -e`), adapted through
+  `utils/code33_adapter.py` — the ONLY in-repo engine file. The old
+  `utils/code33_engine.py` + 5 helper modules (`secfs_revenue`, `secfs_net_margin`,
+  `edgar_revenue`, `edgar_net_margin`, `sec_edgar`) were deleted 2026-07-22
+  (code33-swap branch).
+- **Pipeline:** secfsdstools primary (VALIDATED dataset shared with code33-screener via
+  project-root `.secfsdstools.cfg` — absolute paths, gitignored, example committed;
+  deliberately NOT the ~/.secfsdstools.cfg dataset, which was built with the unsafe
+  parallel-download settings), live-EDGAR gap fill for quarters the bulk mirror lacks.
+  Validated against SEC filings, a 19-ticker regression baseline, and a 568-ticker
+  universe run in the code33-screener project.
+- **Concurrency:** pipeline is STRICTLY SEQUENTIAL — a global lock inside
+  `utils/code33_adapter.py` serializes every pipeline call server-wide (all endpoints +
+  the background scan job). Endpoints offload via `run_in_threadpool` so the event loop
+  stays live. Never add a worker pool around the pipeline.
+- **Scan:** `/api/scan` is now a background, checkpointed, resumable job
+  (`data/scan_jobs/scan_<hash>.csv`, job identity = hash of sorted ticker list; frontend
+  polls `GET /api/scan/status` every 3s). Real scans run hours at 15-40s/ticker.
+- **Banks:** bank/depository tickers return `status='excluded_bank'` (pipeline refuses to
+  score them — their revenue is silently wrong under standard XBRL tags, confirmed on
+  FULT). Frontend shows an explicit "EXCLUDED — BANK, NOT YET SUPPORTED" badge and an
+  "Excluded — Banks" scan pill, never a silent disappearance.
+- **Status semantics:** `_c33_status` (green/yellow/red/insufficient 3-state badge)
+  ported VERBATIM into the adapter — unchanged frontend contract.
+- **EPS:** still out of scope entirely; raw `'ni'` still intentionally empty in the
+  adapter's output (contract compatibility).
 
 ---
 
@@ -194,6 +208,21 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-07-22 — **Code 33 engine swap (branch `code33-swap`, NOT merged to main)**: old
+in-repo engine fully removed (`utils/code33_engine.py` + secfs_revenue/secfs_net_margin/
+edgar_revenue/edgar_net_margin/sec_edgar, plus their orphaned consumers
+tools/preflight_checks.py, tools/watchlist_ticker_audit.py, tools/engine_accuracy_check.py,
+tools/run_c33_batch.py, tests/test_preflight_checks.py) and replaced by the externally
+validated code33-screener pipeline via `utils/code33_adapter.py` (global pipeline lock,
+verbatim `_c33_status` port, ascending-array contract preserved). `/api/scan` rebuilt as a
+background checkpointed resumable job with `GET /api/scan/status` polling; frontend
+patched (tools/patch_frontend_scan.py — runScan polling loop, scan progress line,
+excluded-banks pill, EXCLUDED — BANK badge) within the bundled-SPA patch rules; world
+grid/nav untouched. Wealthsimple/journal/analytics/portfolio paths confirmed untouched
+by grep before AND after deletion. Partial validation passed (bank exclusion end-to-end +
+regression-baseline spot checks); full 300-500-ticker scan deliberately NOT yet run —
+awaiting final ticker list. See ENGINE STATUS above for the new architecture.
+
 2026-07-13 — **4-commit sequence complete**: TRT's `-230,303%` margin corruption led to a
 full chain — `8f620c4` fixed the root-cause `_to_m()` unit-conversion bug (4 duplicate
 copies across secfs_*/edgar_* modules), `64a5757` routed `/api/financials/{ticker}` through
