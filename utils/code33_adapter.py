@@ -107,6 +107,14 @@ def _fq_label(fy, fp) -> str:
     return f"{fp} FY{str(fy)[2:]}"
 
 
+def normalize_ticker(ticker: str) -> str:
+    """Share-class notation differs by source: screener exports and most data
+    vendors use a dot (MOG.A, BRK.B), SEC's company_tickers.json uses a hyphen
+    (MOG-A, BRK-B). Without this, every dual-class ticker silently fails CIK
+    resolution and lands in 'insufficient' looking like missing data."""
+    return ticker.strip().upper().replace('.', '-')
+
+
 def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION, n_quarters: int = 8) -> dict:
     """Same contract as the old engine: never raises, ascending arrays.
 
@@ -115,7 +123,7 @@ def get_code33_data(ticker: str, cache_v: str = CACHE_VERSION, n_quarters: int =
     """
     try:
         with _PIPELINE_LOCK:
-            return _get_code33_data_inner(ticker.upper(), n_quarters)
+            return _get_code33_data_inner(normalize_ticker(ticker), n_quarters)
     except Exception:
         log.exception("code33_adapter: %s unhandled error", ticker)
         return _empty_result('insufficient', 'unhandled error')
