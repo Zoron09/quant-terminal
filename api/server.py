@@ -261,13 +261,53 @@ import hashlib
 import time
 
 SCAN_JOBS_DIR = Path(__file__).resolve().parent.parent / 'data' / 'scan_jobs'
-SCAN_FIELDS = ['ticker', 'status', 'rev_yoy', 'margin']
+SCAN_FIELDS = ['ticker', 'status', 'rev_yoy', 'margin', 'reason']
+
+# ── Circuit breaker ─────────────────────────────────────────────────────────
+# Mirrors code33-screener/tools/universe_scan.py. A scan runs for hours; if
+# something breaks systematically partway through (dataset gone stale, SEC
+# rate-limiting, a whole sector hitting one tag gap), continuing just bakes
+# the failure into the rest of the results. Two triggers:
+#   1. the same root cause >BREAKER_CONSECUTIVE tickers in a row
+#   2. one root cause dominating a broader stretch (>= BREAKER_WINDOW_HITS of
+#      the last BREAKER_WINDOW), which catches a systematic problem that a
+#      few interleaved successes would otherwise mask
+# Tripping stops the job and leaves the checkpoint intact — nothing already
+# completed is lost, and the same upload resumes from where it stopped.
+BREAKER_CONSECUTIVE = 10
+BREAKER_WINDOW = 30
+BREAKER_WINDOW_HITS = 20
 
 _scan_lock = threading.Lock()   # guards _scan_state / thread start, NOT the pipeline
 _scan_state = {'running': False, 'job_id': None, 'total': 0, 'completed': 0,
                'passed': 0, 'excluded_banks': 0, 'insufficient': 0,
-               'current_ticker': None, 'done': False, 'error': None}
+               'current_ticker': None, 'done': False, 'error': None,
+               'stopped_early': False, 'stop_reason': None}
 _scan_maps = {'sector': {}, 'company': {}, 'mcap': {}}
+
+
+def _classify_failure(status: str, data: dict = None, exc: Exception = None) -> str:
+    """Normalized root cause for a ticker that produced no usable verdict, or
+    '' when the result is clean (green/yellow/red/excluded_bank all count as
+    real answers). Normalized so variants of the same cause group together —
+    'only 3 usable revenue quarters' and 'only 5 ...' must land in one bucket
+    for the breaker to see the pattern."""
+    if exc is not None:
+        return f"exception: {type(exc).__name__}"
+    if status != 'insufficient':
+        return ''
+    raw = ((data or {}).get('excluded_reason') or '').lower()
+    if 'no 10-q/10-k filings' in raw:
+        return 'no 10-Q/10-K filings in dataset'
+    if 'usable revenue quarters' in raw:
+        return 'insufficient revenue history'
+    if 'could not resolve' in raw:
+        return 'ticker/CIK resolution failed'
+    if 'unhandled error' in raw:
+        return 'pipeline unhandled error'
+    if not raw:
+        return 'insufficient (unspecified)'
+    return f"other: {raw[:60]}"
 
 
 def _safe3(lst):
@@ -300,6 +340,10 @@ def _scan_worker(job_id: str, tickers: list):
             if write_header:
                 writer.writeheader()
                 fh.flush()
+            consecutive_reason, consecutive_count = None, 0
+            recent_reasons = []
+            tripped = None
+
             for t in tickers:
                 if t in done_rows:
                     continue
@@ -310,14 +354,18 @@ def _scan_worker(job_id: str, tickers: list):
                     # other endpoint's pipeline call — strictly one at a time.
                     data = get_code33_data(t, CACHE_VERSION)
                     status = data.get('status', 'insufficient')
+                    reason = _classify_failure(status, data=data)
                     row = {
                         'ticker': t, 'status': status,
                         'rev_yoy': ';'.join(str(x) for x in _safe3(data.get('rev_yoy', []))),
                         'margin': ';'.join(str(x) for x in _safe3(data.get('npm', []))),
+                        'reason': reason,
                     }
                 except Exception as e:
                     print(f"[SCAN ERROR] {t}: {e}")
-                    row = {'ticker': t, 'status': 'insufficient', 'rev_yoy': '', 'margin': ''}
+                    reason = _classify_failure('insufficient', exc=e)
+                    row = {'ticker': t, 'status': 'insufficient', 'rev_yoy': '',
+                           'margin': '', 'reason': reason}
                 writer.writerow(row)
                 fh.flush()
                 done_rows[t] = row
@@ -329,6 +377,46 @@ def _scan_worker(job_id: str, tickers: list):
                         _scan_state['excluded_banks'] += 1
                     elif row['status'] == 'insufficient':
                         _scan_state['insufficient'] += 1
+
+                # ── circuit breaker ──────────────────────────────────────
+                reason = row['reason']
+                if reason:
+                    consecutive_count = consecutive_count + 1 if reason == consecutive_reason else 1
+                    consecutive_reason = reason
+                else:
+                    consecutive_reason, consecutive_count = None, 0
+                recent_reasons.append(reason)
+                if len(recent_reasons) > BREAKER_WINDOW:
+                    recent_reasons.pop(0)
+
+                if consecutive_count > BREAKER_CONSECUTIVE:
+                    tripped = (f"stopped early: {consecutive_count} tickers in a row failed with "
+                               f"'{consecutive_reason}' (last: {t}) — systematic problem, not "
+                               f"per-ticker noise. {len(done_rows)} results kept; re-upload the "
+                               f"same list to resume.")
+                elif len(recent_reasons) == BREAKER_WINDOW:
+                    counts = {}
+                    for r in recent_reasons:
+                        if r:
+                            counts[r] = counts.get(r, 0) + 1
+                    if counts:
+                        top_reason, top_n = max(counts.items(), key=lambda kv: kv[1])
+                        if top_n >= BREAKER_WINDOW_HITS:
+                            tripped = (f"stopped early: {top_n} of the last {BREAKER_WINDOW} tickers "
+                                       f"failed with '{top_reason}' (last: {t}) — dominant failure "
+                                       f"pattern. {len(done_rows)} results kept; re-upload the same "
+                                       f"list to resume.")
+
+                if tripped:
+                    print(f"[SCAN] CIRCUIT BREAKER — {tripped}")
+                    with _scan_lock:
+                        _scan_state['running'] = False
+                        _scan_state['current_ticker'] = None
+                        _scan_state['stopped_early'] = True
+                        _scan_state['stop_reason'] = tripped
+                        _scan_state['error'] = tripped
+                    return
+
         with _scan_lock:
             _scan_state['running'] = False
             _scan_state['done'] = True
@@ -355,6 +443,7 @@ def _start_scan_job(tickers, sector_map, company_map, mcap_map):
             'running': True, 'job_id': job_id, 'total': len(tickers),
             'completed': already, 'passed': 0, 'excluded_banks': 0,
             'insufficient': 0, 'current_ticker': None, 'done': False, 'error': None,
+            'stopped_early': False, 'stop_reason': None,
         })
         # Recount stats from checkpoint so resume shows correct running totals
         for row in _read_checkpoint(job_id).values():
@@ -393,12 +482,23 @@ async def scan_status():
                 })
             elif row['status'] == 'excluded_bank':
                 excluded.append(t)
+    # Failure-reason tally so a partial/stopped run is diagnosable from the
+    # status payload alone, without opening the checkpoint CSV.
+    reason_counts = {}
+    if state['job_id']:
+        for row in _read_checkpoint(state['job_id']).values():
+            r = (row.get('reason') or '').strip()
+            if r:
+                reason_counts[r] = reason_counts.get(r, 0) + 1
+
     return JSONResponse({
         'running': state['running'], 'done': state['done'], 'error': state['error'],
+        'stopped_early': state['stopped_early'], 'stop_reason': state['stop_reason'],
         'total': state['total'], 'completed': state['completed'],
         'current_ticker': state['current_ticker'],
         'winners': winners,
         'excluded_banks': excluded,
+        'failure_reasons': reason_counts,
         'meta': {
             'total': state['total'],
             'passed': len(winners),
