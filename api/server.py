@@ -305,6 +305,20 @@ def _classify_failure(status: str, data: dict = None, exc: Exception = None) -> 
         return 'ticker/CIK resolution failed'
     if 'unhandled error' in raw:
         return 'pipeline unhandled error'
+    # Causes raised by the success path (both series pulled, but a leg had
+    # fewer than the 3 clean values _c33_status needs). Bucket names match
+    # code33-screener's universe_scan.py taxonomy so the two projects'
+    # failure reports stay comparable.
+    if 'no reported revenue' in raw:
+        return 'no reported revenue (pre-revenue company)'
+    if 'usable net margin' in raw:
+        return 'insufficient margin data'
+    if 'year-ago quarter missing' in raw:
+        return 'quarter sequence broken'
+    if 'year-ago revenue is zero' in raw:
+        return 'zero year-ago revenue'
+    if 'quarters of revenue filings' in raw:
+        return 'insufficient revenue history'
     if not raw:
         return 'insufficient (unspecified)'
     return f"other: {raw[:60]}"

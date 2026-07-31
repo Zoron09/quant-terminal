@@ -28,6 +28,7 @@ disappearance.
 import logging
 import threading
 from datetime import date
+from typing import Optional
 
 from code33 import edgar_fill
 from code33.pipeline import get_complete_net_margin, get_complete_revenue_series
@@ -83,6 +84,83 @@ def _c33_status(rev_rates: list, npm_vals: list = None) -> tuple:
         return 'green', rev_d1, rev_d2
 
     return 'yellow', rev_d1, rev_d2
+
+
+_YOY_MIN_GAP_DAYS = 330
+_YOY_MAX_GAP_DAYS = 400
+
+
+def _yoy_miss_cause(rev_points: list, idx: int) -> Optional[str]:
+    """Why yoy_for() could not produce a YoY for rev_points[idx].
+
+    Mirrors yoy_for's walk exactly (same window, same falsy-prior test) so the
+    diagnosis can never disagree with the number actually emitted. Returns None
+    when a YoY IS computable — i.e. there is no miss to explain.
+    """
+    cur = rev_points[idx]
+    for prior in rev_points[idx + 1:]:
+        gap = (cur.period_end - prior.period_end).days
+        if _YOY_MIN_GAP_DAYS <= gap <= _YOY_MAX_GAP_DAYS:
+            return None if prior.value else 'zero_base'
+        if gap > _YOY_MAX_GAP_DAYS:
+            return 'year_ago_missing'
+    return 'history_too_short'
+
+
+def _diagnose_insufficient(all_rev_points: list, rev_points: list,
+                           display_asc: list, rev_yoy: list, npm_vals: list) -> str:
+    """Root cause for a ticker _c33_status called 'insufficient' on the SUCCESS
+    path — both series pulled fine, but a leg never reached the 3 clean values
+    the 3-consecutive-quarter Code 33 window needs.
+
+    This path used to hardcode excluded_reason='' and every such ticker landed
+    in one anonymous bucket (11 of 540 on the last full scan, all reported as
+    'insufficient (unspecified)'), which told the operator nothing and gave the
+    circuit breaker no cause to group on. Causes below are ordered
+    most-explanatory first; each was confirmed against real traced tickers.
+    """
+    n_yoy = len([x for x in rev_yoy if x is not None])
+    n_npm = len(npm_vals)  # already compacted upstream — no Nones to filter
+
+    # 1. No revenue at all. Checked first because it breaks BOTH legs at once
+    #    and is a property of the company, not a data defect: net margin is
+    #    undefined against a zero denominator (net_margin.py guards revenue!=0)
+    #    and so is YoY against a zero base. Verified against live EDGAR on
+    #    RVMD/DNLI/SYRE — they file a revenue line reporting exactly $0.00.
+    blank = sum(1 for p in all_rev_points if p.value is None or p.value == 0)
+    if all_rev_points and blank * 2 >= len(all_rev_points):
+        return (f"no reported revenue in {blank} of {len(all_rev_points)} quarters "
+                f"- net margin and YoY are undefined against a zero base")
+
+    # 2. Revenue side is fine and it is the margin leg that is short, so net
+    #    income is the missing ingredient (revenue here is present and non-zero).
+    if n_npm < 3 <= n_yoy:
+        return (f"only {n_npm} of 3 quarters have a usable net margin "
+                f"- net income missing for {len(display_asc) - n_npm} of "
+                f"{len(display_asc)} revenue quarters")
+
+    # 3. The YoY leg is short. Three genuinely different causes hide here, so
+    #    report which one actually dominates rather than lumping them.
+    causes: dict = {}
+    for p in display_asc:
+        cause = _yoy_miss_cause(rev_points, rev_points.index(p))
+        if cause:
+            causes[cause] = causes.get(cause, 0) + 1
+
+    top = max(causes, key=causes.get) if causes else 'history_too_short'
+    hits = causes.get(top, 0)
+    if top == 'year_ago_missing':
+        detail = (f"year-ago quarter missing for {hits} of {len(display_asc)} "
+                  f"quarters")
+    elif top == 'zero_base':
+        detail = (f"year-ago revenue is zero for {hits} of {len(display_asc)} "
+                  f"quarters")
+    else:
+        detail = (f"only {len(rev_points)} quarters of revenue filings "
+                  f"- 7+ needed to form 3 year-over-year pairs")
+
+    also = " (net margin also short)" if n_npm < 3 else ""
+    return f"only {n_yoy} of 3 revenue YoY comparisons available - {detail}{also}"
 
 
 def _empty_result(status: str, reason: str = '') -> dict:
@@ -193,6 +271,16 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
 
     status, _d1, _d2 = _c33_status(rev_yoy, npm_vals)
 
+    # _c33_status can still say 'insufficient' here even though both series
+    # pulled cleanly — it needs 3 clean values per leg and a leg can fall short
+    # for several genuinely different reasons. Name the actual one; a blank
+    # reason on this path is what produced the unlabelled-failure bucket.
+    reason = ''
+    if status == 'insufficient':
+        reason = _diagnose_insufficient(
+            rev_series.points, rev_points, display_asc, rev_yoy, npm_vals)
+        log.info("code33_adapter: %s insufficient - %s", ticker, reason)
+
     def _src_summary(points, attr):
         # QuarterPoint exposes .source; MarginPoint exposes .revenue_source /
         # .ni_source (it pairs two independently-sourced legs) — no shared attr.
@@ -212,6 +300,6 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
         'is_us': True, 'sector_excluded': False, 'excluded_sector_name': '',
         'is_reit': False,
         'status': status,
-        'excluded_reason': '',
+        'excluded_reason': reason,
         'eps_prior_vals': [], 'eps_sources': [],
     }
