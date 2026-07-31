@@ -194,6 +194,14 @@ GET  /api/scan/status              → {running, done, error, total, completed, 
   ported VERBATIM into the adapter — unchanged frontend contract.
 - **EPS:** still out of scope entirely; raw `'ni'` still intentionally empty in the
   adapter's output (contract compatibility).
+- **Failure labelling:** every `status='insufficient'` path now sets a real
+  `excluded_reason`. The success path used to hardcode `''` (11 of 540 tickets on the
+  last full scan reported as `insufficient (unspecified)`); `_diagnose_insufficient()`
+  in the adapter now names the cause and `_classify_failure()` in `api/server.py`
+  buckets it using code33-screener's `universe_scan.py` taxonomy, plus one new bucket
+  — **`no reported revenue (pre-revenue company)`**. Diagnosis is derived from the same
+  data `_c33_status` sees, and `_yoy_miss_cause()` mirrors `yoy_for()`'s walk exactly so
+  the two can never disagree.
 
 ---
 
@@ -208,6 +216,38 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-07-31 — **Unlabelled-failure reporting gap closed (branch
+`insufficient-reason-labels`, NOT merged — held for review)**. `_c33_status` can return
+'insufficient' from the adapter's SUCCESS path (both series pulled fine, but a leg had
+fewer than the 3 clean values the 3-quarter window needs); that path hardcoded
+`excluded_reason=''`, so 11 of 540 tickers on the last full scan collapsed into one
+anonymous `insufficient (unspecified)` bucket that told the operator nothing and gave
+the circuit breaker no cause to group on.
+  - Traced all 11 to real root causes before writing any fix (live pipeline + live
+    EDGAR, not inference). Two genuine clusters: **5 pre-revenue companies** (RVMD,
+    XENE, SYRE, DNLI, PLSE — 9-11 of 12 quarters report $0 or no revenue line;
+    confirmed against live EDGAR that RVMD/DNLI/SYRE file a revenue concept valued
+    exactly 0.00 for 2025+, so this is a company property, not a data gap) and
+    **6 short-history companies** (SDRL, VG, INDV, ALMS, BIOA, SEPN — 5-6 quarters,
+    fewer than the 7 needed to form 3 YoY pairs).
+  - New bucket: `no reported revenue (pre-revenue company)`. Zero revenue breaks BOTH
+    legs simultaneously — net margin is undefined against a zero denominator
+    (`net_margin.py` guards `revenue != 0`) and YoY is undefined against a zero base —
+    so none of the existing categories described it. The other 6 map onto the existing
+    `insufficient revenue history`.
+  - **Finding worth acting on separately:** within the short-history six, SDRL and INDV
+    are NOT young companies. Both are former foreign private issuers that converted to
+    domestic filing in 2025 (SDRL: 6× 20-F 2019-2024, first 10-Q 2025-02-27; INDV: 20-F
+    2024-03-06, first 10-Q 2025-03-03). Their pre-conversion history is annual-only
+    20-F, which this pipeline correctly excludes. Mechanically identical outcome, very
+    different meaning. Not separately bucketed — distinguishing it needs a per-ticker
+    filing-history lookup, a real cost across a 540-ticker scan. Flagged, not actioned.
+  - Verified: all 11 now carry a specific reason and a named bucket, zero left
+    unspecified; 14 spot-check tickers (3 green, 2 yellow, 5 red incl. AAPL/CHEF/TGT
+    from the regression baseline, 2 excluded_bank) byte-identical to the pre-fix scan on
+    status, rev_yoy and margin. Metadata only — the diff's sole deletion is the
+    hardcoded `''`; frontend has zero references to `excluded_reason`.
+
 2026-07-22 — **Code 33 engine swap (branch `code33-swap`, NOT merged to main)**: old
 in-repo engine fully removed (`utils/code33_engine.py` + secfs_revenue/secfs_net_margin/
 edgar_revenue/edgar_net_margin/sec_edgar, plus their orphaned consumers
