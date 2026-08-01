@@ -48,6 +48,86 @@
 
 ---
 
+## GSTACK POLICY
+
+Applies to every session in this repo, including agent sessions. Recorded 2026-08-01 so
+it never has to be re-explained. **Context that drives all of it:** the owner does not
+write code and relies entirely on the agent to judge what is safe; this app reads and
+stores **real brokerage data** (Wealthsimple session tokens in `tools/session.json`,
+real account balances in `tools/account_balances.json`), and the server is deliberately
+bound to `127.0.0.1` only. Anything that widens that blast radius is off the table.
+
+### APPROVED — use when relevant
+| Skill | Use for |
+|---|---|
+| `/office-hours` | **Before** writing code — clarify what is actually wanted first |
+| `/investigate` | Root-cause debugging. No guessing at fixes |
+| `/gstack-review` | Post-implementation bug hunt (renamed from gstack's `/review` — see collision note below) |
+| `/guard` (or `/careful` + `/freeze`) | Safety rails — warn before destructive commands, restrict edits to one folder while debugging |
+| `/document-release` | Keep CLAUDE.md and docs in sync with what actually shipped |
+| `/qa` | Local browser testing of the running app |
+| `/cso` | Read-only security scan |
+
+`/office-hours` and `/guard` pair naturally with existing rules 10 (one change at a
+time) and 11 (stop and revert on breakage). `/document-release` serves rules 9 and 12.
+
+### NEVER USE — even if the owner forgets to say so
+| Skill | Why |
+|---|---|
+| `/land-and-deploy`, `/setup-deploy`, `/canary` | No deploy pipeline exists, and none is wanted. Ever |
+| `/ship` | No auto-push, no auto-PR. The owner reviews and pushes manually |
+| `/scrape` | No web scraping — already decided against on legal grounds |
+| `/open-gstack-browser`, `/setup-browser-cookies` | Never import the owner's real browser login/cookies into an automated session. Non-negotiable while the Wealthsimple integration exists — it would put live brokerage auth inside an agent-driven browser |
+| `/design-*` (`design`, `design-consultation`, `design-html`, `design-review`, `design-shotgun`), `/plan-ceo-review`, `/autoplan` | No unprompted scope expansion |
+
+**If a task seems to call for something in the NEVER USE list — STOP and ask.** Do not
+decide it is fine this once. "It would be easier if I just deployed/pushed/scraped" is
+exactly the reasoning this list exists to block. Same standard as rule 13: the fact
+that a shortcut would work is not authorization to take it.
+
+### Install state (2026-08-01) — manually registered, `./setup` deliberately NOT run
+Cloned to `~/.claude/skills/gstack`. **`./setup` was never run and must not be run
+without asking** — it requires `bun` (absent by design, see below). Instead the 8
+approved skills were registered by hand: their directories were copied to
+`~/.claude/skills/<name>/` (SKILL.md plus `sections/`, `checklist.md`, `specialists/`,
+`bin/` as applicable). 28 files, verified file-count-identical to source.
+
+**Not installed, by explicit decision:** bun, Playwright, Chromium, `@ngrok/ngrok`.
+`~/.claude/settings.json` untouched — no gstack hooks. `~/.gstack/` does not exist.
+
+**What this means in practice.** `/guard`, `/careful`, `/freeze` are 100% complete —
+their only helpers are bash. `/cso` and `/document-release` are also complete.
+`/office-hours`, `/investigate` and `/review` run their full method but silently skip
+gstack's cross-session decision store (`bin/gstack-decision-log` / `-search` need bun;
+the search call is already gated + `2>/dev/null`, so it no-ops cleanly). `/review` also
+skips Step 3.4 (version queue) and Step 3.5 (slop scan) — both marked "advisory, never
+blocks review" in the skill itself. `/office-hours` loses only its optional Visual
+Sketch sub-flow. **`/qa` is deliberately NOT registered** — it genuinely needs the
+browser stack; registering it is a separate decision, not an oversight.
+
+**Name collision — RESOLVED by rename (2026-08-01).** gstack ships its review skill as
+`review`, which collides with the Claude Code built-in `/review` (review a GitHub PR);
+the built-in won and gstack's never surfaced. It was renamed on registration:
+directory `~/.claude/skills/gstack-review/`, frontmatter `name: gstack-review`.
+**Invoke it as `/gstack-review`.** Both built-ins are unaffected and still mean what
+they always did — `/review` for a GitHub PR, `/code-review` for the working diff.
+The rename is local to the registered copy only; the clone at
+`~/.claude/skills/gstack/review/` keeps its original name, and the renamed skill still
+reads its specialist files from there by absolute path, so re-cloning or updating
+gstack does not undo the rename but also does not re-collide.
+
+Two things to know before anyone reconsiders `./setup`:
+- It wants to install **Playwright + Chromium** and **`@ngrok/ngrok`**. ngrok is a
+  tunnelling library that can expose a localhost server to the public internet. That
+  is a direct conflict with the deliberate `127.0.0.1` binding — installing the
+  library does not open a tunnel by itself, but it is the capability sitting one
+  command away on a machine holding live brokerage credentials.
+- It offers to add `PreToolUse`/`PostToolUse` hooks to `~/.claude/settings.json`.
+  Non-interactive runs skip this and print the commands instead; it backs up
+  settings.json before any mutation. Do not opt in without asking.
+
+---
+
 ## TECH STACK
 - **Backend:** FastAPI — start with `.venv\Scripts\python.exe run.py`
 - **Frontend:** Single file `frontend/index.html` (~810KB, Claude Design bundled)
