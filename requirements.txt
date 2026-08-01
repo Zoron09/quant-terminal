@@ -1,14 +1,33 @@
-streamlit>=1.28.0
+# Web stack. Pinned to exactly what the app was developed and verified against —
+# these were previously UNDECLARED despite being the two hard runtime deps
+# (api/server.py and run.py). Nothing installed them on purpose; they arrived as
+# transitive deps and the app happened to work.
+fastapi==0.138.0
+uvicorn==0.49.0
+
 yfinance>=0.2.31
 pandas>=2.0.0
 numpy>=1.24.0
 plotly>=5.18.0
-pypfopt>=1.5.5
-feedparser>=6.0.10
 requests>=2.31.0
-finnhub-python>=2.4.18
 python-dotenv>=1.0.0
+
+# KEPT DELIBERATELY, NOT VERIFIED AS USED (2026-08-01 audit).
+# Neither is imported anywhere in the live codebase (zero hits across all .py
+# files outside .venv). Both are retained because the intent to use them is
+# documented on disk rather than in code, and removing a trading dependency on
+# grep evidence alone is the wrong risk trade:
+#   - alpaca-py: `.env` carries ALPACA_API_KEY and ALPACA_API_SECRET. No code
+#     reads either key yet, so this is a wired-but-unimplemented integration.
+#   - PyPortfolioOpt: RENAMED, not removed. The line read `pypfopt>=1.5.5`,
+#     which is the IMPORT name, not a PyPI distribution. Proven broken by a
+#     clean-venv install on 2026-08-01: "No matching distribution found for
+#     pypfopt>=1.5.5 (from versions: none)" — pip aborted the whole file, so
+#     `pip install -r requirements.txt` has been failing outright on any fresh
+#     machine. The installed distribution is PyPortfolioOpt (1.6.0 in .venv),
+#     which is what provides `import pypfopt`. Version floor left unchanged.
 alpaca-py>=0.20.0
+PyPortfolioOpt>=1.5.5
 
 # Unofficial, reverse-engineered Wealthsimple API client (not an official SDK) — used by tools/wealthsimple_export.py
 ws-api
