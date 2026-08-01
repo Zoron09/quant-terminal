@@ -396,3 +396,428 @@ Tickers manually tested and confirmed correct during this period, for context:
   no discrepancies found (aside from the separate, already-documented count-gate performance
   issue above, which affects latency, not correctness, for META). Investigated 2026-07-11.
 - **XOM** — Verified clean during this period.
+
+---
+
+## Open — found 2026-07-31, 10-ticker data-accuracy pass (v31-code33-screener)
+
+Scope: raw per-quarter output read off the live backend (`GET /api/ticker/{T}` →
+`get_code33_data(t, CACHE_VERSION)`, n_quarters=8 default) for UNP, MU, INTC, JBLU, LMND,
+IQV, SHOP, CRSP, ORA, SOFI. All 10 returned HTTP 200, no exceptions. Numbers were eyeballed
+for plausibility only — **no Macrotrends/filing cross-check was performed this round**, so
+every "suspected" item below needs filing-level confirmation before it's treated as proven.
+No engine, adapter, or code33-screener code was touched.
+
+### ORA — newest quarter revenue — CLEARED (downgraded 2026-07-31 from SUSPECTED, HIGH)
+- **Resolution:** cross-verified against TradingView on 2026-07-31 — a separate data provider
+  running a separate pipeline with no shared code, no shared source libraries, and no shared
+  tag-priority logic with this engine. TradingView reports **$403.91M** for ORA's 2026-03-31
+  quarter: the same figure the engine produced. Two independent extractions landing on the
+  identical number is strong evidence this is Ormat's real reported revenue, not an artifact
+  of the `...IncludingAssessedTax` tag the fill happened to resolve.
+- **Not just the flagged quarter:** all 8 quarters matched TradingView exactly or
+  near-exactly, so the series as a whole is consistent — which also removes the original
+  concern that the secfsdstools history and the edgartools-filled newest quarter were being
+  built from non-comparable revenue definitions. If they were, the join would show up as a
+  discontinuity against a third source, and it doesn't.
+- **Consequence for the +75.80% YoY:** it stands as real. The scale objection that drove the
+  original flag (a quarter annualizing to ~$1.6B against a company doing ~$935M-1.0B/year)
+  was reasoning from expected magnitude, and expected magnitude lost to two independent
+  measurements agreeing.
+- **Caveat — strongly supported, not airtight.** This was checked against TradingView, *not*
+  against Ormat's own 10-Q. Both sources ultimately derive from the same SEC filing, so a
+  shared upstream misread cannot be excluded on this evidence alone, however unlikely. Pulling
+  the discrete 2026-03-31 revenue fact directly from the filing would fully close it. Left
+  open as an optional last step, not a blocker.
+- **Still worth knowing (unaffected by this clearing):** the observation that ORA's newest
+  quarter filled under `RevenueFromContractWithCustomerIncludingAssessedTax` while every other
+  ticker in the run filled under `...ExcludingAssessedTax` remains true and remains a real
+  tag-consistency question for the general case. It just isn't producing a wrong number here.
+
+**Original investigation notes — kept for history (the reasoning that produced the flag):**
+- **Ticker/quarter:** ORA, period_end 2026-03-31.
+- **What's wrong:** revenue comes back **$403.9M**, against $276.0M the prior quarter and
+  $229.8M the year-ago quarter — a reported **+75.80% YoY**, far outside ORA's own recent
+  range (+1.79% to +19.63% across the other seven quarters). Ormat's full-year 2025 revenue
+  is roughly $935M-1.0B; $403.9M in a single quarter annualizes to ~$1.6B, which does not
+  fit the company's scale.
+- **Evidence pointing at a tag mismatch, not a real jump:** the server log shows this quarter
+  was gap-filled from edgartools under
+  `RevenueFromContractWithCustomerIncludingAssessedTax` — note **Including**. Every other
+  ticker in this run filled under `...ExcludingAssessedTax` (or `Revenues`). If the seven
+  secfsdstools-sourced quarters before it were built from a different tag, the series is
+  joining two non-comparable revenue definitions at exactly the point the YoY is computed
+  from, which would inflate the newest quarter and its YoY together.
+- **Not confirmed:** the tag actually used for ORA's earlier seven quarters was not read this
+  round, and the figure was not checked against Ormat's own 10-Q. Both are the next step.
+- **Blast radius if real:** any ticker whose edgartools fill resolves a different revenue tag
+  than its secfsdstools history — the newest quarter is *always* the edgartools-filled one
+  (see the fiscal-label entry below), so this is the quarter every YoY and the entire Code 33
+  signal depends on.
+
+### Margin plausibility guard lost in the engine swap — CONFIRMED, MEDIUM
+- **Ticker/quarters:** CRSP, all 8 quarters. Net margins returned: -24450.29%, -14276.08%,
+  -104.54%, -15722.08%, -23379.93%, -11973.12%, -15117.25%, -8431.48%.
+- **What's wrong:** these values are *arithmetically correct* — CRSP books tiny collaboration
+  revenue ($517K-$1.5M in most quarters) against a real ~$100-200M quarterly net loss, so the
+  ratio genuinely lands in the tens of thousands of percent. The bug is not the number, it's
+  that **nothing stops a number like this any more**.
+- **Root cause:** commit `990bcba` (2026-07-13) added `_is_plausible_margin()` in
+  `code33_engine.py` — a deliberate ±1000% tripwire, the 4th and final commit of the TRT
+  `-230,303%` sequence, explicitly built as defense-in-depth against a future
+  scaling/extraction bug. `code33_engine.py` was deleted in the 2026-07-22 engine swap and
+  **the guard was not ported into `utils/code33_adapter.py`**. Confirmed by reading the
+  adapter (it takes `net_margin_pct` straight off each `MarginPoint`, no bound check) and by
+  grepping code33-screener: its only plausibility logic (`_is_implausible_net_income` /
+  `_is_implausible_revenue`) applies to **derived Q4 values only**, compares against sibling
+  quarters rather than an absolute bound, and merely *flags* `.plausible` — it never rejects.
+  The adapter also never reads `ni_plausible`/`revenue_plausible`, so even that flag is
+  discarded before the API.
+- **Consequence:** the exact bug class Commit `990bcba` was written to catch would now reach
+  output silently. CRSP proves values past ±1000% flow through untouched today.
+- **Note:** CRSP's Code 33 status (`red`) is being computed on these margins.
+
+### Every ticker's newest quarter has a blank fiscal label — CONFIRMED, MEDIUM
+- **Tickers/quarters:** all 9 non-bank tickers, newest quarter each — UNP 2026-03-31,
+  MU 2026-05-28, INTC 2026-03-28, JBLU 2026-03-31, LMND 2026-03-31, IQV 2026-03-31,
+  SHOP 2026-03-31, CRSP 2026-03-31, ORA 2026-03-31. 9 of 9, not an edge case.
+- **What's wrong:** `rev_labels` is an empty string for that quarter while every older
+  quarter carries one ("Q2 FY24" etc.).
+- **Root cause:** `code33/pipeline.py` lines 95-96 construct every edgartools-filled
+  `QuarterPoint` with `fy=None, fp=None` (the fill path has no fiscal-period metadata to
+  copy). The adapter's `_fq_label()` returns `''` whenever either is None. Since the
+  edgartools fill exists precisely to supply the quarter secfsdstools doesn't have yet, the
+  blank label lands on the newest quarter **by construction, every time**.
+- **Where the fix belongs:** the `fy`/`fp` gap is in code33-screener, which is off-limits from
+  quant-terminal sessions per CLAUDE.md rule 1 — either fix it there under its own regression
+  suite, or have `_fq_label()` derive a label from `period_end` when fy/fp are absent.
+
+### Q4 renders as "FY FY24" instead of "Q4 FY24" — CONFIRMED, LOW
+- **Tickers/quarters:** every calendar-Q4 quarter across the run — e.g. UNP 2024-12-31 and
+  2025-12-31, INTC 2024-12-31 and 2025-12-31, JBLU, IQV, LMND, CRSP, SHOP all show
+  `FY FY24` / `FY FY25`. MU shows it on its own August fiscal year-ends (2024-08-31,
+  2025-08-31), which is the same thing on a non-calendar FY.
+- **What's wrong:** cosmetic only — the value attached to the label is the correct discrete
+  quarter, not a full-year figure. SEC reports `fp='FY'` on the 10-K row the Q4 figure is
+  derived from, and `_fq_label()` passes it straight through, so a single quarter is labelled
+  as if it were the whole year.
+
+### Revenue series is fetched twice per ticker — CONFIRMED, LOW (performance)
+- **What it is:** the server log shows each ticker's edgartools revenue gap-fill running
+  **twice** before the net-income fill runs once — e.g. UNP 2026-03-31 filled from edgartools
+  under `RevenueFromContractWithCustomerExcludingAssessedTax` at 08:46:54 and again at
+  08:46:57, then `NetIncomeLoss` at 08:47:10. Same doubled pattern on all 9 non-bank tickers.
+- **Mechanism:** `_get_code33_data_inner()` calls `get_complete_revenue_series()` directly,
+  and then `get_complete_net_margin()` builds its own revenue leg internally to pair against
+  NI — so the same series, including its live-EDGAR fill, is built twice per call.
+- **Cost, not correctness:** both builds produce the same values. Same class as the
+  already-tracked "Count-gate double-merge redundancy" above — wasted live-EDGAR latency, no
+  wrong output.
+
+### Not bugs — checked and cleared this round
+- **SOFI `excluded_bank`** — correct. Log shows bank tags `NoninterestIncome`,
+  `RevenuesNetOfInterestExpense`; SoFi holds a national bank charter.
+- **SHOP `insufficient` on 5 quarters** — correct, and correctly labelled ("only 5 quarters of
+  revenue filings - 7+ needed to form 3 year-over-year pairs"). Shopify converted from foreign
+  private issuer (40-F) to domestic 10-Q filing in 2025; log confirms `quarter ~2024-12-31
+  missing from both sources`. This is the same SDRL/INDV pattern already flagged in CLAUDE.md
+  — mechanically "short history", but the cause is a filing-form conversion, not a young
+  company.
+- **INTC Q3 FY24 margin -125.26%** — real. $16.6B net loss on $13.3B revenue matches Intel's
+  reported Q3 2024 impairment/restructuring quarter.
+- **MU 2026-02-28 → 2026-05-28 revenue $23.86B → $41.46B** — the revenue leg of this jump was
+  already verified real against Micron's own press release (see the 2026-07-09 entry). The
+  **68.13% net margin** on the newest quarter was *not* part of that verification and is
+  unusually high for a memory manufacturer even in an up-cycle — worth a filing check next
+  round, listed here as unverified rather than as a bug.
+- **No missing margins anywhere** — every revenue quarter paired to a margin within the
+  25-day tolerance on all 9 non-bank tickers (`n_rev == n_npm`). No nulls, no unmatched dates.
+
+### LMND revenue vs TradingView — NOT AN ENGINE DEFECT, engine matches SEC exactly
+- **Investigated:** 2026-07-31, read-only. Premise checked: our revenue reads $16-33M higher
+  than TradingView on all 8 quarters with the gap widening, while derived Net Income matches
+  TradingView exactly — suggesting revenue as root cause.
+- **Result: the engine's revenue is right.** Pulled LMND's facts straight from
+  `data.sec.gov/api/xbrl/companyfacts` (CIK 1691421), bypassing secfsdstools and edgartools
+  entirely. The engine's number is a **dollar-exact match to LMND's own filed `Revenues`
+  fact** on every quarter checkable:
+
+  | Quarter | Engine | SEC `Revenues` (10-Q) | Match |
+  |---|---|---|---|
+  | 2024-06-30 | $122,000,000 | $122,000,000 (adsh 0001691421-24-000108) | exact |
+  | 2025-09-30 | $194,500,000 | $194,500,000 (adsh 0001691421-25-000149) | exact |
+  | 2026-03-31 | $258,000,000 | $258,000,000 (adsh 0001691421-26-000034) | exact |
+
+- **Tag selection is consistent, not switching.** `python -m code33.revenue LMND` (the module's
+  own read-only diagnostic) shows **all 8 quarters resolved under the single tag `Revenues`** —
+  the first entry in `REVENUE_TAGS` (`code33-screener/src/code33/revenue.py:14-25`). No tag
+  drift across the series, and the edgartools-filled newest quarter used `Revenues` too
+  (confirmed in the earlier run's server log). The 2024-12-31 and 2025-12-31 points are
+  `derived_fy_minus_quarters` (FY minus Q1+Q2+Q3), both flagged `plausible=True`.
+- **No over-broad tag is being summed.** The gross-premium hypothesis was checked and ruled
+  out directly: LMND does file `PremiumsWrittenGross` ($343,900,000 for 2026-03-31 — far above
+  our $258.0M) and `PremiumsEarnedNet` ($212,600,000 — below it). Neither is being read. The
+  engine sums nothing; it reads one reported fact per quarter.
+- **Where the difference with TradingView most likely comes from — definitional, on
+  TradingView's side.** `Revenues` is LMND's *total* revenue line. Its components for the
+  quarters checked:
+
+  | Quarter | Total `Revenues` | `NetInvestmentIncome` | `InsuranceCommissionsAndFees` | `PremiumsEarnedNet` |
+  |---|---|---|---|---|
+  | 2024-06-30 | $122.0M | $8.1M | $8.1M | $89.3M |
+  | 2025-09-30 | $194.5M | $9.7M | $12.6M | $140.0M |
+  | 2026-03-31 | $258.0M | $9.8M | $12.0M | $212.6M |
+
+  Stripping investment income + commission/fee income yields gaps of $16.2M / $22.3M / $21.8M
+  — the lower half of the reported $16-33M range, and growing over time as those two lines
+  grow, which fits the described pattern. It does not account for the $33M upper end, so the
+  exact TradingView line item is **not pinned down**.
+- **Open question, needs input:** TradingView's own per-quarter revenue figures were not
+  available this session, so which line it reports could not be identified conclusively. With
+  those 8 numbers the component table above should isolate it immediately.
+- **Consistent with Net Income matching:** NI is unaffected by any revenue-definition choice,
+  which is exactly why it agrees while revenue doesn't. That pattern points at a definitional
+  mismatch between vendors, not at a data defect on either side.
+
+### Two premises in the LMND investigation request that did not hold
+- **There is no OSCR entry in this file.** Grepped the whole quant-terminal repo (excluding the
+  bundled frontend HTML) and all of code33-screener for `OSCR` — zero matches. No
+  insurance-sector wrong-revenue-tag bug has been logged here for OSCR or any other ticker, so
+  the requested "same root cause as OSCR?" comparison had nothing to compare against. If that
+  bug was found, it was recorded somewhere other than `bug_report.md`.
+- **There is no `_REV_TAGS` symbol anywhere.** Zero matches in either repo. The revenue
+  priority list is `REVENUE_TAGS` in `code33-screener/src/code33/revenue.py`, and unlike the
+  deleted in-repo engine's private `_NI_TAGS`, it lives in the external project.
+
+---
+
+## Open — found 2026-07-31, second 10-ticker data-accuracy pass (v31-code33-screener)
+
+Scope: AES, ICE, FDS, ESRT, SLXN, PLTR, NUE, DKNG, NET, U, same method as the first pass
+(`GET /api/ticker/{T}`, n_quarters=8 default, live backend, per-quarter source attributed from
+server logs). All 10 returned HTTP 200, no exceptions, 2-49s each. Unlike the first pass, the
+suspicious items here **were** checked against SEC ground truth (`data.sec.gov` companyfacts,
+direct HTTP, bypassing secfsdstools and edgartools). No engine, adapter, or code33-screener
+code was touched.
+
+**Revenue extraction was exact on all 9 non-SLXN tickers.** Every newest-quarter revenue
+figure matched the company's own filed 10-Q fact to the dollar: AES $3,180,000,000 ·
+ICE $3,666,000,000 · FDS $622,918,000 · ESRT $190,325,000 · PLTR $1,632,583,000 ·
+NUE $9,496,000,000 · DKNG $1,646,076,000 · NET $639,755,000 · U $508,238,000.
+
+### ICE — an already-filed quarter is missing from output — CONFIRMED, MEDIUM
+- **Ticker/quarter:** ICE, period_end **2026-06-30**, absent entirely.
+- **What's wrong:** the engine's newest quarter for ICE is 2026-03-31. ICE's 2026-06-30 quarter
+  was **filed 2026-07-30 — the day before this run** — and is present in SEC's companyfacts
+  under `RevenueFromContractWithCustomerExcludingAssessedTax` at **$3,611,000,000** (net income
+  $958,000,000). The engine never requested it, so it never appeared as a gap for edgartools to
+  fill; the server log shows only a 2026-03-31 fill for ICE.
+- **Mechanism:** `expected_quarter_ends()` targets a quarter only once the filing-lag buffer
+  (~45 days past period end) has elapsed — 2026-06-30 + 45 days = 2026-08-14. Between a
+  company's actual filing date and that computed due date there is a blind window in which an
+  already-public quarter is invisible to the engine. For ICE that window is ~15 days wide.
+- **Why this matters more than it looks:** the newest quarter is the one every YoY comparison
+  and the entire Code 33 acceleration signal keys on. A ticker scanned inside its own blind
+  window is scored on stale data with no indication anything is missing.
+- **Relationship to existing notes:** this is the same mechanism previously observed on MU and
+  recorded (in the `9753f34` entry above) as "not a bug; will self-resolve once the quarter is
+  due." That reading was based on the quarter not yet existing. ICE shows the case where the
+  quarter **does** exist, is filed, is public, and is still skipped — which is a different and
+  worse situation than the one that assessment covered.
+- **Scope check:** the other 8 tickers are current — their newest filed 10-Q quarter is exactly
+  the one the engine returned. So this fires only for companies that file early relative to the
+  buffer, not universally.
+
+### SLXN — pre-revenue company never reaches the pre-revenue diagnosis — CONFIRMED, LOW/MEDIUM
+- **Ticker:** SLXN (Silexion Therapeutics Corp, CIK 2022416), all quarters.
+- **What's wrong:** SLXN returns `status='insufficient'` with
+  `excluded_reason='only 0 usable revenue quarters'` — the generic count message — when it is a
+  textbook instance of the `no reported revenue (pre-revenue company)` bucket added in the
+  `insufficient-reason-labels` work merged earlier today.
+- **Confirmed pre-revenue, not a data gap:** SEC companyfacts shows SLXN files **179 us-gaap
+  concepts and not one revenue concept** (the only near-match is `InterestRevenueExpenseNet`).
+  It is clinical-stage — R&D expense and net loss are filed every quarter (2026-03-31:
+  NI -$2,733,000, R&D $1,370,000), revenue never is. Log confirms all 8 target quarters
+  `missing from both sources`.
+- **Root cause:** `_get_code33_data_inner()` returns early at the `len(rev_points) < 5` guard,
+  which fires **before** `_diagnose_insufficient()` is ever called — that function only runs on
+  the success path, after `_c33_status()`. So the split is:
+  - files a revenue line valued $0.00 → point exists with `value=0` → survives to the diagnosis
+    → correctly bucketed as pre-revenue (RVMD/DNLI/SYRE behave this way).
+  - files **no revenue tag at all** → `value=None` → filtered out → early return → generic
+    message, never bucketed.
+  Both are the same real-world condition, reported two different ways depending on an XBRL
+  tagging choice the company made.
+- **Consequence:** the pre-revenue bucket undercounts, and the circuit breaker gets a generic
+  cause it can't group on — the exact problem that work set out to fix, still present on one
+  side of the split.
+
+### FDS — the blank-label bug now confirmed on more than one quarter per ticker
+- **Ticker/quarters:** FDS, **2026-02-28 and 2026-05-31** — the two newest quarters, both with
+  an empty `rev_labels` entry.
+- **Extends the existing entry above** ("Every ticker's newest quarter has a blank fiscal
+  label"). That entry described it as hitting the single newest quarter. FDS shows the count is
+  really "however many quarters the edgartools fill supplied" — its August fiscal year-end
+  leaves secfsdstools two quarters behind, so two fills happen and two labels come back blank.
+  Same root cause (`pipeline.py:95-96` sets `fy=None, fp=None` on filled points); the blast
+  radius is just wider than first written.
+
+### AES net margin vs TradingView — two separate causes, one of them a real defect
+Investigated 2026-07-31, read-only, against `data.sec.gov` companyfacts (CIK 874761) plus the
+pipeline's own restatement flags. **Tag selection was ruled out first: the engine reads
+`NetIncomeLoss` on all 12 quarters, never switching.** This is not an ORA-style problem. Two
+unrelated effects stack, and they explain the inconsistent gap exactly.
+
+#### Cause 1 — engine serves the originally-filed value after a restatement, and drops the flag that says so — CONFIRMED, MEDIUM
+- **Ticker/quarters:** AES, **2024-06-30** and **2024-09-30**.
+- **What's wrong:** AES recast both quarters in later filings. The engine emits the figure as
+  first reported and gives no indication it has been superseded:
+
+  | Quarter | Engine emits (as first filed) | AES's own later figure | Filed in |
+  |---|---|---|---|
+  | 2024-06-30 | $185,000,000 | **$276,000,000** | 10-K 2025-03-11, restated again in FY2025 Q2 10-Q 2025-08-01 |
+  | 2024-09-30 | $502,000,000 | **$504,000,000** | 10-K 2025-03-11 |
+
+- **The pipeline already knows.** `get_quarterly_net_income_series(874761, 12)` returns those
+  two points with **`restated=True` and `restated_value` populated** ($276,000,000 /
+  $504,000,000) — every other quarter is `restated=False`. `_attach_restatement_flags()` in
+  `quarterly_engine.py` detects this correctly and `MarginPoint` carries it through as
+  `ni_restated` / `ni_restated_value`.
+- **Root cause:** `utils/code33_adapter.py` reads only `net_margin_pct` off each `MarginPoint`
+  and discards `ni_restated`/`ni_restated_value` (same discard that loses `net_income` and
+  `ni_plausible`). So the engine holds the corrected number in memory and serves the stale one,
+  with no flag reaching the API for anything downstream to act on.
+- **Size of the error:** AES 2024-06-30 margin is served as **6.29%**; on AES's own restated
+  net income it is **9.38%** — a **3.1 percentage point** error on a quarter that feeds the
+  net-margin-expansion leg of the Code 33 signal directly. 2024-09-30 is minor (15.26% vs
+  15.32%).
+- **Why it matters beyond one ticker:** Code 33 compares quarters against each other. Mixing
+  restated and non-restated quarters inside one 8-quarter window creates margin deltas that
+  never happened. AES has 2 restated quarters inside its window right now.
+- **Note on scope:** *which* value to serve (as-filed vs as-restated) is a legitimate policy
+  choice and this entry does not assume one. What is unambiguous is that the restatement flag
+  is computed, carried to the adapter boundary, and thrown away — so no caller can even see
+  that a quarter was revised.
+
+#### Cause 2 — TradingView uses a narrower net-income concept — CLEARED (definitional, LMND pattern)
+- **What it is:** TradingView's AES figures match a concept that is not in `NI_TAGS` at all:
+  **`NetIncomeLossFromContinuingOperationsAvailableToCommonShareholdersBasic`** — income from
+  *continuing operations*, *available to common*. Both reported TradingView numbers were located
+  in AES's filings exactly:
+
+  | Quarter | TradingView | SEC concept it matches, to the dollar |
+  |---|---|---|
+  | 2025-09-30 | $671.00M | `NetIncomeLossFromContinuingOperationsAvailableToCommonShareholdersBasic` = $671,000,000 (10-Q filed 2025-11-04) |
+  | 2024-06-30 | $282.00M | `NetIncomeLossAvailableToCommonStockholdersBasic` = $282,000,000 (10-Q filed 2025-08-01) |
+
+- Engine reads `NetIncomeLoss` (total, parent-attributable). For 2025-09-30 that is
+  $639,000,000 against TradingView's $671,000,000 — a **$32M pure definitional gap, no
+  restatement involved that quarter**.
+
+#### Why the gap is inconsistent — the two causes are independent and don't co-occur
+| Quarter | Engine | Restated? | Definitional gap? | Result vs TradingView |
+|---|---|---|---|---|
+| 2024-06-30 | $185.1M | **yes** (→$276M) | yes (→$282M) | **worst case, ~$97M** — both stack |
+| 2025-09-30 | $639.0M | no | **yes** (→$671M) | ~$32M, definition only |
+| 2025-03-31 | $45.9M | no | no separate concept filed | **near-exact match** |
+| 2024-12-31 | $560.1M (derived) | no | — | **near-exact match** |
+
+The $97M worst case decomposes cleanly: **$91M restatement + $6M definition**. 2025-03-31
+matched because AES neither restated it nor filed a separate continuing-ops/available-to-common
+fact for it — every definition collapses to the same $46M.
+
+#### The non-controlling-interest theory is ruled out
+NCI size is irrelevant here, which is why the $119M-NCI quarter (2025-03-31) still matched. The
+engine reads `NetIncomeLoss`, which is **already parent-attributable — NCI is excluded before
+the engine ever sees it**. The NCI-inclusive concept is `ProfitLoss` (2025-03-31: **-$73M**,
+2024-06-30: **-$39M**), and it sits third in `NI_TAGS`, behind `NetIncomeLoss`, so it is never
+selected for AES. A gap that scaled with NCI would require the engine to be reading `ProfitLoss`,
+and it never does.
+
+### COR (Cencora) derived Q4 quarters — CLEARED, the numbers are real
+Investigated 2026-07-31, read-only, against `data.sec.gov` companyfacts (CIK 1140859).
+Flagged because COR's six *reported* quarters all sit at $400-700M net income while its two
+*derived* quarters (`derived_fy_minus_quarters`) came back at $3,382,000 (2024-09-30, 0.00%
+margin) and **-$339,704,000** (2025-09-30, -0.41%). Cencora's fiscal year ends in September,
+so both are Q4s. **Not a calculation error — Cencora's real Q4 GAAP results are that bad.**
+
+- **The derivation is arithmetically exact.** FY total minus Q1+Q2+Q3, every input matching
+  SEC to the dollar:
+
+  | | FY2024 (ends 2024-09-30) | FY2025 (ends 2025-09-30) |
+  |---|---|---|
+  | FY total (10-K) | $1,509.1M | $1,554.2M |
+  | Q1 | $601.5M (2023-12-31) | $488.6M (2024-12-31) |
+  | Q2 | $420.8M (2024-03-31) | $717.9M (2025-03-31) |
+  | Q3 | $483.5M (2024-06-30) | $687.4M (2025-06-30) |
+  | **Derived Q4** | **$3.4M** | **-$339.7M** |
+  | Engine emitted | $3,382,000 | -$339,704,000 |
+
+- **Independently confirmed by Cencora's own filed nine-month subtotal**, which the engine
+  never touches — so this is a genuine second source on the same arithmetic, not the same sum
+  computed twice. FY2024: filed 9-month NI (2023-10-01→2024-06-30) = **$1,505.7M** against a
+  $1,509.1M full year, leaving $3.4M for Q4. FY2025: filed 9-month = **$1,893.9M** against a
+  $1,554.2M full year — the company earned *more* in nine months than in twelve, which only
+  happens if Q4 was a loss.
+- **The cause is real charges landing almost entirely in Q4.** `GoodwillImpairmentLoss` is
+  **$418.0M for FY2024 and $723.9M for FY2025 in the 10-K, and absent from both nine-month
+  10-Q figures** — meaning essentially the whole impairment fell in the July-September quarter
+  both years. FY2025 also carries $837.4M `AssetImpairmentCharges` and $229.4M
+  `RestructuringCharges` annually, again with nothing comparable in the nine-month view. A
+  ~$400-700M quarter absorbing a $418M / $724M impairment lands exactly where the engine put
+  it: near zero, then negative.
+- **Tag selection is consistent, ruled out.** COR resolves under `NetIncomeLoss` on every
+  quarter and on both FY totals — no switching, and not `ProfitLoss` (which runs $2-5M higher
+  per quarter: 2024-06-30 is $487.6M under `ProfitLoss` vs the $483.5M the engine used).
+- **The derived-Q4 plausibility guard behaved correctly by not firing.**
+  `_is_implausible_net_income` flags only when a derived value exceeds 4x the average magnitude
+  of its sibling quarters — a ceiling of ~$2,008M (FY2024) and ~$2,525M (FY2025) here, which
+  $3.4M and -$339.7M are nowhere near. Its docstring states the absence of a floor check is
+  deliberate, because net income can legitimately sit near zero after a large quarter. That is
+  precisely this case, so silence was the right behaviour, not a miss.
+- **Worth knowing for screening, though it is not a defect:** COR's margin series swings
+  0.85% → 0.00% → 0.60% → 0.95% purely because GAAP impairments concentrate in Q4. Code 33
+  reads that as margin contraction and then expansion. The data is correct; the signal it
+  produces on a company with a back-loaded charge cycle is still worth an eyeball before being
+  treated as a real fundamental turn — same caution already recorded for AXON.
+
+### Checked against SEC and cleared this round
+- **ESRT (REIT) — exact match, no tag discontinuity.** The newest quarter's net income was
+  filled under `NetIncomeLossAvailableToCommonStockholdersBasic` while every other ticker in
+  the run used `NetIncomeLoss`, which looked like an ORA-style mid-series tag switch. It isn't:
+  ESRT files **only** that tag and never plain `NetIncomeLoss`, so the series is internally
+  consistent. Engine vs SEC, dollar-exact on every quarter — NI 2024-06-30 $17,071,000 /
+  2024-09-30 $13,541,000 / 2025-03-31 $9,220,000 / 2025-06-30 $6,519,000 / 2025-09-30
+  $7,985,000 / 2026-03-31 $1,235,000; revenue likewise exact. The margin collapse to **0.65%**
+  on 2026-03-31 is real, not an artifact.
+- **ICE revenue and net income — exact match.** 2026-03-31 revenue $3,666,000,000 and NI
+  $1,413,000,000 both match the filed facts exactly. The 11pp margin jump to 38.54% is real.
+- **NUE 2026-04-04 period end** — correct, not a date bug. Nucor uses 13-week fiscal quarters
+  ending on a Saturday; SEC's own fact carries the same end date.
+
+### Sector definition mismatches to expect when cross-checking against TradingView
+Neither is an engine defect — both are the LMND pattern (engine reads the company's filed
+total; a vendor may report a narrower line). Recording them so a TradingView delta on these
+tickers isn't re-investigated as a bug:
+- **ICE** — the engine reports ICE's **gross** revenue ($3.666B for 2026-03-31). ICE is widely
+  quoted on "revenues less transaction-based expenses" (roughly $2.5B), which is a non-GAAP
+  presentation — **ICE files no XBRL concept for it** (checked: no `transaction`-based or
+  `revenue…less…` concept exists in its companyfacts). If TradingView shows ~$2.5B, that is a
+  definitional difference, not a wrong read.
+- **ESRT** — the engine's net income is the **common-stockholders** figure ($1,235,000 for
+  2026-03-31), consistent with the CELH-era convention. ESRT also files `ProfitLoss`
+  ($2,995,000 for the same quarter), which includes the operating-partnership non-controlling
+  interests typical of an UPREIT. A vendor using `ProfitLoss` will show roughly 2.4x our net
+  income and margin on this ticker.
+
+### Reporting limits hit this round (engine contract, not defects)
+- **Net Income is not available from the API.** `get_code33_data()` hardcodes `'ni': []`
+  (intentional, per CLAUDE.md ENGINE STATUS). Upstream `MarginPoint` carries a real per-quarter
+  `net_income`, but the adapter reads only `net_margin_pct` off it. Any NI figure in this
+  round's table was **derived** as Revenue × Margin ÷ 100, not read from the engine.
+- **Per-quarter data source is not available from the API.** `_src_summary()` collapses
+  `QuarterPoint.source` into one `'+'`-joined set per series, so every ticker reports the same
+  `derived_fy_minus_quarters+edgartools+reported` string with no way to attribute a specific
+  quarter. Per-quarter provenance exists in the pipeline and is discarded at the adapter
+  boundary. Server-log correlation was used instead to establish which quarter came from
+  edgartools.

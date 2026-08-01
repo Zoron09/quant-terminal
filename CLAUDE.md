@@ -129,6 +129,10 @@ GET  /api/scan/status              → {running, done, error, total, completed, 
 - Chart: dynamic color (green/red), period % + $ gain label, YTD/1D/1W/1M/3M/1Y/5Y timeframes, 30s price poll
 
 ### ❌ BROKEN / PENDING
+**⚠️ All FIX items below predate the 2026-07-22 engine swap and have NOT been re-checked
+against the current engine.** Treat them as unverified reports, not confirmed open bugs —
+FIX 2 in particular describes the `/api/financials` path that commit `64a5757` rerouted and
+that the 2026-08-01 adapter change altered again.
 - FIX 2: Financials — Income Statement YoY Growth shows dashes, Net Income $0.0B (secfsdstools integration in progress)
 - FIX 3: loadAnalysis() — ticker search doesn't update the page (fetches but doesn't re-render)
 - FIX 4: Chart doesn't update when ticker changes
@@ -142,11 +146,14 @@ GET  /api/scan/status              → {running, done, error, total, completed, 
   before ever touching `PAGES.journal`/`#page-journal`. Left in place deliberately (not deleted
   this session) so it doesn't quietly rot as confusing dead code without a record — cleanup
   candidate for a future session, not urgent.
-- Batch Code 33 scan on 381-ticker Minervini CSV — driving script (`run_batch.py`) removed in
-  the 2026-07-10 cleanup as a stale root-level scratch script; its designated output was never
-  produced (checked: no `code33_results_2026-06-27.csv` ever existed), so nothing was lost. If
-  this batch is still wanted, it needs a new script under `tools/`, not a root one-off.
-- **Count-gate double-merge redundancy** (found 2026-07-11 during META testing):
+- **⚠️ PRE-SWAP — needs re-confirmation before being treated as current.**
+  **Count-gate double-merge redundancy** (found 2026-07-11 during META testing). Every file
+  named below (`secfs_revenue.py`, `secfs_net_margin.py`, `code33_engine.py`) was DELETED in
+  the 2026-07-22 engine swap, so this describes a pipeline that no longer exists. The same
+  class of redundancy may or may not be present in code33-screener — the 2026-07-31 pass did
+  observe the revenue series being built twice per call (logged in `bug_report.md`), which
+  looks related but was not traced back to this mechanism. Kept for the diagnosis, not as a
+  live to-do:
   `secfs_revenue.py`/`secfs_net_margin.py`'s inner secfsdstools→edgartools fallback gates on
   `len(merged) >= n_quarters` (a pure count, no recency check), so it wrongly skips edgartools
   whenever secfsdstools already has ≥16 *old* quarters but is missing the single newest one —
@@ -158,11 +165,12 @@ GET  /api/scan/status              → {running, done, error, total, completed, 
   implemented): give the inner check the same recency-awareness instead of a bare count, then
   delete code33_engine.py's now-redundant outer retry block. See `bug_report.md` for full
   writeup — "Solution prepared, not yet implemented".
-- **TRT margin output not re-verified under the new NI-tag order (2026-07-09).** TRT carries
-  a `NetIncomeLossAvailableToCommonStockholdersBasic` tag same as CELH, but for TRT it nets
-  out non-controlling interest, not preferred dividends (TRT has no preferred stock — checked
-  its balance sheet directly). Not included in this fix's regression set; no issue expected,
-  but not confirmed either. Needs its own explicit check before trusting TRT's margin output.
+- ~~**TRT margin output not re-verified under the new NI-tag order (2026-07-09).**~~
+  **RESOLVED — this entry was stale.** `bug_report.md` closed it on 2026-07-12: TRT's NI tag
+  selection was never wrong (the extracted value exact-matched its filed net income); the real
+  defect was the unrelated `_to_m()` unit-conversion bug, fixed in `8f620c4`. CLAUDE.md was
+  never updated to match. Kept as a struck-through line rather than deleted so the
+  contradiction between the two files is visible rather than silently erased.
 
 ---
 
@@ -192,8 +200,10 @@ GET  /api/scan/status              → {running, done, error, total, completed, 
   "Excluded — Banks" scan pill, never a silent disappearance.
 - **Status semantics:** `_c33_status` (green/yellow/red/insufficient 3-state badge)
   ported VERBATIM into the adapter — unchanged frontend contract.
-- **EPS:** still out of scope entirely; raw `'ni'` still intentionally empty in the
-  adapter's output (contract compatibility).
+- **EPS:** still out of scope entirely. Raw `'ni'` is NO LONGER empty as of
+  2026-08-01 — it carries real per-quarter net income, alongside new
+  `rev_sources`/`ni_sources` and `ni_restated`/`ni_restated_value`. All EPS
+  fields remain empty. See the 2026-08-01 entry under LAST UPDATED.
 - **Failure labelling:** every `status='insufficient'` path now sets a real
   `excluded_reason`. The success path used to hardcode `''` (11 of 540 tickets on the
   last full scan reported as `insufficient (unspecified)`); `_diagnose_insufficient()`
@@ -216,6 +226,106 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-01 — **Adapter now exposes what it was discarding; watchlist file deleted;
+sector gate added and removed the same day.** (Session ran 2026-07-31 into 2026-08-01;
+the data-accuracy investigations behind these changes are dated 2026-07-31 in
+`bug_report.md`.) **Nothing in this entry is committed or pushed yet** — `main` is still
+2 commits ahead of `origin/main` and `git push` is blocked: `gh auth status` reports the
+active account as `monikaarya-work`, which lacks write access to Zoron09/quant-terminal.
+
+  - **Adapter discard fix (`utils/code33_adapter.py`).** `margin_for()` read only
+    `net_margin_pct` off each `MarginPoint` and dropped the rest. It is now
+    `margin_point_for()`, returning the whole point, and three things it was throwing
+    away reach the API:
+      1. **Real net income** — `'ni'`/`'ni_end_dates'` are populated instead of hardcoded
+         `[]`. (Supersedes the ENGINE STATUS note that called raw `'ni'` intentionally
+         empty.) Verified nothing consumed the empty contract first: `api/server.py`
+         reads only `npm_ends`, and the one `ni:` hit in `frontend/index.html` is
+         hardcoded demo data, not an API read.
+      2. **Per-quarter provenance** — new `'rev_sources'`/`'ni_sources'`, the un-flattened
+         form of the `'sources'` summary (which is still emitted unchanged). Upstream
+         vocabulary verbatim: `reported` = secfsdstools, `edgartools` = live gap fill,
+         `derived_fy_minus_quarters` = Q4 back-solved from the 10-K.
+      3. **Restatement flags** — new `'ni_restated'`/`'ni_restated_value'`. The pipeline
+         already detected restatements and the adapter discarded the finding. AES proves
+         the cost: its 2024-06-30 quarter is served as $185.0M when AES itself later
+         restated it to $276.0M — a 3.1pp margin error feeding the margin-expansion leg.
+         The engine still reports the as-first-filed value; this only surfaces that a
+         revision exists. Which value *should* win is an open policy question.
+    `ni_plausible`/`revenue_plausible` deliberately left unexposed. Purely additive — no
+    field removed or renamed, no revenue or margin value changed. Regression: AES, UNP,
+    MU, INTC, JBLU, IQV byte-identical on rev/npm/status/sources against a baseline
+    captured from the live API before the edit.
+
+  - **`data/sp500_tickers.json` deleted.** Four stale tickers were fixed first (ABC→COR,
+    SQ→XYZ, WBA and K removed — all four confirmed against SEC's live ticker map as
+    resolving to nothing; BRK.B left alone, it is a dot-vs-hyphen false positive that
+    `normalize_ticker()` already handles). Then the file was removed outright: grep of
+    the whole repo including both frontend bundles found **zero code consumers** — its
+    only reader, `tools/watchlist_ticker_audit.py`, was deleted in the 2026-07-22 swap.
+    Deletion is staged. Note the force-delete discarded the ticker fix before it was
+    committed, so that edit leaves no trace in git history.
+    **Stale prose:** the 2026-07-09 entry below still describes this file, plus
+    `tools/watchlist_ticker_audit.py` and `tools/preflight_checks.py` — all three now
+    gone. Left as-is deliberately: it is a dated historical record, accurate when
+    written. Only its "watchlist cleanup not yet done — pending go-ahead" status line is
+    superseded, by this entry.
+
+  - **Sector exclusion: gate added, then removed same day — final state is
+    informational-only.** The reported symptom was EIX (Utilities) scoring GREEN on the
+    last full scan. Root cause was not the documented "gating gap": the swap deleted the
+    sector logic entirely, leaving `sector_excluded` a hardcoded `False` literal with
+    nothing computing it (code33-screener has no sector concept — its bank check is
+    explicitly "deliberately NOT sector labels"). The `EXCL_SECTORS`/
+    `EXCL_INDUSTRY_KEYWORDS`/`REIT_KEYWORDS` lists were recovered verbatim from
+    `dc77f59^` and a hard gate wired in, returning `status='excluded_sector'` before the
+    pipeline ran.
+    **Reversed the same day on review of Minervini's actual methodology:** these are
+    defensive/late-cycle sectors that Code 33's own growth and margin criteria are meant
+    to filter out on the numbers. A pre-scoring gate pre-empts that judgement and hides
+    the evidence for it. The gate is gone; `_sector_flags()` and both lists stay, and
+    `sector_excluded`/`excluded_sector_name`/`is_reit` are returned as metadata on every
+    path including the no-data exits. EIX and AES now score normally and still report
+    `sector: Utilities`.
+    **The bank exclusion was deliberately NOT touched** — banks are refused for a proven
+    data-correctness fault (revenue silently wrong under standard tags, confirmed on
+    FULT), which is a different category from a sector-fit judgement.
+    **Cost, flagged not fixed:** `_sector_flags()` makes a yfinance `.info` call per
+    ticker inside the globally-serialized pipeline. With the gate it paid for itself by
+    skipping the pull; now every ticker pays it for metadata only.
+    **Worth revisiting:** the keyword list matches substrings against a yfinance
+    free-text field — `'chemical'` catches both "Specialty Chemicals" and "Agricultural
+    Chemicals", and a vendor relabelling silently changes behaviour.
+    **Removed entirely hours later, same session.** With no gating behaviour left, the flags
+    were one extra yfinance `.info` call per ticker — multiplied across a 500+ ticker scan —
+    for a label nothing consumed. `_sector_flags()`, both keyword lists, `REIT_KEYWORDS` and
+    the yfinance import are gone; `sector_excluded`/`excluded_sector_name`/`is_reit` are back
+    to their original hardcoded `False`/`''`/`False` on every return path. Net effect of the
+    day's sector work on the adapter: zero, minus a comment explaining why there is no gate.
+
+  - **Verification lesson — confirm ONE listener on port 8000 before trusting any
+    result.** A post-fix pull showed the sector gate doing nothing; it was working. Three
+    processes were listening on 8000 simultaneously (two stale servers plus orphaned
+    `multiprocessing` children holding inherited socket handles), and requests were
+    landing on pre-fix code. `Stop-Process` on the reloader PID is not sufficient — check
+    `netstat -ano | Select-String ":8000.*LISTENING"` returns exactly one row, and kill
+    orphaned `python.exe` children whose command line contains `multiprocessing`. This is
+    the same trap recorded in `bug_report.md` under commit `64a5757`.
+
+  - **`bug_report.md` — new 2026-07-31 sections** from two 10-ticker data-accuracy passes
+    (20 tickers, all verified against `data.sec.gov` directly). Confirmed defects: the
+    restatement discard above; **ICE missing an already-filed quarter** (2026-06-30,
+    filed 2026-07-30, invisible because `expected_quarter_ends()` won't target it until
+    ~45 days past period end — a real blind window, unlike the MU case previously waved
+    off); **the ±1000% margin plausibility guard lost in the swap** (commit `990bcba`'s
+    TRT tripwire was never ported — CRSP's -24450% proves values now flow through);
+    **blank fiscal labels on every edgartools-filled quarter** (`pipeline.py:95-96` sets
+    `fy=None, fp=None`; FDS shows two); **SLXN never reaching the pre-revenue bucket**
+    (the `<5 quarters` guard returns before `_diagnose_insufficient()` runs). Cleared
+    after investigation: ORA, LMND, ESRT, ICE, NUE, COR — all matched SEC exactly;
+    the LMND/ICE/ESRT/AES gaps against TradingView are vendor definitional differences,
+    now documented per ticker.
+
 2026-07-31 — **Unlabelled-failure reporting gap closed (branch
 `insufficient-reason-labels`, NOT merged — held for review)**. `_c33_status` can return
 'insufficient' from the adapter's SUCCESS path (both series pulled fine, but a leg had

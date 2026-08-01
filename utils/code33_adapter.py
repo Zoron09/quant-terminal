@@ -17,8 +17,17 @@ Concurrency contract (do not weaken):
 
 Output shape mirrors the old get_code33_data() dict (ascending arrays, oldest
 first, newest LAST — /api/scan's safe3() and /api/peers' reversed() lookups
-depend on that order). Raw NI and all EPS fields stay empty exactly like the
-old engine's output.
+depend on that order). All EPS fields stay empty exactly like the old engine's
+output.
+
+Raw NI is no longer empty: 'ni'/'ni_end_dates' now carry the real per-quarter
+net income already sitting on each MarginPoint, alongside three additions —
+'rev_sources'/'ni_sources' (per-quarter provenance, the un-flattened form of
+the 'sources' summary, which is still emitted unchanged) and 'ni_restated'/
+'ni_restated_value' (surfacing that a later filing revised a quarter's net
+income, and the corrected figure). Purely additive: no existing field was
+removed or renamed, and no reported revenue or margin value changed.
+ni_plausible/revenue_plausible remain deliberately unexposed.
 
 Banks: the pipeline refuses bank/depository tickers (their revenue can be
 silently wrong under standard tags — confirmed on FULT). These return
@@ -31,7 +40,8 @@ from datetime import date
 from typing import Optional
 
 from code33 import edgar_fill
-from code33.pipeline import get_complete_net_margin, get_complete_revenue_series
+from code33.net_margin import pair_margin_series
+from code33.pipeline import get_complete_net_income_series, get_complete_revenue_series
 
 log = logging.getLogger(__name__)
 
@@ -171,6 +181,8 @@ def _empty_result(status: str, reason: str = '') -> dict:
         'eps_labels': [], 'rev_labels': [],
         'npm': [], 'npm_labels': [], 'npm_ends': [],
         'sources': {'rev': reason or status, 'ni': reason or status},
+        'rev_sources': [], 'ni_sources': [],
+        'ni_restated': [], 'ni_restated_value': [],
         'is_us': True, 'sector_excluded': False, 'excluded_sector_name': '',
         'is_reit': False,
         'status': status,
@@ -217,6 +229,14 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
         log.info("code33_adapter: %s excluded (bank tags: %s)", ticker, bank_tags)
         return _empty_result('excluded_bank', 'bank/depository institution — not yet supported')
 
+    # No sector/industry gate here by design. Minervini treats utilities and
+    # late-cycle names as sectors Code 33's own growth and margin criteria
+    # filter out on the numbers, so blocking them before scoring pre-empts that
+    # judgement. A gate plus informational-only flags were both tried and both
+    # removed on 2026-08-01 — the flags cost a yfinance .info call per ticker
+    # and nothing consumed them. The bank exclusion above is deliberately NOT
+    # the same case: banks are refused for a proven data-correctness fault.
+
     # +4 quarters so every displayed quarter has a year-ago for YoY.
     pull = n_quarters + 4
     rev_series = get_complete_revenue_series(ticker, quarters=pull)
@@ -227,7 +247,28 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
     if len(rev_points) < 5:
         return _empty_result('insufficient', f'only {len(rev_points)} usable revenue quarters')
 
-    margin_series = get_complete_net_margin(ticker, quarters=pull)
+    # Reuse rev_series instead of calling get_complete_net_margin(), which would
+    # rebuild the SAME revenue series from scratch — including repeating its
+    # live-EDGAR gap fill. This is not an approximation: get_complete_net_margin
+    # is literally
+    #     revenue_series = get_complete_revenue_series(ticker, quarters)
+    #     ni_series      = get_complete_net_income_series(ticker, quarters)
+    #     pair_margin_series(revenue_series, ni_series,
+    #                        revenue_series.cik or ni_series.cik, quarters)
+    # and it is called with the same `quarters=pull` used above, so its first
+    # line reproduces rev_series exactly. The three lines below are that body
+    # with the duplicate build dropped; pair_margin_series is pure (reads only
+    # the two series it is handed), so the paired output is unchanged.
+    #
+    # NOTE: this mirrors get_complete_net_margin's composition rather than
+    # calling it. If code33-screener ever changes how that function builds or
+    # pairs its legs, this must be re-synced — it will not fail loudly.
+    # Fixing it inside code33-screener (e.g. an optional revenue_series
+    # parameter) would remove that coupling, but that repo is off-limits from
+    # quant-terminal sessions per CLAUDE.md rule 1.
+    ni_series = get_complete_net_income_series(ticker, quarters=pull)
+    margin_series = pair_margin_series(
+        rev_series, ni_series, rev_series.cik or ni_series.cik, pull)
     margin_points = [p for p in margin_series.points if p.net_margin_pct is not None]
 
     display = rev_points[:n_quarters]  # newest first
@@ -244,14 +285,16 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
                 return None
         return None
 
-    def margin_for(rev_point):
-        best = min(
+    def margin_point_for(rev_point):
+        # Returns the whole MarginPoint, not just its percentage — the point
+        # also carries net_income, ni_source and the restatement flags, which
+        # used to be discarded here. Pairing logic is unchanged.
+        return min(
             (m for m in margin_points
              if abs((m.period_end - rev_point.period_end).days) <= _PAIR_TOLERANCE_DAYS),
             key=lambda m: abs((m.period_end - rev_point.period_end).days),
             default=None,
         )
-        return best.net_margin_pct if best is not None else None
 
     # Build ascending (oldest first, newest LAST) — the order the old engine
     # emitted and /api/scan + /api/peers depend on.
@@ -261,13 +304,32 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
     rev_labels = [_fq_label(p.fy, p.fp) for p in display_asc]
     rev_yoy = [yoy_for(rev_points.index(p)) for p in display_asc]
 
+    # Per-quarter revenue provenance, parallel to rev/rev_end_dates/rev_labels.
+    # Upstream vocabulary is emitted verbatim rather than relabelled:
+    # 'reported' = read from the secfsdstools bulk dataset, 'edgartools' = live
+    # gap fill, 'derived_fy_minus_quarters' = Q4 back-solved from the 10-K.
+    rev_sources = [p.source for p in display_asc]
+
+    # ni_* and npm_* run strictly parallel — same quarters, same order, same
+    # length — since both are appended only when a quarter has a paired margin.
     npm_vals, npm_ends, npm_labels = [], [], []
+    ni_vals, ni_ends, ni_sources = [], [], []
+    ni_restated, ni_restated_value = [], []
     for p in display_asc:
-        m = margin_for(p)
-        if m is not None:
-            npm_vals.append(m)
+        mp = margin_point_for(p)
+        if mp is not None and mp.net_margin_pct is not None:
+            npm_vals.append(mp.net_margin_pct)
             npm_ends.append(p.period_end.isoformat())
             npm_labels.append(_fq_label(p.fy, p.fp))
+            ni_vals.append(mp.net_income)
+            ni_ends.append(p.period_end.isoformat())
+            ni_sources.append(mp.ni_source)
+            # True when a later filing revised this quarter's net income;
+            # ni_restated_value carries the corrected figure. The engine still
+            # reports the as-first-filed number in ni — this only surfaces that
+            # a revision exists, it does not change any reported value.
+            ni_restated.append(mp.ni_restated)
+            ni_restated_value.append(mp.ni_restated_value)
 
     status, _d1, _d2 = _c33_status(rev_yoy, npm_vals)
 
@@ -288,15 +350,19 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
         return '+'.join(sorted(srcs)) if srcs else 'insufficient'
 
     return {
-        'eps': [], 'rev': rev_vals, 'ni': [],
-        'eps_end_dates': [], 'rev_end_dates': rev_ends, 'ni_end_dates': [],
+        'eps': [], 'rev': rev_vals, 'ni': ni_vals,
+        'eps_end_dates': [], 'rev_end_dates': rev_ends, 'ni_end_dates': ni_ends,
         'eps_yoy': [], 'rev_yoy': rev_yoy,
         'eps_labels': [], 'rev_labels': rev_labels,
         'npm': npm_vals, 'npm_labels': npm_labels, 'npm_ends': npm_ends,
+        # Collapsed series-level summary kept verbatim for existing callers;
+        # rev_sources/ni_sources below are the per-quarter view it flattens.
         'sources': {
             'rev': _src_summary(display_asc, 'source'),
             'ni': _src_summary(margin_points, 'ni_source'),
         },
+        'rev_sources': rev_sources, 'ni_sources': ni_sources,
+        'ni_restated': ni_restated, 'ni_restated_value': ni_restated_value,
         'is_us': True, 'sector_excluded': False, 'excluded_sector_name': '',
         'is_reit': False,
         'status': status,
