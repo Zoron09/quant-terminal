@@ -6,12 +6,32 @@
 ---
 
 ## ABSOLUTE RULES — READ BEFORE TOUCHING ANYTHING
-1. The Code 33 engine lives in the EXTERNAL `code33-screener` project (installed editable
-   into `.venv`); `utils/code33_adapter.py` is the only in-repo engine file. NEVER touch
-   the `code33-screener` repo from quant-terminal work sessions — engine changes happen
-   there, under its own regression suite (`tools/regression_check.py`, 19-ticker baseline).
-   (Old rule "never touch utils/code33_engine.py" retired 2026-07-22 — that file and its
-   5 helper modules were deleted in the code33-swap branch by explicit owner instruction.)
+1. **The Code 33 engine now lives IN THIS REPO** at `code33/` (8 modules), with
+   `utils/code33_adapter.py` as its adapter. Engine changes happen HERE, not elsewhere.
+   The external `code33-screener` project is no longer a dependency — its editable pip
+   install was removed 2026-08-01 (vendoring steps 5-6; the copy itself is commit
+   `6107e77`). That repo still exists on disk and is still **read-only from
+   quant-terminal sessions** — never modify it — but it is now a reference copy and the
+   upstream of a one-time fork, not the running code.
+   - **What changing `code33/` requires** (today's precedent, treat as the standard):
+     a wide ticker regression — 20+ tickers spanning reported / derived-Q4 /
+     edgartools-filled quarters, an excluded bank, an insufficient case, a restated
+     ticker and a non-calendar fiscal year; a **byte-level comparison of the entire JSON
+     payload** before and after, excluding only live market fields, with **zero
+     tolerance** (one differing value = revert, don't patch); and **exactly one listener
+     on port 8000 confirmed before any test** (stale workers have twice produced false
+     results — see the 2026-08-01 entry).
+   - **The dataset is still external.** `.secfsdstools.cfg` points at
+     `code33-screener\data\` by absolute path. Vendoring moved the code, not the ~426K-report
+     parquet dataset, so that directory must still exist. Fully removing the dependency is
+     a separate, larger job.
+   - `secfsdstools==2.4.3` / `edgartools==5.39.1` are PINNED in requirements.txt for this
+     reason — the engine was validated against exactly these.
+   - History: the old rule pointed engine work at the external repo and its
+     `tools/regression_check.py` 19-ticker baseline; that suite still lives there and no
+     longer covers the code that actually runs. Before that, the rule was "never touch
+     `utils/code33_engine.py`" — retired 2026-07-22 when that file and its 5 helper
+     modules were deleted in the code33-swap branch by explicit owner instruction.
 2. NEVER touch world grid CSS or navigation JS in `frontend/index.html`
 3. NEVER use `&&` in PowerShell — use `;` instead
 4. ALWAYS use Python patch approach for frontend changes (decode `__bundler/template` JSON → patch → re-encode with `<\/` escaping → write back)
@@ -226,6 +246,31 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-01 (later) — **Vendoring COMPLETE — steps 5-6 done.** Continues the vendoring
+recorded in commit `6107e77` (steps 1-4: copy, hash-verify, one path fix, 20-ticker
+regression); see that commit and the entry below rather than duplicating them here.
+  - **External dependency removed.** `pip uninstall code33-screener` — the editable
+    `.pth` and dist-info are gone. Proven, not assumed: `import code33` from outside the
+    repo now raises `ModuleNotFoundError`, while from the repo root it resolves to
+    `quant-terminal\code33\`. Nothing was depending on the pip install itself.
+    code33-screener's own source is untouched (all 9 files intact) and remains available
+    as a reference and rollback path.
+  - **Dependencies pinned:** `secfsdstools==2.4.3`, `edgartools==5.39.1` added to
+    requirements.txt. They were previously declared only by code33-screener's
+    `pyproject.toml`; after vendoring, nothing declared them at all.
+  - **`CACHE_VERSION` bumped** `v31-code33-screener` → `v32-code33-vendored`. Traceability
+    only — verified it changes no reported data.
+  - **Rule 1 rewritten** for the new reality: the engine lives in `code33/`, changes happen
+    locally, and the testing standard is now written down (20+ mixed tickers, byte-level
+    whole-payload comparison, zero tolerance, single-listener check). Prior versions of the
+    rule are kept inline as history.
+  - **Still external:** the secfsdstools parquet dataset. `.secfsdstools.cfg` points at
+    `code33-screener\data\` absolutely, so that folder is still required at runtime.
+    Vendoring moved the code only.
+  - Verified: UNP, MU, AES, ORA, BRK.B, SOFI re-pulled after the uninstall — 156 key
+    comparisons against the last verified state, **0 differences**; logs clean; single
+    listener confirmed before testing.
+
 2026-08-01 — **Adapter now exposes what it was discarding; watchlist file deleted;
 sector gate added and removed the same day.** (Session ran 2026-07-31 into 2026-08-01;
 the data-accuracy investigations behind these changes are dated 2026-07-31 in

@@ -12,3 +12,13 @@ alpaca-py>=0.20.0
 
 # Unofficial, reverse-engineered Wealthsimple API client (not an official SDK) — used by tools/wealthsimple_export.py
 ws-api
+
+# Code 33 engine dependencies. The engine itself was vendored into code33/ on
+# 2026-08-01 (commit 6107e77), replacing the editable code33-screener install
+# that previously declared these — without these lines they would be undeclared.
+# PINNED, not floated: the engine's correctness is bound to secfsdstools'
+# behaviour (its parallel-download setting caused the historic 32% silent
+# quarter-loss bug), and all validation to date was done against exactly these
+# two versions.
+secfsdstools==2.4.3
+edgartools==5.39.1

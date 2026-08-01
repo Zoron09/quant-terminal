@@ -45,7 +45,7 @@ from code33.pipeline import get_complete_net_income_series, get_complete_revenue
 
 log = logging.getLogger(__name__)
 
-CACHE_VERSION = 'v31-code33-screener'
+CACHE_VERSION = 'v32-code33-vendored'
 
 _PIPELINE_LOCK = threading.Lock()
 
