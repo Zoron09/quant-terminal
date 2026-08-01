@@ -591,6 +591,73 @@ No engine, adapter, or code33-screener code was touched.
 
 ---
 
+## 2026-08-01 — dual-class ticker handling at the yfinance boundary
+
+### BRK.B returned HTTP 500 from /api/ticker — FIXED
+- **Ticker:** BRK.B (any dual-class ticker using dot notation — BRK.B, MOG.A, etc.).
+- **Symptom:** `GET /api/ticker/BRK.B` returned **500** with body
+  `{"error":"'exchangeTimezoneName'"}`. Found during the vendoring regression pass, where
+  BRK.B was included specifically to exercise `normalize_ticker()`.
+- **Root cause:** `api/server.py` passed the **un-normalized** ticker straight to
+  `yf.Ticker(t)`, where `t = ticker.upper()` — so Yahoo received `"BRK.B"`. Yahoo uses SEC's
+  hyphen form (`BRK-B`), the same form `normalize_ticker()` already produces and that the
+  engine half of the same request had *already applied* successfully. With an unrecognised
+  symbol, yfinance's `fast_info` had no metadata and raised
+  `KeyError: 'exchangeTimezoneName'` on first attribute access.
+- **Why the existing guards didn't catch it:** every access was written as
+  `getattr(info, 'last_price', 0)`. `getattr`'s default only absorbs **AttributeError** —
+  `fast_info` is a lazy dict that raises **KeyError**, so the default never fired and the
+  error escaped to the bare `except Exception` at the end of the handler, which converted it
+  into a 500. One missing quote field took down the entire response, including the complete
+  and correct Code 33 payload sitting next to it.
+- **Confirmed before fixing, not inferred:** ran both symbols through yfinance directly —
+  `BRK.B` → `fast_info.last_price` raises `KeyError: 'exchangeTimezoneName'`;
+  `BRK-B` → returns `511.54` and `"Berkshire Hathaway Inc. New"`.
+- **Fix (api/server.py only):** `yf.Ticker(normalize_ticker(t))` at the call site, reusing
+  the adapter's existing function rather than duplicating the dot→hyphen rule; plus a local
+  `fi()` wrapper around every `fast_info` read (and a try/except around `tk.info`) so a
+  genuinely absent field degrades to its existing default instead of 500ing. Attribute
+  resolution order, fallback values and `None` semantics all preserved deliberately — the
+  guard is additive, not a behaviour change.
+- **Verified:** BRK.B now returns **200** with a full payload — price 511.54, market cap
+  1.1T, PE 15.17, 8 quarters, revenue $94.97B/$94.23B/$93.68B, net income
+  $30.80B/$19.20B/$10.11B, mixed `reported`/`derived_fy_minus_quarters`/`edgartools`
+  provenance. **Independent confirmation the cause was fixed rather than suppressed:**
+  yfinance's own `$BRK.B: possibly delisted; no price data found` errors, present 4x on
+  every prior run, are now **completely absent** — Yahoo resolves the symbol.
+- **Regression:** UNP, MU, AES, ORA, SHOP, SOFI re-pulled against the last verified state —
+  entire payload compared minus live market fields, **156 key comparisons, 0 differences**.
+  Server logs clean, single listener verified.
+
+### Same bug class at four other endpoints — OPEN, LOW/MEDIUM (unconfirmed impact)
+- **What:** `/api/ticker` was the only endpoint fixed. Every other yfinance call site still
+  passes the raw, un-normalized ticker. Confirmed by reading the code (the *pattern* is
+  verified; the runtime impact is **not** — none of these were actually called with a
+  dual-class ticker):
+
+  | Endpoint | Line | Call |
+  |---|---|---|
+  | `/api/chart/{ticker}` | 623 | `yf.Ticker(t).history(...)` — `t = ticker.upper()` (612) |
+  | `/api/financials/{ticker}` | 656 | `yf.Ticker(t)` — `t = ticker.upper()` (647) |
+  | `/api/news/{ticker}` | 922 | `yf.Ticker(t)` — `t = ticker.upper()` (860) |
+  | `/api/ownership/{ticker}` | 998 | `yf.Ticker(ticker.upper())` |
+  | `/api/peers/{ticker}` | 1039, 1042 | `yf.Ticker(ticker.upper())` x2 |
+
+  Only `api/server.py:550` (`/api/ticker`) normalizes.
+- **Expected practical impact:** a dual-class ticker now shows correct core stats but would
+  still have a blank chart, and possibly missing news, ownership and peer data — a partially
+  broken analysis page rather than an obvious failure. Whether each endpoint 500s, returns
+  empty, or degrades silently depends on how each handles yfinance's empty response; the
+  `fi()`-style KeyError trap added to `/api/ticker` exists at none of them.
+- **Severity:** LOW/MEDIUM pending confirmation. Low reach (only dot-notation tickers, and
+  the watchlist that carried BRK.B was deleted 2026-08-01), but silent partial failure is
+  worse to diagnose than a clean 500.
+- **Not fixed, not verified — flagged for a future pass.** The fix would likely be the same
+  one-line `normalize_ticker()` reuse at each call site, but each endpoint needs its own
+  before/after check rather than a blanket edit.
+
+---
+
 ## Open — found 2026-07-31, second 10-ticker data-accuracy pass (v31-code33-screener)
 
 Scope: AES, ICE, FDS, ESRT, SLXN, PLTR, NUE, DKNG, NET, U, same method as the first pass

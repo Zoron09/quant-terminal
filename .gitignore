@@ -19,3 +19,7 @@ tools/*.tmp
 
 # background scan job checkpoints (runtime artifacts)
 data/scan_jobs/
+
+# SEC ticker->CIK map cached by code33/ticker_lookup.py (~1MB, regenerable,
+# refreshes itself weekly)
+data/company_tickers.json

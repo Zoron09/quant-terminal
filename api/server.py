@@ -20,7 +20,7 @@ import time
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from utils.code33_adapter import get_code33_data, CACHE_VERSION
+from utils.code33_adapter import get_code33_data, CACHE_VERSION, normalize_ticker
 from fastapi.concurrency import run_in_threadpool
 
 TICKER_CACHE = {}
@@ -543,22 +543,42 @@ async def ticker_data(ticker: str):
         data['status'] = data.get('status', 'insufficient')
         
 
-        tk = yf.Ticker(t)
+        # Yahoo uses SEC's hyphen form for share classes (BRK-B, not BRK.B) —
+        # the same normalization the engine already applies via
+        # normalize_ticker(). Passing the raw dotted ticker returned empty
+        # metadata, which made fast_info raise and 500'd the whole endpoint.
+        tk = yf.Ticker(normalize_ticker(t))
+
         info = tk.fast_info
-        full_info = tk.info or {}
-        data['price'] = getattr(info, 'last_price', 0)
+        try:
+            full_info = tk.info or {}
+        except Exception:
+            full_info = {}
+
+        def fi(attr, default=None):
+            """fast_info is a lazy dict that raises KeyError (e.g.
+            'exchangeTimezoneName') when Yahoo returns no metadata for a
+            symbol. getattr's default only absorbs AttributeError, so that
+            KeyError escaped and became a 500. Degrade to the default instead —
+            a missing quote should cost one field, not the whole response."""
+            try:
+                return getattr(info, attr, default)
+            except Exception:
+                return default
+
+        data['price'] = fi('last_price', 0)
         data['company_name'] = full_info.get(
             'shortName', t)
-            
-        data['change'] = getattr(info, 'last_price', 0) - \
-          getattr(info, 'regular_market_previous_close', 
-          getattr(info, 'previous_close', 0))
-          
-        data['change_pct'] = (data['change'] / 
-          getattr(info, 'regular_market_previous_close',
-          getattr(info, 'previous_close', 1))) * 100
-        
-        mc = getattr(info, 'market_cap', None)
+
+        data['change'] = fi('last_price', 0) - \
+          fi('regular_market_previous_close',
+          fi('previous_close', 0))
+
+        data['change_pct'] = (data['change'] /
+          fi('regular_market_previous_close',
+          fi('previous_close', 1))) * 100
+
+        mc = fi('market_cap', None)
         if mc is None:
             mc = full_info.get('marketCap', 0)
         def fmt_mcap(v):
@@ -574,12 +594,9 @@ async def ticker_data(ticker: str):
         data['pe_ratio'] = full_info.get(
             'trailingPE', 'N/A')
 
-        data['week52_high'] = getattr(
-            info, 'year_high', 0)
-        data['week52_low'] = getattr(
-            info, 'year_low', 0)
-        data['avg_volume'] = getattr(
-            info, 'three_month_average_volume', 0)
+        data['week52_high'] = fi('year_high', 0)
+        data['week52_low'] = fi('year_low', 0)
+        data['avg_volume'] = fi('three_month_average_volume', 0)
         
         import logging
         logging.warning(f"DATA KEYS: {list(data.keys())}")
