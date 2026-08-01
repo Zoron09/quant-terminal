@@ -96,14 +96,23 @@ def bank_signal_tags(ticker: str) -> list:
 
 def fetch_discrete_quarter(
     ticker: str, target_end: date, tag_priority: List[str]
-) -> Optional[Tuple[date, float, str, str, date]]:
+) -> Optional[Tuple[date, float, str, str, date, Optional[int], Optional[str]]]:
     """The discrete-quarter value ending nearest target_end (within tolerance).
 
-    Returns (period_end, value, tag, accession, filing_date) or None. Tag
-    priority mirrors the secfsdstools pull. Within a tag, the ORIGINAL as-filed
-    figure wins (earliest filing_date) — same restatement principle as the
-    primary source: later filings' comparative-column revisions never replace
+    Returns (period_end, value, tag, accession, filing_date, fy, fp) or None.
+    Tag priority mirrors the secfsdstools pull. Within a tag, the ORIGINAL
+    as-filed figure wins (earliest filing_date) — same restatement principle as
+    the primary source: later filings' comparative-column revisions never replace
     what the original filing reported for its own period.
+
+    fy/fp come from the same selected row and are what let a gap-filled quarter
+    carry a fiscal label instead of a blank one. They are only trustworthy
+    BECAUSE of the earliest-filing_date rule above: edgartools stamps every fact
+    with its FILING's fiscal year/period, so a quarter's own original 10-Q
+    labels it correctly, while the comparative columns republished in later
+    filings carry the later filing's fy/fp. Selecting the original filing avoids
+    that mislabel by construction. Both degrade to None when absent or NaN — a
+    blank label is the honest output, never a guessed one.
     """
     df = _load_facts_df(ticker)
     if df is None or df.empty:
@@ -120,11 +129,14 @@ def fetch_discrete_quarter(
         if tag_rows.empty:
             continue
         row = tag_rows.sort_values("filing_date").iloc[0]
+        fy_raw, fp_raw = row.get("fiscal_year"), row.get("fiscal_period")
         return (
             row["period_end"].date(),
             float(row["numeric_value"]),
             tag,
             str(row.get("accession") or ""),
             row["filing_date"].date() if pd.notna(row["filing_date"]) else target_end,
+            int(fy_raw) if pd.notna(fy_raw) else None,
+            str(fp_raw) if pd.notna(fp_raw) else None,
         )
     return None

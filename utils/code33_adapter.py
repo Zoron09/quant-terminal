@@ -117,6 +117,25 @@ def _yoy_miss_cause(rev_points: list, idx: int) -> Optional[str]:
     return 'history_too_short'
 
 
+def _blank_revenue_count(all_rev_points: list) -> int:
+    """Quarters carrying no revenue at all. Counts BOTH shapes deliberately:
+      value is None -> no revenue concept filed at all (SLXN)
+      value == 0    -> a revenue concept filed as exactly $0.00 (RVMD/DNLI/SYRE)
+    """
+    return sum(1 for p in all_rev_points if p.value is None or p.value == 0)
+
+
+def _is_pre_revenue(all_rev_points: list) -> bool:
+    """At least half the pulled quarters have no revenue."""
+    return bool(all_rev_points) and _blank_revenue_count(all_rev_points) * 2 >= len(all_rev_points)
+
+
+def _pre_revenue_reason(all_rev_points: list) -> str:
+    blank = _blank_revenue_count(all_rev_points)
+    return (f"no reported revenue in {blank} of {len(all_rev_points)} quarters "
+            f"- net margin and YoY are undefined against a zero base")
+
+
 def _diagnose_insufficient(all_rev_points: list, rev_points: list,
                            display_asc: list, rev_yoy: list, npm_vals: list) -> str:
     """Root cause for a ticker _c33_status called 'insufficient' on the SUCCESS
@@ -137,10 +156,8 @@ def _diagnose_insufficient(all_rev_points: list, rev_points: list,
     #    undefined against a zero denominator (net_margin.py guards revenue!=0)
     #    and so is YoY against a zero base. Verified against live EDGAR on
     #    RVMD/DNLI/SYRE — they file a revenue line reporting exactly $0.00.
-    blank = sum(1 for p in all_rev_points if p.value is None or p.value == 0)
-    if all_rev_points and blank * 2 >= len(all_rev_points):
-        return (f"no reported revenue in {blank} of {len(all_rev_points)} quarters "
-                f"- net margin and YoY are undefined against a zero base")
+    if _is_pre_revenue(all_rev_points):
+        return _pre_revenue_reason(all_rev_points)
 
     # 2. Revenue side is fine and it is the margin leg that is short, so net
     #    income is the missing ingredient (revenue here is present and non-zero).
@@ -191,10 +208,21 @@ def _empty_result(status: str, reason: str = '') -> dict:
     }
 
 
+# SEC's fiscal-period vocabulary has no 'Q4'. A fiscal year's fourth quarter is
+# only ever reported on the 10-K, which carries fp='FY', so passing fp straight
+# through rendered a discrete quarter as 'FY FY24' — reading as if the value
+# were the full year when it is not: the Q4 figure is back-solved
+# (derived_fy_minus_quarters) or read as that filing's own discrete period.
+# 'Q4' is the honest label, and it matches what the engine already assumes
+# internally — quarterly_engine._attach_plausibility groups siblings on
+# fp in ('Q1','Q2','Q3'), i.e. it treats 'FY' as the Q4 slot.
+_FP_ALIASES = {'FY': 'Q4'}
+
+
 def _fq_label(fy, fp) -> str:
     if fy is None or fp is None:
         return ''
-    return f"{fp} FY{str(fy)[2:]}"
+    return f"{_FP_ALIASES.get(fp, fp)} FY{str(fy)[2:]}"
 
 
 def normalize_ticker(ticker: str) -> str:
@@ -245,6 +273,15 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
 
     rev_points = [p for p in rev_series.points if p.value is not None]  # newest first
     if len(rev_points) < 5:
+        # A company filing NO revenue concept at all arrives here with every
+        # point value=None, stripped by the filter above — the same real-world
+        # condition as the $0.00 filers, which keep value=0.0, survive, and are
+        # correctly diagnosed pre-revenue on the success path. Route only that
+        # case through the same diagnosis (tested against the UNFILTERED series,
+        # since the filter is exactly what hides the evidence); every other
+        # short-history reason keeps its existing message verbatim.
+        if _is_pre_revenue(rev_series.points):
+            return _empty_result('insufficient', _pre_revenue_reason(rev_series.points))
         return _empty_result('insufficient', f'only {len(rev_points)} usable revenue quarters')
 
     # Reuse rev_series instead of calling get_complete_net_margin(), which would

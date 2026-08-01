@@ -23,10 +23,22 @@ from code33.ticker_lookup import resolve_ticker_to_cik
 
 log = logging.getLogger(__name__)
 
-# A quarter that ended fewer than this many days ago may simply not be filed
-# yet anywhere (10-Q deadline is 40-45 days after period end) — expecting it
-# would just generate noise gaps no source can fill.
-FILING_LAG_DAYS = 45
+# The SEC 10-Q deadline: 40 days for large-accelerated/accelerated filers, 45 for
+# non-accelerated and smaller reporting companies. This is the LATEST a quarter can
+# legally appear. Reference only — deliberately NOT used to gate anything, see below.
+SEC_10Q_DEADLINE_DAYS = 45
+
+# When a projected quarter becomes worth ASKING for. This is a different question
+# from the deadline above, and using the deadline for it hid real, already-public
+# quarters. Measured across 17,635 10-Qs in this universe (local filing index):
+# 96.6% are filed BEFORE day 45, median 36 days, fastest observed 9 days (DAL).
+# 494 of 499 companies had their most recent 10-Q filed inside the old 45-day gate,
+# so nearly every company carried a blind window every quarter — ICE's was 15 days
+# (filed 2026-07-30, invisible until 2026-08-14).
+# Set below the fastest observed filer: a projection that finds nothing costs one
+# filter over an already-cached facts frame and adds NO point (fetch_discrete_quarter
+# returns None -> continue), so it cannot corrupt output for any filer.
+PROJECTION_MIN_AGE_DAYS = 10
 
 
 QUARTER_STEP_DAYS = 91
@@ -46,7 +58,7 @@ def expected_quarter_ends(
     if not known_ends:
         return []
     today = today or date.today()
-    cutoff = today - timedelta(days=FILING_LAG_DAYS)
+    cutoff = today - timedelta(days=PROJECTION_MIN_AGE_DAYS)
 
     known_sorted = sorted(set(known_ends), reverse=True)
     anchor = known_sorted[0]
@@ -58,7 +70,15 @@ def expected_quarter_ends(
         candidate += timedelta(days=QUARTER_STEP_DAYS)
     projections.sort(reverse=True)
 
-    return (projections + known_sorted)[:quarters]
+    # Projections are ADDITIVE, never displacing known ends. The old form,
+    # `(projections + known_sorted)[:quarters]`, let each projection evict the
+    # OLDEST known end from the fill window — and an evicted end whose value is
+    # None is a real gap that then silently stops being back-filled. Those oldest
+    # quarters are the year-ago YoY bases (the adapter pulls n_quarters + 4 for
+    # exactly that reason), so losing them corrupts YoY rather than just trimming
+    # history. Harmless to return a longer list: `expected` only drives fill
+    # ATTEMPTS in _fill_gaps, it never determines output length.
+    return projections + known_sorted[:quarters]
 
 
 def _fill_gaps(
@@ -85,15 +105,15 @@ def _fill_gaps(
         if hit is None:
             log.info("pipeline: %s quarter ~%s missing from both sources", ticker, target)
             continue
-        period_end, value, tag, accession, filing_date = hit
+        period_end, value, tag, accession, filing_date, fy, fp = hit
         filled.append(
             QuarterPoint(
                 period_end=period_end,
                 filed=filing_date,
                 adsh=accession,
                 form="10-Q",
-                fy=None,
-                fp=None,
+                fy=fy,
+                fp=fp,
                 value=value,
                 tag=tag,
                 source="edgartools",

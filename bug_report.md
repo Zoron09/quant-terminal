@@ -319,6 +319,12 @@ recurring silently.
 
 ## Solution prepared, not yet implemented
 
+> **Section note (2026-08-01): the one item below is OBSOLETE, not pending.** Every file it
+> names (`secfs_revenue.py`, `secfs_net_margin.py`, `code33_engine.py`) was deleted in the
+> 2026-07-22 engine swap, so it describes a pipeline that no longer exists. Kept for the
+> diagnosis only. CLAUDE.md already carries this caveat; recorded here so the section header
+> does not read as a live to-do.
+
 ### Count-gate double-merge redundancy
 - **Found:** 2026-07-11, during META manual testing (`get_code33_data("META")` took 70.1s —
   over the expected budget).
@@ -455,7 +461,41 @@ No engine, adapter, or code33-screener code was touched.
   (see the fiscal-label entry below), so this is the quarter every YoY and the entire Code 33
   signal depends on.
 
-### Margin plausibility guard lost in the engine swap — CONFIRMED, MEDIUM
+### Margin plausibility guard lost in the engine swap — CLOSED (downgraded 2026-08-01 from CONFIRMED, MEDIUM)
+- **Resolution (2026-08-01, via `/investigate`): the CRSP numbers are REAL. Not a bug, and
+  the proposed fix was wrong.** All 8 quarters were verified dollar-exact against
+  `data.sec.gov` companyfacts (CIK 1674416, resolved from SEC's own ticker map, not
+  hardcoded), bypassing secfsdstools and edgartools entirely. Net income matched to the
+  dollar on all 8; margin recomputed by hand from SEC's filed figures matched the engine to
+  two decimals on all 8. The flagged quarter is **2024-06-30**:
+  `-126,408,000 / 517,000 x 100 = -24,450.29%`. The two calendar Q4s in the window
+  (2024-12-31, 2025-12-31) are `derived_fy_minus_quarters` — both were independently
+  back-solved from FY totals minus Q1+Q2+Q3 and also landed exactly. `ni_restated` is
+  `false` on all 8, so no AES-style restatement discard is involved.
+- **CRSP is near-zero-revenue, NOT pre-revenue** — a distinction that matters. Unlike the
+  RVMD/XENE/SYRE/DNLI cluster (which file a revenue concept valued exactly `$0.00`, or no
+  revenue tag at all), CRSP files real non-zero `RevenueFromContractWithCustomerExcludingAssessedTax`
+  every quarter: **$0.5-1.5M**. Against that sits **$86M-$209M** of quarterly net loss from
+  clinical-stage R&D. The ratio lands in the tens of thousands of percent as arithmetic, not
+  error. CRSP correctly does NOT reach the `no reported revenue (pre-revenue company)` bucket,
+  and its `red` status is computed on correct numbers.
+- **Why the originally-proposed fix would have been wrong.** Porting `990bcba`'s ±1000%
+  tripwire into the adapter as written would have **suppressed 7 of CRSP's 8 quarters — every
+  one of them dollar-exact against SEC.** The guard was built for the TRT `_to_m()`
+  unit-conversion bug, where the extreme value was *incorrect*. Here the extreme values are
+  *correct*. A bare magnitude threshold cannot separate those two cases, because what makes
+  TRT wrong is a broken unit conversion, not the size of the output.
+- **If the guard is revisited later,** it needs to distinguish "extreme because the ratio is
+  genuinely extreme" from "extreme because of a calculation bug" — e.g. by checking the
+  inputs (revenue and NI each individually plausible against the company's own history and
+  filed scale) rather than the ratio's magnitude. Flagged as a design constraint, not a
+  queued task. Nothing is currently known to be producing wrong margins.
+- **Scope of this clearing:** CRSP specifically, and the reasoning about magnitude thresholds
+  generally. It does NOT re-verify any other ticker, and it does not claim the pipeline is
+  incapable of producing a wrong margin — only that the CRSP evidence cited as proof of a
+  defect was misread, and that the absence of a ±1000% guard is not itself a defect.
+
+**Original investigation notes — kept for history (the reasoning that produced the flag):**
 - **Ticker/quarters:** CRSP, all 8 quarters. Net margins returned: -24450.29%, -14276.08%,
   -104.54%, -15722.08%, -23379.93%, -11973.12%, -15117.25%, -8431.48%.
 - **What's wrong:** these values are *arithmetically correct* — CRSP books tiny collaboration
@@ -477,7 +517,51 @@ No engine, adapter, or code33-screener code was touched.
   output silently. CRSP proves values past ±1000% flow through untouched today.
 - **Note:** CRSP's Code 33 status (`red`) is being computed on these margins.
 
-### Every ticker's newest quarter has a blank fiscal label — CONFIRMED, MEDIUM
+### Every ticker's newest quarter has a blank fiscal label — CLOSED (FIXED 2026-08-01)
+- **Resolution (2026-08-01): fixed, together with the "Q4 renders as FY FY24" entry
+  below.** The two were fixed as one change deliberately — repairing the blank label
+  alone would have widened the FY-doubling bug, since a gap-filled quarter sourced from
+  a 10-K row carries `fp='FY'` and would newly have rendered as `FY FY26`.
+- **Root cause, corrected.** The original note below guessed the fix belonged upstream in
+  code33-screener. It didn't. This was a **dropped field at a return boundary**, the same
+  shape as the AES restatement discard: `code33/edgar_fill.py`'s `fetch_discrete_quarter()`
+  declared a 5-tuple return `(period_end, value, tag, accession, filing_date)` and simply
+  never handed fy/fp back — so `_fill_gaps` had nothing to pass and hardcoded `None`. The
+  values were present all along, on the very row the function had already selected: the
+  edgartools facts dataframe carries `fiscal_year` and `fiscal_period` columns.
+- **Fix as applied** (3 files, in-repo per rule 1 — no upstream change needed):
+  - `code33/edgar_fill.py`: return contract widened to a 7-tuple, adding
+    `int(row["fiscal_year"])` / `str(row["fiscal_period"])`, each `pd.notna`-guarded and
+    falling back to `None` so a missing value yields a blank label rather than a guess.
+  - `code33/pipeline.py`: `_fill_gaps` unpacks the two new fields and passes `fy=fy, fp=fp`
+    in place of the hardcoded `None, None`.
+  - `utils/code33_adapter.py`: `_fq_label()` gains `_FP_ALIASES = {'FY': 'Q4'}` (see the
+    entry below).
+- **Why the fy/fp values are trustworthy:** `fetch_discrete_quarter` already selected the
+  EARLIEST filing_date (the original as-filed figure, for restatement reasons). edgartools
+  stamps every fact with its FILING's fiscal year/period, so a quarter's own original 10-Q
+  labels it correctly, while comparative columns republished in later filings carry the
+  later filing's fy/fp. The pre-existing earliest-filing rule avoids that mislabel by
+  construction — confirmed live, where other concepts in the same window DO carry
+  conflicting fp values across filings.
+- **Verification:** before-baseline across 14 tickers had **14 blank labels and 25 doubled
+  labels**; after the fix, **0 and 0**. **101 labels** were then checked against each
+  company's real fiscal calendar, derived independently from SEC 10-K period ends (trusting
+  neither edgartools' fiscal fields nor SEC's per-fact `fp` stamp) — **101 correct, 0 blank,
+  0 mismatch**, including non-calendar fiscal years (FDS Aug FYE, COR Sep FYE, MU Aug FYE)
+  and 52/53-week filers (INTC, MU), whose FY ends drift 2-4 days from the month-end `ddate`
+  secfsdstools records. A **364-key byte-level payload comparison** across the same 14
+  tickers showed **0 unintended changes** — the only differences are `rev_labels`/`npm_labels`
+  on the 13 label-bearing tickers. Confirmed end-to-end over HTTP (`GET /api/ticker/FDS` →
+  200, both filled quarters labelled `Q2 FY26` / `Q3 FY26`), single listener verified first.
+- **Scope note — no visible UI change.** `rev_labels`/`npm_labels` have **zero consumers**:
+  no references in `frontend/index.html`, `frontend/journal.html`, or `api/server.py`. This
+  is API-payload correctness. Nothing a user sees today changes.
+- **Not touched:** `pipeline.py`'s hardcoded `form="10-Q"` on filled points, which can be a
+  10-K row. Same discard class, deliberately left as separate scope.
+
+**Original investigation notes — kept for history (including the fix-location guess that
+turned out to be wrong):**
 - **Tickers/quarters:** all 9 non-bank tickers, newest quarter each — UNP 2026-03-31,
   MU 2026-05-28, INTC 2026-03-28, JBLU 2026-03-31, LMND 2026-03-31, IQV 2026-03-31,
   SHOP 2026-03-31, CRSP 2026-03-31, ORA 2026-03-31. 9 of 9, not an edge case.
@@ -492,7 +576,29 @@ No engine, adapter, or code33-screener code was touched.
   quant-terminal sessions per CLAUDE.md rule 1 — either fix it there under its own regression
   suite, or have `_fq_label()` derive a label from `period_end` when fy/fp are absent.
 
-### Q4 renders as "FY FY24" instead of "Q4 FY24" — CONFIRMED, LOW
+### Q4 renders as "FY FY24" instead of "Q4 FY24" — CLOSED (FIXED 2026-08-01)
+- **Resolution (2026-08-01): fixed, together with the blank-label entry above.** Fixing
+  the blank label alone would have made this one WORSE, not left it alone: a gap-filled
+  quarter whose source row is a 10-K carries `fp='FY'`, so newly-labelled fills would have
+  started rendering `FY FY26` too. The two had to move as one change.
+- **Fix as applied:** `utils/code33_adapter.py`'s `_fq_label()` now maps `fp` through
+  `_FP_ALIASES = {'FY': 'Q4'}` before formatting. One dict, one lookup.
+- **Why `Q4` is the honest label, not a cosmetic relabel.** SEC's fiscal-period vocabulary
+  has no `Q4` at all — a fiscal year's fourth quarter is only ever reported on the 10-K,
+  which carries `fp='FY'`. The value attached to the point is always the discrete quarter
+  (`derived_fy_minus_quarters` back-solves it as FY minus Q1+Q2+Q3), never the full year,
+  so `FY FY24` actively misdescribed it. `Q4` also matches what the engine already assumes
+  internally: `quarterly_engine._attach_plausibility()` groups siblings on
+  `fp in ('Q1','Q2','Q3')` — it already treats `'FY'` as the Q4 slot. The fix makes the
+  label agree with semantics the code was relying on anyway.
+- **Verification:** 25 doubled labels across the 14-ticker baseline → **0** after. Covered
+  by the same 101-label fiscal-calendar check and 364-key byte-level comparison recorded in
+  the entry above; every former `FY FY24`/`FY FY25` now reads `Q4 FY24`/`Q4 FY25` and was
+  confirmed correct against the company's real fiscal year end. `_fq_label` was also
+  exercised directly across `Q1-Q4`, `FY`, `None`, `NaN` and an unknown `fp` — `None`/`NaN`
+  still yield `''`, unknown values pass through unchanged.
+
+**Original investigation notes — kept for history:**
 - **Tickers/quarters:** every calendar-Q4 quarter across the run — e.g. UNP 2024-12-31 and
   2025-12-31, INTC 2024-12-31 and 2025-12-31, JBLU, IQV, LMND, CRSP, SHOP all show
   `FY FY24` / `FY FY25`. MU shows it on its own August fiscal year-ends (2024-08-31,
@@ -502,7 +608,18 @@ No engine, adapter, or code33-screener code was touched.
   derived from, and `_fq_label()` passes it straight through, so a single quarter is labelled
   as if it were the whole year.
 
-### Revenue series is fetched twice per ticker — CONFIRMED, LOW (performance)
+### Revenue series is fetched twice per ticker — CLOSED (fixed by `b7d6b6a`, confirmed 2026-08-01)
+- **Resolution:** fixed by commit `b7d6b6a` ("adapter: expose discarded per-quarter data,
+  drop duplicate revenue build"), which made `_get_code33_data_inner()` reuse the already-built
+  `rev_series` instead of calling `get_complete_net_margin()`, which rebuilt the same series
+  (including repeating its live-EDGAR fill) from scratch. That commit predates this session and
+  is already on origin/main; this entry was simply never updated.
+- **Verified 2026-08-01, not assumed:** instrumented the pipeline logger and counted
+  `(quarter, tag)` fill pairs per ticker. MU and IQV each show 2 fills — one revenue-tag, one
+  net-income-tag, for the same quarter — and **zero duplicate (quarter, tag) pairs**. The
+  original symptom was the SAME quarter filled twice under the revenue tag; that no longer
+  happens. (A ticker can legitimately show two revenue fills for two DIFFERENT quarters, which
+  is the gap-filler working, not the bug.)
 - **What it is:** the server log shows each ticker's edgartools revenue gap-fill running
   **twice** before the net-income fill runs once — e.g. UNP 2026-03-31 filled from edgartools
   under `RevenueFromContractWithCustomerExcludingAssessedTax` at 08:46:54 and again at
@@ -738,7 +855,67 @@ figure matched the company's own filed 10-Q fact to the dollar: AES $3,180,000,0
 ICE $3,666,000,000 · FDS $622,918,000 · ESRT $190,325,000 · PLTR $1,632,583,000 ·
 NUE $9,496,000,000 · DKNG $1,646,076,000 · NET $639,755,000 · U $508,238,000.
 
-### ICE — an already-filed quarter is missing from output — CONFIRMED, MEDIUM
+### ICE — an already-filed quarter is missing from output — CLOSED (FIXED 2026-08-01)
+- **Resolution (2026-08-01): fixed, and it was never an ICE problem — it hit ~99% of the
+  universe every quarter.**
+- **How the mechanism actually worked.** `FILING_LAG_DAYS = 45` had exactly ONE consumer
+  (`expected_quarter_ends`) with exactly ONE call site (`_fill_gaps`), and it gated ONLY the
+  forward-projection loop. Quarters the bulk dataset already has were never filtered by it
+  (proven: a `known_end` 32 days old survives the cutoff; the same date as a *projection*
+  is blocked). Critically, **there is no overdue/missing determination anywhere in the
+  codebase** — `missing` is a local variable driving fetch attempts, a failed fetch logs and
+  `continue`s, and status is computed downstream from points that exist. So the "protection
+  for late filers" the buffer appeared to provide did not exist, which is what made the fix
+  safe.
+- **Why 45 was wrong for this job.** 45 is the SEC 10-Q statutory *deadline* (40 days for
+  accelerated filers, 45 for non-accelerated/smaller reporting companies) — the LATEST a
+  quarter may legally appear. It was being used to answer a different question: when should
+  we START looking. Measured across **17,635 10-Q filings / 499 tickers** from the local
+  filing index: **96.6% are filed before day 45**, median lag **36 days**, fastest **9 days**
+  (DAL). **494 of 499 companies (99.0%)** had their most recent 10-Q filed inside the old
+  gate, so nearly every company carried a blind window every quarter, of width
+  `45 - actual_lag`. ICE's was 15 days; DAL's is 36.
+- **Fix as applied** (`code33/pipeline.py` only):
+  - `FILING_LAG_DAYS` renamed to `SEC_10Q_DEADLINE_DAYS = 45`, retained as a documented
+    reference constant and **no longer used to gate anything**.
+  - New `PROJECTION_MIN_AGE_DAYS = 10`, below the fastest observed filer, now drives the
+    cutoff. Safe because a projection that finds nothing costs one filter over an
+    already-cached facts frame and adds NO point — `fetch_discrete_quarter` returns `None`
+    and `_fill_gaps` continues.
+  - **Second bug, found during the investigation and fixed with it:**
+    `return (projections + known_sorted)[:quarters]` let every added projection evict the
+    OLDEST known end from the fill window. An evicted end whose value is `None` is a real
+    gap that then silently stops being back-filled — and those oldest quarters are the
+    year-ago YoY bases (the adapter pulls `n_quarters + 4` for exactly that reason). Now
+    `return projections + known_sorted[:quarters]`, additive. Harmless to return a longer
+    list: `expected` only drives fill attempts, never output length.
+- **Verification** (18 tickers, in-process, before/after):
+  - **7 tickers gained their true newest quarter**, every one verified dollar-exact against
+    `data.sec.gov`: ICE 2026-06-30 $3,611,000,000 (filed 2026-07-30) · DAL $19,757,000,000 ·
+    CSX $3,935,000,000 · TRV $12,153,000,000 · JNJ 2026-06-28 $25,310,000,000 ·
+    WAB $3,179,000,000 · AAPL 2026-06-27 $109,417,000,000 (filed 2026-07-31, one day before
+    the run — it would have stayed invisible until 2026-08-11).
+  - **11 tickers fully unchanged**, including every late/at-deadline filer that reaches the
+    pipeline (PACS, FEIM, CGON) and the non-calendar-quarter names whose next quarter genuinely
+    is not filed yet (PANW, FDX, DELL, WMT). Note the universe contains only 5 companies whose
+    newest 10-Q was filed at/after day 45, and 2 of those (NUTX, AVBC) are banks that exit at
+    the `excluded_bank` gate before the pipeline runs.
+  - **Fix 2 confirmed by its own test cases:** GLUE and PTGX, the two tickers whose OLDEST
+    pulled quarter is a fillable gap, are byte-identical, and their fill attempts ROSE
+    (4→6 and 2→4) — the older gaps are still being targeted, which is exactly what the old
+    eviction would have stopped.
+  - **Zero violations.** No existing value changed anywhere; no YoY base went null (null-YoY
+    count 0→0 on all 7 gainers). The 7 gainers do drop their oldest quarter, which is the
+    fixed-size window (`merged[:quarters]`) sliding forward by one — series length stays
+    exactly 12, displayed stays exactly 8. That is normal quarterly behaviour, not eviction.
+  - **Measured cost, not assumed:** EDGAR fill attempts across the set 26 → 41 (+15, one extra
+    speculative lookup per ticker that gains a projection). Wall-clock **91.8s → 93.1s across
+    18 tickers (+1.3s total, ~0.07s/ticker)** — the extra lookup filters an already-cached
+    facts frame rather than fetching again.
+  - Confirmed end-to-end over HTTP (`GET /api/ticker/ICE` → 200: newest 2026-06-30, `Q2 FY26`,
+    $3,611,000,000), single listener verified before and after restart.
+
+**Original investigation notes — kept for history:**
 - **Ticker/quarter:** ICE, period_end **2026-06-30**, absent entirely.
 - **What's wrong:** the engine's newest quarter for ICE is 2026-03-31. ICE's 2026-06-30 quarter
   was **filed 2026-07-30 — the day before this run** — and is present in SEC's companyfacts
@@ -761,7 +938,56 @@ NUE $9,496,000,000 · DKNG $1,646,076,000 · NET $639,755,000 · U $508,238,000.
   the one the engine returned. So this fires only for companies that file early relative to the
   buffer, not universally.
 
-### SLXN — pre-revenue company never reaches the pre-revenue diagnosis — CONFIRMED, LOW/MEDIUM
+### SLXN — pre-revenue company never reaches the pre-revenue diagnosis — CLOSED (FIXED 2026-08-01)
+- **Resolution (2026-08-01): fixed in `utils/code33_adapter.py`. The original root-cause
+  analysis below was correct; the blast radius was not — this was never about SLXN alone.**
+- **Scale, measured not assumed: 16 tickers, not 1.** Scanned the 41 revenue-history-ish
+  failures from the 540-ticker checkpoint (30 `insufficient revenue history` + 11
+  `insufficient (unspecified)`) plus SLXN against `data.sec.gov` companyconcept across all
+  nine of code33's `REVENUE_TAGS`. **16 file no revenue concept at all** — SLXN DFTX BCAX
+  ERAS SION APGE KOD EWTX ANRO IMVT MBX ELVN TRVI LBRX TECX CLYM. 2 file `$0.00` only
+  (ORKA, APA — already correctly bucketed) and 24 file real revenue (genuinely short
+  history). 15 of the 16 sit inside the 540 universe, so that scan's pre-revenue bucket
+  **undercounted by ~15** while `insufficient revenue history` over-counted by the same —
+  roughly 37% of the revenue-history failures on that scan.
+- **Provenance of the omission:** `dc77f59` (engine swap) introduced the `<5` guard;
+  `60aac70` added `_diagnose_insufficient` and wired it into exactly ONE call site.
+  `git show 60aac70^` vs `60aac70` shows the guard line byte-identical. That commit's
+  message is "name the cause on **every** insufficient path" — this path was missed. Not a
+  design decision, an omission.
+- **Fix as applied** (one file, `utils/code33_adapter.py`; `api/server.py` deliberately
+  untouched):
+  - Three helpers — `_blank_revenue_count()`, `_is_pre_revenue()`, `_pre_revenue_reason()` —
+    so the guard and `_diagnose_insufficient`'s check #1 share one definition of the rule and
+    cannot drift (same discipline as `_yoy_miss_cause` mirroring `yoy_for`).
+  - Check #1 collapsed onto the helpers. Same condition, same string, no behavior change.
+  - The `<5` guard gained ONE conditional, testing **`rev_series.points`** (the UNFILTERED
+    series — the filter is exactly what hides the evidence). Only the pre-revenue case is
+    rerouted; every other short-history reason returns its existing message verbatim.
+  - `_diagnose_insufficient` is deliberately NOT called from the guard, even though check #1
+    would return first. Calling `_pre_revenue_reason` directly removes a silent dependency on
+    check ordering.
+- **`api/server.py` needed no change** and got none. The new message contains
+  `"no reported revenue"` and contains neither `"usable revenue quarters"` (line 302) nor
+  `"quarters of revenue filings"` (line 320), so it falls through to line 312 and buckets
+  itself as `no reported revenue (pre-revenue company)`.
+- **Verification:** 26-ticker before/after, engine run in-process. **All 16 flipped** from
+  `insufficient revenue history` to `no reported revenue (pre-revenue company)`, each with a
+  real count (`no reported revenue in N of N quarters ...`) — verified individually, not
+  sampled. **702 key comparisons, 0 violations**; the only changes are `excluded_reason`,
+  the `sources` dict `_empty_result` derives from it, and the derived bucket, on those 16
+  only. Controls byte-identical on every field: RVMD XENE SYRE DNLI PLSE (the `$0.00`
+  cluster — they never reach the guard), SDRL INDV (short history, real revenue), and
+  AAPL/DELL/WMT (unrelated; still red/green/red). Confirmed end-to-end over HTTP
+  (`GET /api/ticker/SLXN` → 200), single listener verified before and after restart.
+- **Known softness, flagged not fixed:** the predicate is a ratio, so a ticker with very few
+  pulled quarters can satisfy "at least half blank" on a small sample — LBRX resolves on
+  `2 of 2`, SION on `4 of 4`. Both are genuinely pre-revenue (the SEC scan confirms zero
+  revenue concepts across their entire filing history), so no wrong call today, but the
+  predicate alone would be thin evidence on a 2-quarter ticker. A minimum-points floor is
+  the obvious hardening if this ever misfires.
+
+**Original investigation notes — kept for history (root cause correct, scale understated):**
 - **Ticker:** SLXN (Silexion Therapeutics Corp, CIK 2022416), all quarters.
 - **What's wrong:** SLXN returns `status='insufficient'` with
   `excluded_reason='only 0 usable revenue quarters'` — the generic count message — when it is a
@@ -785,7 +1011,12 @@ NUE $9,496,000,000 · DKNG $1,646,076,000 · NET $639,755,000 · U $508,238,000.
   cause it can't group on — the exact problem that work set out to fix, still present on one
   side of the split.
 
-### FDS — the blank-label bug now confirmed on more than one quarter per ticker
+### FDS — the blank-label bug now confirmed on more than one quarter per ticker — CLOSED (FIXED 2026-08-01)
+- **Resolution:** closed by the same fix as its parent entry ("Every ticker's newest quarter
+  has a blank fiscal label"), which carries the full root cause and verification. FDS was
+  the hardest case in the verification set and is now correct on both quarters:
+  2026-02-28 → `Q2 FY26`, 2026-05-31 → `Q3 FY26`, checked against FactSet's real Aug-31
+  fiscal year end and confirmed end-to-end over HTTP.
 - **Ticker/quarters:** FDS, **2026-02-28 and 2026-05-31** — the two newest quarters, both with
   an empty `rev_labels` entry.
 - **Extends the existing entry above** ("Every ticker's newest quarter has a blank fiscal
@@ -801,7 +1032,20 @@ pipeline's own restatement flags. **Tag selection was ruled out first: the engin
 `NetIncomeLoss` on all 12 quarters, never switching.** This is not an ORA-style problem. Two
 unrelated effects stack, and they explain the inconsistent gap exactly.
 
-#### Cause 1 — engine serves the originally-filed value after a restatement, and drops the flag that says so — CONFIRMED, MEDIUM
+#### Cause 1 — engine serves the originally-filed value after a restatement, and drops the flag that says so — DISCARD FIXED (`b7d6b6a`); value policy OPEN by design
+- **Status split, 2026-08-01.** This entry bundles a defect and a policy question. Its own
+  "Note on scope" below already separates them; the header did not, which left CLAUDE.md
+  carrying "the restatement discard" as an open confirmed defect long after it was fixed.
+  - **The discard — FIXED.** `b7d6b6a` stopped the adapter throwing the flags away.
+    Verified live on AES: `ni_restated = [True, True, False×6]` with
+    `ni_restated_value = [276000000.0, 504000000.0, ...]` on 2024-06-30 / 2024-09-30,
+    exactly the two quarters named below. Callers can now see that a quarter was revised.
+    That commit predates this session and is already on origin/main.
+  - **Which value to serve — OPEN, and deliberately so.** The engine still emits the
+    as-first-filed figure (`ni` = 185,000,000 for 2024-06-30, against the restated
+    276,000,000). As the scope note says, this entry does not assume as-filed or as-restated
+    is correct. It is a policy decision for the owner, **not an unfixed defect**, and it
+    should not be carried in a confirmed-defects list.
 - **Ticker/quarters:** AES, **2024-06-30** and **2024-09-30**.
 - **What's wrong:** AES recast both quarters in later filings. The engine emits the figure as
   first reported and gives no indication it has been superseded:

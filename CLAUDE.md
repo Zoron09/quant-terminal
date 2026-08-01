@@ -303,7 +303,12 @@ that the 2026-08-01 adapter change altered again.
 - **EPS:** still out of scope entirely. Raw `'ni'` is NO LONGER empty as of
   2026-08-01 — it carries real per-quarter net income, alongside new
   `rev_sources`/`ni_sources` and `ni_restated`/`ni_restated_value`. All EPS
-  fields remain empty. See the 2026-08-01 entry under LAST UPDATED.
+  fields (`eps`, `eps_labels`) remain empty — that is EPS-specific and says
+  nothing about the fiscal-quarter labels: as of 2026-08-01 `rev_labels`/
+  `npm_labels` are populated and correct on **every** quarter, including
+  edgartools-filled ones (previously blank) and Q4s (previously `FY FY24`).
+  Neither array has a frontend consumer today. See the 2026-08-01 entry under
+  LAST UPDATED and the two CLOSED label entries in `bug_report.md`.
 - **Failure labelling:** every `status='insufficient'` path now sets a real
   `excluded_reason`. The success path used to hardcode `''` (11 of 540 tickets on the
   last full scan reported as `insufficient (unspecified)`); `_diagnose_insufficient()`
@@ -438,18 +443,100 @@ active account as `monikaarya-work`, which lacks write access to Zoron09/quant-t
     the same trap recorded in `bug_report.md` under commit `64a5757`.
 
   - **`bug_report.md` — new 2026-07-31 sections** from two 10-ticker data-accuracy passes
-    (20 tickers, all verified against `data.sec.gov` directly). Confirmed defects: the
-    restatement discard above; **ICE missing an already-filed quarter** (2026-06-30,
-    filed 2026-07-30, invisible because `expected_quarter_ends()` won't target it until
-    ~45 days past period end — a real blind window, unlike the MU case previously waved
-    off); **the ±1000% margin plausibility guard lost in the swap** (commit `990bcba`'s
-    TRT tripwire was never ported — CRSP's -24450% proves values now flow through);
-    **blank fiscal labels on every edgartools-filled quarter** (`pipeline.py:95-96` sets
-    `fy=None, fp=None`; FDS shows two); **SLXN never reaching the pre-revenue bucket**
-    (the `<5 quarters` guard returns before `_diagnose_insufficient()` runs). Cleared
+    (20 tickers, all verified against `data.sec.gov` directly). **Every defect this list
+    originally carried is now fixed or reclassified — see the notes below and the CLOSED
+    entries in `bug_report.md`. Nothing from this pass remains open.** Cleared
     after investigation: ORA, LMND, ESRT, ICE, NUE, COR — all matched SEC exactly;
     the LMND/ICE/ESRT/AES gaps against TradingView are vendor definitional differences,
     now documented per ticker.
+    **Reclassified 2026-08-01 — the missing ±1000% margin plausibility guard is NOT a
+    defect and has been removed from the confirmed list above.** Half of the original
+    claim still holds: commit `990bcba`'s TRT tripwire was never ported into the adapter,
+    so no plausibility guard exists and values past ±1000% do reach output. That absence
+    is not itself a fault. The other half does not hold: CRSP's -24450%, cited as proof
+    values were escaping, is **real filed data** — verified dollar-exact against SEC on
+    all 8 quarters. The `bug_report.md` entry is now CLOSED and carries the full evidence
+    plus why a bare magnitude threshold cannot be the fix if the guard is ever revisited.
+    **Fixed 2026-08-01 — both fiscal-label bugs, and removed from the confirmed list
+    above:** blank labels on edgartools-filled quarters, and calendar-Q4 rendering as
+    `FY FY24`. Fixed as ONE change on purpose — repairing the blank label alone would have
+    widened the FY-doubling bug, since a fill sourced from a 10-K row carries `fp='FY'`.
+    `edgar_fill.py`'s `fetch_discrete_quarter()` now returns fy/fp (they were always on the
+    row it had already selected — a dropped field at a return boundary, not the upstream
+    gap the original note guessed), `pipeline.py` wires them through, and `_fq_label()`
+    maps `FY`→`Q4`. Verified: 14 blank + 25 doubled labels before, 0 and 0 after; 101
+    labels checked against real SEC fiscal calendars, all correct; 364-key byte-level
+    payload comparison across 14 tickers with zero unintended changes; confirmed over HTTP.
+    Full evidence in `bug_report.md`. Note `rev_labels`/`npm_labels` have no frontend
+    consumers, so this is payload correctness with no visible UI change yet.
+    **Fixed 2026-08-01 — the pre-revenue bucketing gap, also removed from the confirmed
+    list above.** Reported as SLXN-only; it was **16 tickers**. A company filing NO revenue
+    concept gets `value=None`, which the `<5 quarters` guard's own filter strips, so it
+    returned early and never reached `_diagnose_insufficient()` — while `$0.00` filers keep
+    `value=0.0`, survive, and bucket correctly. Same condition, two XBRL tagging choices.
+    Fixed in `utils/code33_adapter.py` only (three shared helpers so the guard and the
+    diagnosis can't drift, plus one conditional on the UNFILTERED series); `api/server.py`
+    needed no change — the new message self-routes to the pre-revenue bucket. Verified: all
+    16 flipped bucket, 702-key before/after comparison with 0 violations, 10 control tickers
+    byte-identical, confirmed over HTTP. Full evidence in `bug_report.md`.
+
+  - **Ticker normalization completed across every yfinance call site (2026-08-01).** The
+    BRK.B fix had covered `/api/ticker` only; the remaining 6 call sites in `api/server.py`
+    (`/api/chart`, `/api/financials`, `/api/news`, `/api/ownership`, `/api/peers` ×2) now all
+    route through `normalize_ticker()`. A grep for an un-normalized `yf.Ticker(` returns
+    nothing. **The failure modes were NOT uniform** — chart 404'd, financials returned an
+    empty balance sheet/cash flow behind a 200, peers returned an empty list, news was never
+    actually broken (tradingview is primary, the yfinance path is an unexercised fallback).
+    Each was confirmed against BRK.B on the un-fixed code before editing. AAPL is
+    byte-identical through all 5 endpoints before/after, with the server restarted between
+    captures so `TICKER_CACHE` could not mask a difference. Detail in `bug_report.md`.
+    **New OPEN bug found while doing this:** `/api/ownership` returns empty for **every**
+    ticker, not just dot-tickers — the data exists and the handler's own logic works in a
+    fresh process, so the fault is server-process-specific and hidden by a bare `except`
+    that logs nothing. Logged in `bug_report.md`; not fixed.
+
+  - **`requirements.txt` corrected (2026-08-01).** It was **broken for clean installs** —
+    `pypfopt>=1.5.5` names an import, not a PyPI distribution, and pip aborted the whole
+    file on it (`No matching distribution found`). Proven by installing into a throwaway
+    venv, not by inspection. Now: `fastapi==0.138.0` and `uvicorn==0.49.0` **added** (the
+    two hard runtime deps were previously undeclared and only present transitively);
+    `pypfopt` **renamed** to `PyPortfolioOpt>=1.5.5` (same package, correct distribution
+    name, version floor unchanged); `finnhub-python`, `streamlit`, `feedparser` **removed**
+    after re-verifying zero imports anywhere outside `.venv`. `alpaca-py` and
+    `PyPortfolioOpt` **kept deliberately despite zero code usage** — `.env` carries
+    `ALPACA_API_KEY`/`ALPACA_API_SECRET`, so that integration is wired-but-unimplemented
+    rather than dead, and removing a trading dependency on grep evidence alone is the wrong
+    risk trade. Verified: clean install into a throwaway venv succeeds and every declared
+    package imports. Note `.env` still carries a vestigial `FINNHUB_API_KEY` that no code
+    reads.
+
+  - **Two stale labels corrected 2026-08-01 (no code change) — both were fixed by `b7d6b6a`,
+    which predates this session and is already on origin/main; the docs just never caught up.**
+    (1) **The restatement discard is NOT open.** The adapter stopped throwing
+    `ni_restated`/`ni_restated_value` away; verified live on AES, which now reports
+    `ni_restated=[True,True,...]` with `ni_restated_value=[276000000, 504000000, ...]` on the
+    two recast quarters. What remains is the *policy* question of whether to serve the
+    as-filed or the restated figure — the owner's call, explicitly not treated as a defect by
+    the entry itself. (2) **The duplicate revenue build is NOT open** — the adapter reuses
+    `rev_series`; confirmed by counting `(quarter, tag)` fill pairs on MU and IQV, zero
+    duplicates. Both `bug_report.md` entries are now marked accordingly.
+
+  - **Filing-lag blind window closed (2026-08-01) — reported as an ICE bug, was ~99% of the
+    universe.** `FILING_LAG_DAYS = 45` gated `expected_quarter_ends()`'s forward-projection
+    loop. 45 is the SEC 10-Q statutory *deadline* (the LATEST a quarter may legally appear),
+    which is the wrong number for deciding when to START looking: measured across **17,635
+    10-Q filings**, 96.6% are filed before day 45 (median 36d, fastest 9d), and **494 of 499
+    companies** had their newest 10-Q filed inside the old gate. Every one of them carried a
+    blind window each quarter — ICE 15 days, DAL 36. Renamed to `SEC_10Q_DEADLINE_DAYS`
+    (reference only, gates nothing) and added `PROJECTION_MIN_AGE_DAYS = 10` as the real
+    gate. **A second bug was found and fixed with it:** projections were evicting the OLDEST
+    known end from the fill window, which silently stopped back-filling older gaps that serve
+    as YoY bases; the return is now additive. Safe because the cutoff gates only projections
+    and a projection that finds nothing adds no point — and because **nothing in the codebase
+    ever marks a quarter overdue**, so there was no late-filer protection to weaken. Verified:
+    7 tickers gained their true newest quarter, all dollar-exact vs SEC; 11 unchanged
+    including every late filer that reaches the pipeline; 0 violations; cost +1.3s across 18
+    tickers. Full evidence in `bug_report.md`.
 
 2026-07-31 — **Unlabelled-failure reporting gap closed (branch
 `insufficient-reason-labels`, NOT merged — held for review)**. `_c33_status` can return
