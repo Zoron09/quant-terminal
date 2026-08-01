@@ -841,6 +841,87 @@ impact was assumed uniform and is not):**
 
 ---
 
+## 2026-08-01 — ticker→CIK resolution after a holdco reorganization
+
+### XOM returned no data because SEC moved the ticker to a new CIK — CLOSED (FIXED 2026-08-01)
+- **Symptom:** `XOM` returned `status='insufficient'`, `no 10-Q/10-K filings found`, with the
+  company name showing as "ExxonMobil Holdings Corporation".
+- **NOT an engine defect. A real corporate event.** ExxonMobil completed a holding-company
+  reorganization in July 2026. SEC's `company_tickers.json` — the authoritative ticker→CIK
+  map, and the one the engine correctly follows — now contains exactly one XOM entry:
+  `{"cik_str": 2115436, "ticker": "XOM", "title": "ExxonMobil Holdings Corp"}`. The engine
+  resolved it faithfully. The lookup code, its data source, and its one-week cache were all
+  verified correct and current.
+- **The two entities, confirmed at `data.sec.gov`:**
+
+  | | CIK 2115436 (resolved) | CIK 34088 (has the history) |
+  |---|---|---|
+  | Name | ExxonMobil Holdings Corp | EXXON MOBIL CORP |
+  | Ticker / exchange | XOM / NYSE | XOM / NYSE |
+  | SIC | 2911 Petroleum Refining | 2911 Petroleum Refining |
+  | Total filings | 27 | 1001 |
+  | 10-K / 10-Q | **0 / 0** | 7 / 19 |
+  | Filing range | 2026-07-01 → 2026-07-31 | 2019-12-11 → 2026-07-06 |
+  | Form signature | `8-K12B`, `S-8 POS`, `POSASR` | 10-K, 10-Q, 8-K, S-4, 425 |
+
+  `8-K12B` is the successor-issuer registration form — the signature of a holdco reorg.
+- **Also affected: NVRI.** Enviri Corp (CIK 2104052) registered via `10-12B`; its history is
+  on Harsco, **CIK 45876** (confirmed via EDGAR company search).
+- **Blast radius: 2 of 541, not the 39 initially flagged.** A universe scan found 39 tickers
+  whose resolved CIK has no local 10-K/10-Q, and 36 with none at SEC either. Testing the form
+  signature rather than assuming they shared a cause split them cleanly:
+
+  | Group | Count | Signature | Status |
+  |---|---|---|---|
+  | Holdco/successor reorg | **2** | `8-K12B` / `10-12B` | the actual bug (XOM, NVRI) |
+  | Foreign private issuers | ~33 | `6-K`, `20-F` | out of scope by design, never file 10-Qs |
+  | Funds / trusts / local gaps | 3 | `N-Q`, `NPORT-P`, or absent locally | out of scope |
+
+  SBLK, FRO, TX, MANU, VIK, TBBB, STNG, NMM, TEN, DHT, ZGN, OPRA, BAP and the rest were
+  correctly reporting no data and must not be swept into the predecessor path.
+- **Fix 1 — `code33/ticker_lookup.py`:** a `PREDECESSOR_CIK` map (XOM→34088, NVRI→45876)
+  consulted before the SEC lookup. Explicit and auditable rather than a heuristic, precisely
+  so the 36 out-of-scope tickers cannot be caught by it.
+  **BRIDGE, NOT PERMANENT — recorded in the code comment.** It works today because the
+  successor has filed no 10-Q yet, and because the edgartools gap-fill leg resolves by
+  TICKER (not CIK) and returns a unified view across the reorg (verified: 3,819 fact rows
+  through 2026-03-31). Re-check when ExxonMobil Holdings files its first 10-Q, expected
+  ~November 2026; at that point the correct series may span both CIKs.
+- **Fix 2 — `code33/quarterly_engine.py`, restores detection lost in the swap.** The
+  zero-filings path emitted one generic message, which is why a July-2026 holdco reorg looked
+  identical to a Greek shipping company that has never filed a 10-Q. It now re-queries the
+  index without the form filter and distinguishes:
+  - no filings of ANY kind → names corporate reorganization as a likely cause and points at
+    `PREDECESSOR_CIK`;
+  - filings present but no 10-K/10-Q → names the actual forms (`20-F`/`6-K`) and the
+    annual-only foreign-issuer cause.
+
+  This is the signal `check_cik_discontinuity` provided in `tools/preflight_checks.py`
+  (built for the BLK holdco reorg) before `dc77f59` deleted it on 2026-07-22 — reported
+  inline on the failing path rather than as a separate preflight pass. The
+  `no 10-Q/10-K filings found` prefix is retained deliberately so `_classify_failure`'s
+  bucketing in `api/server.py` is unchanged.
+- **Verification:**
+  - XOM: 0 → **8 quarters**, newest 2026-03-31 revenue **$85,138,000,000**, dollar-exact
+    against SEC. NVRI: 0 → **8 quarters**, newest **$549,803,000**, dollar-exact.
+  - **36 zero-filing controls: zero gained data, zero CIK changes, zero status changes.**
+    Their `excluded_reason` text did change, which is Fix 2's entire purpose — 33 now report
+    the foreign-issuer cause, 3 the no-filings-of-any-kind cause.
+  - AAPL / DELL / WMT byte-identical.
+  - Fix 2's message paths exercised directly on all three shapes including a synthetic
+    nonexistent CIK.
+  - Confirmed over HTTP after restart, single listener verified.
+- **Known imprecision, flagged not fixed:** HQL, PBT and RMT (funds/trusts, and one local
+  dataset gap) land in the no-filings-of-any-kind branch and therefore see a message that
+  mentions reorganization as a possibility. The wording is conditional ("if a corporate
+  reorganization recently moved this ticker"), so it does not assert one, but it is not a
+  precise description of their situation.
+- **Note:** `company_name` still shows "ExxonMobil Holdings Corporation" — that comes from
+  yfinance and is correct, since that IS the listed entity. Only the fundamentals are read
+  from the predecessor.
+
+---
+
 ## Open — found 2026-07-31, second 10-ticker data-accuracy pass (v31-code33-screener)
 
 Scope: AES, ICE, FDS, ESRT, SLXN, PLTR, NUE, DKNG, NET, U, same method as the first pass

@@ -203,7 +203,34 @@ def get_quarterly_series(
     index_reports = _dedupe_reports(reader.get_all_company_reports(forms=FORMS))
 
     if not index_reports:
-        return QuarterlyRevenueSeries(cik=cik, points=[], series_flag="no 10-Q/10-K filings found")
+        # Three very different causes reach this line and used to report one
+        # generic message, which is how XOM's July-2026 holdco reorg looked
+        # identical to a Greek shipping company that has never filed a 10-Q.
+        # Re-query without the form filter to tell them apart. This restores the
+        # signal `check_cik_discontinuity` provided in tools/preflight_checks.py
+        # before the 2026-07-22 engine swap deleted it, but reports it inline on
+        # the failing path rather than as a separate preflight pass.
+        #
+        # The "no 10-Q/10-K filings found" prefix is deliberate: api/server.py's
+        # _classify_failure buckets on that substring, so scan grouping is
+        # unchanged and only the detail after the dash is new.
+        try:
+            any_reports = reader.get_all_company_reports()
+        except Exception:
+            any_reports = []
+
+        if not any_reports:
+            detail = ("no filings of any kind under this CIK - if a corporate "
+                      "reorganization recently moved this ticker to a new CIK, the "
+                      "operating history is on the predecessor (see PREDECESSOR_CIK "
+                      "in ticker_lookup.py)")
+        else:
+            forms = sorted({r.form for r in any_reports})
+            detail = (f"CIK files {'/'.join(forms[:4])} but no 10-Q/10-K - annual-only "
+                      f"foreign private issuer or non-operating registrant")
+
+        return QuarterlyRevenueSeries(
+            cik=cik, points=[], series_flag=f"no 10-Q/10-K filings found - {detail}")
 
     index_reports.sort(key=lambda r: r.period, reverse=True)
 

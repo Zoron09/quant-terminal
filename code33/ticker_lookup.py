@@ -51,7 +51,37 @@ def _load_ticker_map() -> dict:
     return {entry["ticker"].upper(): int(entry["cik_str"]) for entry in raw.values()}
 
 
+# Holdco reorganizations: SEC moves the ticker to the new parent's CIK in
+# company_tickers.json the moment the reorg completes, but the operating history
+# (10-K/10-Q) stays on the predecessor CIK. The successor starts with zero
+# periodic filings, so the ticker resolves correctly per SEC and still returns no
+# fundamentals. Each entry records the event that caused it.
+#
+# BRIDGE, NOT PERMANENT. This works today because the successor has filed no
+# 10-Q yet, so the predecessor holds the whole window, and because the
+# edgartools gap-fill leg resolves by TICKER (not CIK) and returns a unified
+# view across the reorg. Re-check when the successor files its first 10-Q -
+# for ExxonMobil Holdings (2115436) that is expected around November 2026. At
+# that point the correct series may span BOTH CIKs and this map needs to become
+# a merge, or be removed once the successor has a full window of its own.
+PREDECESSOR_CIK = {
+    "XOM":  34088,   # ExxonMobil Holdings Corp (2115436) took the ticker 2026-07;
+                     # zero 10-K/10-Q, files 8-K12B. History on Exxon Mobil Corp.
+    "NVRI": 45876,   # Enviri Corp (2104052) registered via 10-12B; history on Harsco.
+}
+
+
 def resolve_ticker_to_cik(ticker: str) -> Optional[int]:
-    """Resolves a stock ticker (e.g. 'AAPL') to its SEC CIK number, or None if unknown."""
+    """Resolves a stock ticker (e.g. 'AAPL') to its SEC CIK number, or None if unknown.
+
+    Checks PREDECESSOR_CIK first: for the handful of tickers moved to a new CIK by
+    a corporate reorganization, SEC's mapping is correct but points at an entity
+    with no filing history, so the predecessor is what actually answers the
+    fundamentals question.
+    """
+    key = ticker.upper()
+    predecessor = PREDECESSOR_CIK.get(key)
+    if predecessor is not None:
+        return predecessor
     ticker_map = _load_ticker_map()
-    return ticker_map.get(ticker.upper())
+    return ticker_map.get(key)

@@ -521,6 +521,25 @@ active account as `monikaarya-work`, which lacks write access to Zoron09/quant-t
     `rev_series`; confirmed by counting `(quarter, tag)` fill pairs on MU and IQV, zero
     duplicates. Both `bug_report.md` entries are now marked accordingly.
 
+  - **Ticker→CIK resolution after a holdco reorganization (2026-08-01).** `XOM` returned no
+    data. **Not an engine defect** — ExxonMobil completed a holding-company reorganization in
+    July 2026 and SEC's `company_tickers.json` now maps XOM to the new parent, CIK 2115436,
+    which has 27 filings and **zero** 10-K/10-Q. The operating history is on CIK 34088. The
+    lookup code, its source and its cache were all verified correct; the mapping changed
+    underneath it. Same shape as NVRI (Enviri, history on Harsco CIK 45876).
+    **Blast radius 2 of 541, not the 39 initially flagged** — a universe scan found 39
+    zero-filing tickers, but testing the form signature (`8-K12B`/`10-12B` vs `20-F`/`6-K`)
+    showed ~33 are foreign private issuers and 3 funds/local gaps, all correctly out of scope.
+    Fix: an explicit `PREDECESSOR_CIK` map in `code33/ticker_lookup.py` (deliberately a map,
+    not a heuristic, so the 36 out-of-scope tickers cannot be caught by it), plus a
+    `quarterly_engine.py` change that distinguishes "no filings of any kind" from "files
+    20-F/6-K but no 10-Q" — **restoring the signal `check_cik_discontinuity` gave before
+    `dc77f59` deleted it**. **The map is a BRIDGE, not permanent:** re-check when ExxonMobil
+    Holdings files its first 10-Q, expected ~November 2026, since the correct series may then
+    span both CIKs. Verified: XOM and NVRI both 0 → 8 quarters, newest quarter dollar-exact
+    vs SEC; 36 zero-filing controls gained no data and kept their CIK; AAPL/DELL/WMT
+    byte-identical. Full evidence in `bug_report.md`.
+
   - **Filing-lag blind window closed (2026-08-01) — reported as an ICE bug, was ~99% of the
     universe.** `FILING_LAG_DAYS = 45` gated `expected_quarter_ends()`'s forward-projection
     loop. 45 is the SEC 10-Q statutory *deadline* (the LATEST a quarter may legally appear),
