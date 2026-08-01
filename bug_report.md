@@ -629,7 +629,50 @@ No engine, adapter, or code33-screener code was touched.
   entire payload compared minus live market fields, **156 key comparisons, 0 differences**.
   Server logs clean, single listener verified.
 
-### Same bug class at four other endpoints — OPEN, LOW/MEDIUM (unconfirmed impact)
+### Same bug class at four other endpoints — CLOSED (FIXED 2026-08-01)
+- **Resolution (2026-08-01): all 6 remaining call sites now normalize.** Every
+  `yf.Ticker(...)` in `api/server.py` routes through `normalize_ticker()`; a grep for an
+  un-normalized one returns nothing. Same one-line pattern as the original `/api/ticker`
+  fix, applied per call site with its own before/after check rather than as a blanket edit.
+- **The "unconfirmed impact" above is now confirmed, and it was NOT uniform.** Each
+  endpoint was tested against BRK.B on the un-fixed code first. The failure modes differ,
+  which is why they were checked individually:
+
+  | Endpoint | BRK.B before | BRK.B after | Verdict |
+  |---|---|---|---|
+  | `/api/chart` | **HTTP 404** `{"error":"No data"}` (19 B) | 200, 251 price points, 472.84 → 511.54 | **FIXED** |
+  | `/api/financials` | 200 but `balance_sheet:{}`, `cash_flow:{}`, all valuation `null` (1,347 B) | 200, 46 BS keys, 48 CF keys, P/E 15.22 (16,402 B) | **FIXED** |
+  | `/api/peers` | 200, `peers:[]` (29 B) | 200, JPM/BAC/GS/MS via Financial Services (358 B) | **FIXED** |
+  | `/api/news` | 200, **real Berkshire headlines** (3,314 B) | 3,314 B, unchanged | **was never broken** |
+  | `/api/ownership` | `{"institutional":[],"insiders":[]}` | unchanged, still empty | **normalized, but a DIFFERENT bug keeps it empty** |
+
+- **`/api/news` was never actually broken.** tradingview-scraper is the primary source and
+  resolves BRK.B fine; the yfinance call is a fallback that only runs when the earlier
+  sources return nothing, so the latent fault was never reached. Normalized anyway —
+  the call site carried the same bug, it just wasn't being exercised.
+- **`/api/ownership` — normalization was correct but is NOT sufficient. Separate open
+  defect, see below.** At the yfinance layer the dot-ticker fault is real and confirmed:
+  `BRK-B` returns 10 institutional + 36 insider rows, `BRK.B` returns an empty frame. But
+  the endpoint returns `{"institutional":[],"insiders":[]}` for **normal tickers too**
+  (AAPL), so something else is failing. Ruled out by direct test: yfinance has the data
+  (AAPL → 10 institutional + 78 insider rows), and the endpoint's own parsing body,
+  run verbatim in a fresh process, succeeds and produces real rows
+  (`Blackrock Inc. 7.8%`, `BORDERS BEN / Jun 16 / 34,236 / BUY`). It only fails inside the
+  server process. The bare `except Exception` at the end of the handler returns the empty
+  payload and logs nothing, so the actual cause is invisible. **Not fixed — out of scope
+  for the normalization pass. First step for whoever picks it up: log the exception
+  instead of swallowing it.**
+- **Regression:** AAPL through all 5 endpoints is **byte-identical** before and after
+  (`cmp` on the raw response bodies — chart, financials, news, ownership, peers). The
+  server was restarted between captures specifically so `TICKER_CACHE` could not serve a
+  pre-fix result. Response `ticker` fields still echo the app's canonical dot form
+  (`"ticker":"BRK.B"`) — only the outbound yfinance symbol is normalized.
+- **Adjacent, deliberately not touched:** `api/server.py`'s peer self-exclusion compares
+  `p != ticker.upper()` against a hardcoded peer list. For a dot ticker neither `BRK.B` nor
+  `BRK-B` appears in those lists, so it is a no-op today, not a live fault.
+
+**Original investigation notes — kept for history (the pattern was right; the per-endpoint
+impact was assumed uniform and is not):**
 - **What:** `/api/ticker` was the only endpoint fixed. Every other yfinance call site still
   passes the raw, un-normalized ticker. Confirmed by reading the code (the *pattern* is
   verified; the runtime impact is **not** — none of these were actually called with a
@@ -655,6 +698,29 @@ No engine, adapter, or code33-screener code was touched.
 - **Not fixed, not verified — flagged for a future pass.** The fix would likely be the same
   one-line `normalize_ticker()` reuse at each call site, but each endpoint needs its own
   before/after check rather than a blanket edit.
+
+### /api/ownership returns empty for EVERY ticker — OPEN, MEDIUM (found 2026-08-01)
+- **Symptom:** `GET /api/ownership/{any}` returns `{"institutional":[],"insiders":[]}`.
+  Reproduced on AAPL and BRK.B. Not a dual-class issue — it affects all tickers.
+- **Found incidentally** while confirming per-endpoint failure modes for the
+  ticker-normalization pass above. That pass fixed the endpoint's dot-ticker fault
+  (real and confirmed at the yfinance layer), which is necessary but not sufficient here.
+- **The data exists and the code works in isolation — ruled out, not assumed:**
+  - yfinance has it: AAPL → `institutional_holders` 10 rows, `insider_transactions` 78
+    rows. BRK-B → 10 and 36 rows.
+  - The handler's parsing body, copied verbatim and run in a fresh Python process against
+    AAPL, succeeds and produces real output: `Blackrock Inc. 7.8%`,
+    `Vanguard Capital Management LLC 6.5%`, insider `BORDERS BEN / Jun 16 / 34,236 / BUY`.
+  - Column names are current: `institutional_holders` has `pctHeld`, `Holder`;
+    `insider_transactions` has `Value`, `Insider`, `Start Date`. The `Relationship` lookup
+    returns `None`, which `str()` absorbs — not the failure.
+- **So the fault is specific to the server process**, not the logic or the upstream data.
+  A poisoned/rate-limited yfinance session in the uvicorn worker is the leading suspect,
+  unproven.
+- **Why it is invisible:** the handler ends in a bare `except Exception as e:` that returns
+  the empty payload and logs nothing at all. The real error has never been seen.
+- **First step for whoever picks this up:** log the exception in that handler instead of
+  swallowing it, then re-request. Everything else is guesswork until that line exists.
 
 ---
 

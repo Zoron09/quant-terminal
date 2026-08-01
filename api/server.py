@@ -620,7 +620,10 @@ async def chart_data(ticker: str, period: str = "3mo", interval: str = "1d"):
             return JSONResponse(cached)
     
     try:
-        hist = yf.Ticker(t).history(period=period, interval=interval)
+        # normalize_ticker(): Yahoo uses SEC's hyphen form (BRK-B), not the dot
+        # notation (BRK.B) the rest of the app carries. Un-normalized, this
+        # returned an empty history and the handler 404'd with "No data".
+        hist = yf.Ticker(normalize_ticker(t)).history(period=period, interval=interval)
         if hist.empty:
             return JSONResponse({'error': 'No data'}, 
                                 status_code=404)
@@ -653,7 +656,10 @@ async def financials(ticker: str):
         if now - ts < 600:
             return JSONResponse(cached)
     try:
-        tk = yf.Ticker(t)
+        # normalize_ticker(): un-normalized, Yahoo returned nothing for dot
+        # tickers, so balance_sheet/cash_flow/valuation all came back empty
+        # while the engine-sourced 'earnings' array (already normalized) was fine.
+        tk = yf.Ticker(normalize_ticker(t))
         def df_to_dict(df):
             if df is None or df.empty:
                 return {}
@@ -919,7 +925,11 @@ async def news(ticker: str):
     # Source 3: yfinance fallback — only if both above return nothing
     if not items:
         try:
-            tk = yf.Ticker(t)
+            # normalize_ticker(): defensive. This fallback only runs when both
+            # earlier sources return nothing, so the dot-ticker fault was never
+            # observed here (BRK.B news resolves via tradingview-scraper), but
+            # the call site carried the same latent bug.
+            tk = yf.Ticker(normalize_ticker(t))
             for n in (tk.news or [])[:12]:
                 c = n.get('content', {})
                 title = (c.get('title', '') or n.get('title', '')).strip()
@@ -995,7 +1005,12 @@ async def ownership(ticker: str):
             return str(d)
 
     try:
-        t = yf.Ticker(ticker.upper())
+        # normalize_ticker(): confirmed at the yfinance layer that BRK-B returns
+        # 10 institutional + 36 insider rows while BRK.B returns an empty frame.
+        # NOTE: this endpoint also returns empty for NORMAL tickers (AAPL) via the
+        # server, though the same code succeeds in a fresh process — a separate,
+        # pre-existing fault that the bare `except` below hides. Not fixed here.
+        t = yf.Ticker(normalize_ticker(ticker.upper()))
         holders = t.institutional_holders
         insiders = t.insider_transactions
         
@@ -1036,10 +1051,13 @@ async def ownership(ticker: str):
 async def peers(ticker: str):
     from utils.code33_adapter import get_code33_data, CACHE_VERSION
     try:
-        info = yf.Ticker(ticker.upper()).info
+        # normalize_ticker(): un-normalized, .info came back without a 'sector',
+        # so SECTOR_PEERS.get('') returned [] and dot tickers got an empty peer list.
+        _yf_sym = normalize_ticker(ticker.upper())
+        info = yf.Ticker(_yf_sym).info
         # Get peers from recommendationKey or sector peers
         # Use analyst recommendations to find peer tickers
-        recs = yf.Ticker(ticker.upper()).recommendations
+        recs = yf.Ticker(_yf_sym).recommendations
         # Get sector and find similar companies
         sector = info.get('sector', '')
         
