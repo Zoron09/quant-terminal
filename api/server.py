@@ -8,6 +8,7 @@ import io
 import sys
 import os
 import re
+import math
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import yfinance as yf
@@ -30,6 +31,79 @@ def evict_cache():
     now = time.time()
     expired = [k for k, v in list(TICKER_CACHE.items()) if now - v[1] > CACHE_TTL]
     for k in expired: TICKER_CACHE.pop(k, None)
+
+
+# ---------------------------------------------------------------------------
+# yfinance crumb recovery
+# ---------------------------------------------------------------------------
+# Yahoo's quoteSummary endpoint — institutional holders, insider transactions
+# and .info — is crumb-authenticated. Chart/history is NOT, which is why price
+# and chart data kept working while everything below silently went empty.
+#
+# yfinance caches one crumb on a process-wide singleton (YfData, data.py:75)
+# and _get_crumb_basic() (data.py:221) returns it whenever it is not None,
+# without ever re-validating it. Once that crumb goes stale — or a burst of
+# requests gets rate-limited while it is being fetched — every crumb-backed
+# call fails for the rest of the process's lifetime, and only a restart fixes
+# it. The failure is invisible: scrapers/holders.py:73 catches the resulting
+# HTTPError and assigns empty DataFrames to all six holder fields, and
+# scrapers/quote.py:597 does the same for .info, both because
+# YfConfig.debug.hide_exceptions defaults to True (config.py:34). No exception
+# ever reaches this file, so the endpoints returned empty payloads with a 200.
+#
+# _yf_force_fresh_crumb() drops the cached cookie+crumb so the next call
+# fetches new ones. _yf_quote_summary() does exactly one such retry when a
+# result comes back empty. A ticker that genuinely has no holders costs one
+# extra request and still returns empty — the retry cannot invent data, it
+# only rules out a stale crumb as the cause.
+
+def _yf_force_fresh_crumb():
+    """Clear the process-wide cached Yahoo cookie/crumb. Returns True if the
+    reset went through. Best-effort by design: this reaches into yfinance
+    internals, so a version bump that renames them must degrade to 'no retry',
+    never to a 500."""
+    try:
+        from yfinance.data import YfData
+        d = YfData()  # singleton — no args means "existing instance", no session reset
+        with d._cookie_lock:
+            d._cookie = None
+            d._crumb = None
+            d._cookie_strategy = 'basic'
+        return True
+    except Exception as e:
+        print(f"[yfinance] crumb reset failed: {e}")
+        return False
+
+
+def _info_is_empty(d):
+    """True when a .info payload came back with nothing identifying in it.
+    shortName/longName are present on every healthy quoteSummary response;
+    their absence means the fetch failed, not that the company has no name."""
+    return not d or not (d.get('shortName') or d.get('longName'))
+
+
+def _yf_quote_summary(symbol, extract, is_empty=None):
+    """Run `extract` against a fresh yf.Ticker for `symbol`. If the result is
+    empty (or the call raised), force a new crumb and try once more.
+
+    The retry MUST build a new yf.Ticker: yfinance memoizes the parsed result
+    on the instance (Holders._institutional, Quote._info), so reusing the same
+    object would just replay the empty answer without re-requesting.
+
+    Returns (result, retried). Exceptions on the second attempt propagate to
+    the caller's handler — one silent swallow was the original bug."""
+    empty = is_empty or (lambda r: not r)
+    result = None
+    try:
+        result = extract(yf.Ticker(symbol))
+        if not empty(result):
+            return result, False
+    except Exception as e:
+        print(f"[yfinance] quoteSummary call failed for {symbol}: {e}")
+    if not _yf_force_fresh_crumb():
+        return result, False
+    print(f"[yfinance] empty quoteSummary result for {symbol} — refetched crumb, retrying")
+    return extract(yf.Ticker(symbol)), True
 
 
 # ---------------------------------------------------------------------------
@@ -547,12 +621,18 @@ async def ticker_data(ticker: str):
         # the same normalization the engine already applies via
         # normalize_ticker(). Passing the raw dotted ticker returned empty
         # metadata, which made fast_info raise and 500'd the whole endpoint.
-        tk = yf.Ticker(normalize_ticker(t))
+        sym = normalize_ticker(t)
+        tk = yf.Ticker(sym)
 
-        info = tk.fast_info
+        info = tk.fast_info  # chart-API backed: no crumb, unaffected by the fault below
         try:
-            full_info = tk.info or {}
-        except Exception:
+            # .info is crumb-authenticated like the holders call, so it goes
+            # through the same stale-crumb retry — without it, company_name
+            # silently fell back to the raw ticker and pe_ratio to 'N/A'.
+            full_info, _retried = _yf_quote_summary(
+                sym, lambda x: x.info or {}, is_empty=_info_is_empty)
+        except Exception as e:
+            print(f"[ticker] {t} .info failed: {type(e).__name__}: {e}")
             full_info = {}
 
         def fi(attr, default=None):
@@ -702,9 +782,28 @@ async def financials(ticker: str):
             inc = f_inc.result()
             bal = f_bal.result()
             cf  = f_cf.result()
-            info = f_info.result() or {}
+            # .info is the only crumb-backed call in this group that RAISES on a
+            # stale crumb (TypeError out of yfinance's own parser, confirmed by
+            # probe: income/balance/cashflow/calendar all degrade quietly). Left
+            # unguarded it escaped the whole handler, so a crumb fault cost the
+            # balance sheet and cash flow too, not just the valuation block.
+            try:
+                info = f_info.result() or {}
+            except Exception as e:
+                print(f"[financials] {t} .info fetch failed: {type(e).__name__}: {e}")
+                info = {}
             cal_data = f_cal.result()
-        
+
+        # .info feeds the whole valuation block below and is crumb-authenticated;
+        # a stale crumb returned {} here and every ratio rendered as null.
+        if _info_is_empty(info):
+            try:
+                info, _retried = _yf_quote_summary(
+                    normalize_ticker(t), lambda x: x.info or {}, is_empty=_info_is_empty)
+            except Exception as e:
+                print(f"[financials] {t} .info retry failed: {type(e).__name__}: {e}")
+                info = info or {}
+
         # --- Build earnings list from secfsdstools + yfinance merge ---
         earnings_list = []
 
@@ -994,6 +1093,19 @@ def _parse_rfc2822(val):
 @app.get("/api/ownership/{ticker}")
 async def ownership(ticker: str):
     from datetime import datetime
+
+    def num(v, default=0.0):
+        """NaN-safe float. Yahoo leaves pctHeld/Value as NaN on real rows
+        (confirmed on AAPL: two of its three newest insider transactions carry
+        Value=NaN). float('nan') is not JSON-compliant, so JSONResponse raised
+        ValueError and the handler's except returned an empty payload — the
+        same visible symptom as the stale crumb, an independent second cause."""
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return default
+        return f if math.isfinite(f) else default
+
     def fmt_date(d):
         try:
             if isinstance(d, str):
@@ -1007,17 +1119,25 @@ async def ownership(ticker: str):
     try:
         # normalize_ticker(): confirmed at the yfinance layer that BRK-B returns
         # 10 institutional + 36 insider rows while BRK.B returns an empty frame.
-        # NOTE: this endpoint also returns empty for NORMAL tickers (AAPL) via the
-        # server, though the same code succeeds in a fresh process — a separate,
-        # pre-existing fault that the bare `except` below hides. Not fixed here.
-        t = yf.Ticker(normalize_ticker(ticker.upper()))
-        holders = t.institutional_holders
-        insiders = t.insider_transactions
-        
+        #
+        # _yf_quote_summary(): this endpoint used to return empty for EVERY
+        # ticker on a long-running server while succeeding in a fresh process —
+        # a stale process-wide crumb, see the notes on _yf_force_fresh_crumb().
+        # Both frames empty is the signal: a real company has institutional
+        # holders, insider transactions, or both.
+        sym = normalize_ticker(ticker.upper())
+        (holders, insiders), _retried = _yf_quote_summary(
+            sym,
+            lambda tk: (tk.institutional_holders, tk.insider_transactions),
+            is_empty=lambda frames: all(
+                f is None or getattr(f, 'empty', True) for f in frames
+            ),
+        )
+
         inst_list = []
         if holders is not None and not holders.empty:
             for _, row in holders.head(5).iterrows():
-                pct = float(row.get('pctHeld', 
+                pct = num(row.get('pctHeld',
                       row.get('% Out', 0))) * 100
                 inst_list.append({
                     'name': str(row.get('Holder', 
@@ -1028,7 +1148,7 @@ async def ownership(ticker: str):
         insider_list = []
         if insiders is not None and not insiders.empty:
             for _, row in insiders.head(3).iterrows():
-                val = float(row.get('Value', 0))
+                val = num(row.get('Value', 0))
                 insider_list.append({
                     'name': str(row.get('Insider', '')),
                     'role': str(row.get('Relationship', '')),
@@ -1042,6 +1162,10 @@ async def ownership(ticker: str):
             'insiders': insider_list
         })
     except Exception as e:
+        # Still degrades to an empty payload rather than a 500 — but says so in
+        # the log now. The previous bare `except` returned this shape with no
+        # trace at all, which is what hid the stale-crumb fault for so long.
+        print(f"[ownership] {ticker.upper()} failed: {type(e).__name__}: {e}")
         return JSONResponse({
             'institutional': [],
             'insiders': []
@@ -1050,11 +1174,16 @@ async def ownership(ticker: str):
 @app.get("/api/peers/{ticker}")
 async def peers(ticker: str):
     from utils.code33_adapter import get_code33_data, CACHE_VERSION
+
     try:
         # normalize_ticker(): un-normalized, .info came back without a 'sector',
         # so SECTOR_PEERS.get('') returned [] and dot tickers got an empty peer list.
         _yf_sym = normalize_ticker(ticker.upper())
-        info = yf.Ticker(_yf_sym).info
+        # .info is crumb-authenticated: when it came back empty there was no
+        # 'sector', SECTOR_PEERS.get('') returned [], and the peer list was
+        # empty for reasons that had nothing to do with the ticker.
+        info, _retried = _yf_quote_summary(
+            _yf_sym, lambda x: x.info or {}, is_empty=_info_is_empty)
         # Get peers from recommendationKey or sector peers
         # Use analyst recommendations to find peer tickers
         recs = yf.Ticker(_yf_sym).recommendations
