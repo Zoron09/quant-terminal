@@ -100,18 +100,48 @@ _YOY_MIN_GAP_DAYS = 330
 _YOY_MAX_GAP_DAYS = 400
 
 
+def _yoy_value(point) -> Optional[float]:
+    """The value to USE for a year-over-year comparison, which is not always the
+    value to DISPLAY.
+
+    When a later filing republishes a quarter on a different basis — a spinoff,
+    divestiture or acquisition changes what the company consolidates — the
+    engine keeps serving the as-first-filed figure (deliberate; see the AES
+    entry in bug_report.md) but records the company's own recast figure on the
+    point. Comparing an as-filed quarter against a recast one measures the
+    corporate action, not the business: GE reported -43.3% YoY for 2024-09-30
+    purely because its year-ago base still contained GE Vernova. On the recast
+    basis that quarter is +5.8%.
+
+    So a YoY uses the recast figure whenever the filer published one, on BOTH
+    sides of the comparison, keeping the two ends on one basis. The displayed
+    `rev` array is unchanged and stays as-filed; `rev_restated` /
+    `rev_restated_value` in the payload say which quarters differ.
+
+    Restatements run in both directions — DBRG and GE recast down after
+    divesting, DBD and NVRI recast up — so this is deliberately not conditioned
+    on the direction or size of the change, only on the filer having made one.
+    """
+    if point is None:
+        return None
+    if point.restated and point.restated_value is not None:
+        return point.restated_value
+    return point.value
+
+
 def _yoy_miss_cause(rev_points: list, idx: int) -> Optional[str]:
     """Why yoy_for() could not produce a YoY for rev_points[idx].
 
-    Mirrors yoy_for's walk exactly (same window, same falsy-prior test) so the
-    diagnosis can never disagree with the number actually emitted. Returns None
-    when a YoY IS computable — i.e. there is no miss to explain.
+    Mirrors yoy_for's walk exactly (same window, same falsy-prior test, and the
+    same _yoy_value basis) so the diagnosis can never disagree with the number
+    actually emitted. Returns None when a YoY IS computable — i.e. there is no
+    miss to explain.
     """
     cur = rev_points[idx]
     for prior in rev_points[idx + 1:]:
         gap = (cur.period_end - prior.period_end).days
         if _YOY_MIN_GAP_DAYS <= gap <= _YOY_MAX_GAP_DAYS:
-            return None if prior.value else 'zero_base'
+            return None if _yoy_value(prior) else 'zero_base'
         if gap > _YOY_MAX_GAP_DAYS:
             return 'year_ago_missing'
     return 'history_too_short'
@@ -199,6 +229,7 @@ def _empty_result(status: str, reason: str = '') -> dict:
         'npm': [], 'npm_labels': [], 'npm_ends': [],
         'sources': {'rev': reason or status, 'ni': reason or status},
         'rev_sources': [], 'ni_sources': [],
+        'rev_restated': [], 'rev_restated_value': [],
         'ni_restated': [], 'ni_restated_value': [],
         'is_us': True, 'sector_excluded': False, 'excluded_sector_name': '',
         'is_reit': False,
@@ -311,14 +342,18 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
     display = rev_points[:n_quarters]  # newest first
 
     def yoy_for(idx_in_rev_points: int):
+        # Both ends go through _yoy_value so the comparison stays on ONE basis
+        # when a filer has recast either quarter. See _yoy_value for why.
         cur = rev_points[idx_in_rev_points]
+        cur_v = _yoy_value(cur)
         for prior in rev_points[idx_in_rev_points + 1:]:
             gap = (cur.period_end - prior.period_end).days
-            if 330 <= gap <= 400:
-                if prior.value:
-                    return round((cur.value - prior.value) / abs(prior.value) * 100, 2)
+            if _YOY_MIN_GAP_DAYS <= gap <= _YOY_MAX_GAP_DAYS:
+                prior_v = _yoy_value(prior)
+                if prior_v and cur_v is not None:
+                    return round((cur_v - prior_v) / abs(prior_v) * 100, 2)
                 return None
-            if gap > 400:
+            if gap > _YOY_MAX_GAP_DAYS:
                 return None
         return None
 
@@ -346,6 +381,29 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
     # 'reported' = read from the secfsdstools bulk dataset, 'edgartools' = live
     # gap fill, 'derived_fy_minus_quarters' = Q4 back-solved from the 10-K.
     rev_sources = [p.source for p in display_asc]
+
+    # Revenue restatement flags. Computed upstream all along and discarded here
+    # until 2026-08-02 — the same discard class as the ni_restated fix. Exposed
+    # because rev_yoy is now computed on the recast basis while `rev` stays
+    # as-filed: without these the payload could not explain why the two disagree
+    # on a ticker like GE. True means a later filing republished that quarter on
+    # a different basis; rev_restated_value carries the figure rev_yoy used.
+    #
+    # LENGTH NOTE — these two arrays are DELIBERATELY LONGER than rev /
+    # rev_end_dates / rev_sources, and must not be zipped with them.
+    # The adapter pulls n_quarters + 4 quarters so every displayed quarter has a
+    # year-ago base; only the newest n_quarters are displayed. A restatement on
+    # a BASE-ONLY quarter still changes rev_yoy, so restricting these arrays to
+    # the displayed window hid exactly the case they exist to explain (found on
+    # PFE: all 8 displayed flags False, yet two YoY values moved because their
+    # bases — outside the window — were recast).
+    #
+    # Both arrays are ascending (oldest first), same order as rev. Mapping:
+    #   rev_restated[-len(rev):]   <-> the displayed quarters, aligned to rev
+    #   rev_restated[:-len(rev)]   <-> older base-only quarters, never displayed
+    all_asc = list(reversed(rev_points))
+    rev_restated = [bool(p.restated) for p in all_asc]
+    rev_restated_value = [p.restated_value if p.restated else None for p in all_asc]
 
     # ni_* and npm_* run strictly parallel — same quarters, same order, same
     # length — since both are appended only when a quarter has a paired margin.
@@ -399,6 +457,7 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
             'ni': _src_summary(margin_points, 'ni_source'),
         },
         'rev_sources': rev_sources, 'ni_sources': ni_sources,
+        'rev_restated': rev_restated, 'rev_restated_value': rev_restated_value,
         'ni_restated': ni_restated, 'ni_restated_value': ni_restated_value,
         'is_us': True, 'sector_excluded': False, 'excluded_sector_name': '',
         'is_reit': False,

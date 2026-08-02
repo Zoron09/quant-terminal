@@ -841,6 +841,112 @@ impact was assumed uniform and is not):**
 
 ---
 
+## 2026-08-01 — corporate actions inside a single CIK
+
+### GE — YoY compares post-spinoff against pre-spinoff, producing a ~-43% artifact — CLOSED (FIXED 2026-08-02)
+- **Resolution: YoY is now computed on the filer's own recast basis.** GE reports
+  +5.81% / +14.34% / +10.94% for the three affected quarters instead of
+  -43.26% / -44.33% / -38.11%. Confirmed over HTTP after restart.
+- **No boundary detection was needed — the signal already existed.** Both candidate
+  signals from the plan were investigated and rejected: GE files
+  `IncomeLossFromDiscontinuedOperationsNetOfTax` on essentially every quarter back to
+  2017 (±$50M residue from decades of divestitures, no signal), and a revenue
+  step-change heuristic repeats the ±1000%-margin-guard mistake closed earlier —
+  a magnitude threshold cannot separate a divestiture from a volatile quarter.
+  What works instead: **GE recast its own history**, and `_attach_restatement_flags`
+  in `code33/quarterly_engine.py` already detected it, on the revenue leg, all along.
+  `restated=True` lands on exactly the five pre-spinoff quarters and `False` on every
+  post-spinoff one — the boundary delineated by the filer, not inferred by us.
+- **Fix (`utils/code33_adapter.py` only — `code33/` untouched):**
+  - New `_yoy_value(point)`: returns `restated_value` when the filer republished the
+    quarter, else `value`. Applied to **both ends** of every comparison so the two
+    sides stay on one basis.
+  - `yoy_for()` routes both `cur` and `prior` through it.
+  - `_yoy_miss_cause()` routes its falsy-base test through it too. Its docstring
+    promises it "mirrors yoy_for's walk exactly … so the diagnosis can never disagree
+    with the number actually emitted"; changing one without the other would have let a
+    quarter with `value=0` but a non-zero `restated_value` compute a real YoY while the
+    diagnosis still reported `zero_base`.
+  - `rev_restated` / `rev_restated_value` exposed — computed upstream and discarded
+    until now, the same discard class as the `ni_restated` fix.
+  - The displayed `rev` array is unchanged and stays as-filed. Only the comparison moves.
+- **Scope, measured on the full universe (543 tickers, 389s):** 496 have no restated
+  revenue quarter at all, 22 restate <10%, **23 restate ≥10%**. GE is only 6th —
+  DBRG (92.6%), ROIV (90.2%), PRSU (86.4%), STRZ (63.4%) and CALY (55.3%) are worse,
+  and **JNJ** (15.7%, Kenvue) and **NVRI** (17.1%) are affected. Restatements run in
+  **both directions** — DBD and NVRI recast *upward* — which is a second reason a
+  "revenue dropped sharply" heuristic could never have worked.
+- **Verification:**
+  - **57 restated quarters across all 23 material tickers verified EXACT against
+    `data.sec.gov`** — engine `.value` == SEC earliest-filed, engine `.restated_value`
+    == SEC latest-filed, on every one.
+  - **Universe-wide old-vs-new audit, 430 scored tickers, 0 errors:** 36 rev_yoy
+    changed, **1 status changed**, 394 untouched. **Zero tickers with no restated
+    quarter changed in any way** — containment proven, not assumed.
+  - 30-ticker clean control sample drawn only from the 496 scan-confirmed clean:
+    **all 30 byte-identical**.
+- **The one status change: PAG yellow → red, accepted as correct.** PAG's restatement is
+  small (4.83%) but it has 6 restated quarters and its YoY sat near a Code 33 boundary,
+  so ±5pp crossed it. Deliberately NOT special-cased: status sensitivity depends on where
+  a YoY sits relative to the thresholds, not on the size of the restatement, so any
+  "ignore small restatements" rule would be arbitrary and would reintroduce the
+  magnitude-heuristic error this fix exists to avoid.
+- **Pre-existing issue found while verifying, NOT fixed and NOT caused by this change:**
+  **DBD** emerged from Chapter 11 on 2023-08-11, so its Q3 2023 is split into a 41-day
+  predecessor and a 49-day successor stub. The engine treats the 49-day stub
+  (`2023-08-12→2023-09-30`) as a quarter. Both its as-filed 591,800,000 and its recast
+  895,400,000 are real SEC facts for that exact period, so the restatement handling is
+  correct — but a 49-day stub is not comparable to a 90-day quarter either way. Separate
+  data-quality question about fresh-start accounting, worth its own look.
+
+**Original investigation notes — kept for history:**
+- **Ticker/quarters:** GE (GE Aerospace, CIK 40545), the three oldest displayed quarters
+  2024-09-30, 2024-12-31, 2025-03-31.
+- **Every revenue and net-income VALUE is correct.** Verified dollar-exact against
+  `data.sec.gov` companyfacts, as-filed, on all 8 quarters. This is not a data-extraction
+  defect. The defect is in what the derived YoY *means*.
+- **What's wrong.** GE completed the GE Vernova spinoff on 2024-04-02. The adapter pulls
+  `n_quarters + 4 = 12` quarters so every displayed quarter has a year-ago base, and those
+  extra bases reach back **across the spinoff boundary**. So the three oldest displayed
+  quarters compare standalone GE Aerospace against the old consolidated GE:
+
+  | Displayed quarter | Revenue (post-spinoff) | YoY base (pre-spinoff) | Reported YoY |
+  |---|---|---|---|
+  | 2024-09-30 | 9,842,000,000 | 2023-09-30 → 17,346,000,000 | **-43.26%** |
+  | 2024-12-31 | 10,812,000,000 | 2023-12-31 → 19,423,000,000 | **-44.33%** |
+  | 2025-03-31 | 9,935,000,000 | 2024-03-31 → 16,053,000,000 | **-38.11%** |
+  | 2025-06-30 | 11,023,000,000 | 2024-06-30 → 9,094,000,000 (post-spinoff) | +21.21% |
+
+  The scale break is visible in SEC's own as-filed series: 2024-03-31 = 16,053,000,000, then
+  2024-06-30 = 9,094,000,000 the very next quarter. GE did not shrink 43%; it divested a
+  business. From 2025-06-30 onward both sides of the comparison are post-spinoff and the YoY
+  flips to the real ~+21%.
+- **Consequence.** Code 33 is a revenue-*acceleration* screener, so a spinoff manufactures a
+  severe fake deceleration followed by a fake acceleration. Nothing in the payload flags it —
+  `rev_sources` reads `reported` on every one of these quarters, because each individual value
+  genuinely is.
+- **Not affecting GE's status today, but it did.** The current 3-quarter window is
+  +17.61 / +24.73 / +21.10, all clean post-spinoff comparisons, so today's `red` is computed
+  on valid data. A scan run in late 2024 or early 2025, when the -43% quarters were newest,
+  would have scored GE on the artifact.
+- **Scope, measured not assumed.** Scanned all 10 tickers in this pull for the signature
+  (large YoY swing + sign flip). GE is the only hit: swing 69.06pp with a clean break between
+  the third and fourth quarter. TSLA (37.30pp) and CAT (32.03pp) have comparable swings but
+  no structural break — those are ordinary business cycles, correctly reported.
+- **Relationship to the XOM/NVRI finding.** Same family — a corporate action breaking series
+  continuity — but a different mechanism, and the XOM fix does not help here. XOM was a
+  *ticker→CIK* discontinuity (history on a different CIK). GE is a *comparability*
+  discontinuity **within one CIK**: the CIK is correct, the history is present and correctly
+  extracted, and the values either side of the boundary are simply not comparable.
+- **Not fixed, and the fix is not obvious.** Detecting it means identifying a spinoff/
+  divestiture boundary. Candidate signals: a large step change in revenue scale against a
+  filing that reports discontinued operations, or SEC's own `IncomeLossFromDiscontinuedOperations*`
+  concepts appearing in the boundary filings. Suppressing YoY across such a boundary would be
+  more honest than reporting a number that reads as a business decline. Flagged for a decision,
+  not queued as work.
+
+---
+
 ## 2026-08-01 — ticker→CIK resolution after a holdco reorganization
 
 ### XOM returned no data because SEC moved the ticker to a new CIK — CLOSED (FIXED 2026-08-01)

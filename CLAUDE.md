@@ -521,6 +521,25 @@ active account as `monikaarya-work`, which lacks write access to Zoron09/quant-t
     `rev_series`; confirmed by counting `(quarter, tag)` fill pairs on MU and IQV, zero
     duplicates. Both `bug_report.md` entries are now marked accordingly.
 
+  - **YoY now uses the filer's recast basis when a quarter was restated (2026-08-02).**
+    GE reported **-43.26% YoY** for 2024-09-30 purely because its year-ago base still
+    contained GE Vernova, divested 2024-04-02. Every VALUE was correct; only the
+    comparison was meaningless. **No boundary detection was needed** — GE recast its own
+    history and `_attach_restatement_flags` already flagged it on the revenue leg,
+    marking exactly the five pre-spinoff quarters. Both signals considered in planning
+    were rejected: discontinued-ops concepts appear on nearly every GE quarter since
+    2017, and a revenue step-change heuristic repeats the ±1000%-margin-guard mistake.
+    Fix is `utils/code33_adapter.py` only (**`code33/` untouched**): a `_yoy_value()`
+    helper applied to BOTH ends of every comparison, mirrored into `_yoy_miss_cause()`
+    so the diagnosis cannot disagree with the emitted number, plus `rev_restated` /
+    `rev_restated_value` exposed. Those two arrays deliberately cover all 12 pulled
+    quarters, not the 8 displayed — a restatement on a base-only quarter still moves
+    `rev_yoy`, found on PFE. Displayed `rev` stays as-filed. Scope: 23 of 543 tickers
+    restate ≥10%; GE is 6th, and JNJ and NVRI are affected. Verified: 57 restated
+    quarters EXACT vs SEC; universe audit of 430 scored tickers → 36 YoY changed,
+    **1 status changed (PAG yellow→red, accepted)**, zero tickers without a restatement
+    changed at all. Full evidence in `bug_report.md`.
+
   - **Ticker→CIK resolution after a holdco reorganization (2026-08-01).** `XOM` returned no
     data. **Not an engine defect** — ExxonMobil completed a holding-company reorganization in
     July 2026 and SEC's `company_tickers.json` now maps XOM to the new parent, CIK 2115436,
