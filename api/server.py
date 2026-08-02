@@ -25,11 +25,39 @@ from utils.code33_adapter import get_code33_data, CACHE_VERSION, normalize_ticke
 from fastapi.concurrency import run_in_threadpool
 
 TICKER_CACHE = {}
-CACHE_TTL = 300  # 5 minutes
+
+# One dict, four different freshness needs. Every endpoint declared its own
+# window, but evict_cache() purged the whole dict on the shortest one, so any
+# entry wanting to live longer than CACHE_TTL was deleted out from under its
+# own check. /api/financials asked for 600s and never saw a hit past 300s —
+# it recomputed a 3-4s payload (5 yfinance calls plus a 12-quarter engine
+# pull that takes the adapter's global lock) every time.
+#
+# Raising the shared constant to 600 was the other option and is worse:
+# CACHE_TTL is what /api/ticker serves live price out of, so a single number
+# would have doubled price staleness to fix a financials problem. Each entry
+# now expires on its own clock instead.
+CACHE_TTL = 300            # /api/ticker — carries live price, stays short
+CACHE_TTL_CHART = 300      # /api/chart
+CACHE_TTL_FINANCIALS = 600 # /api/financials — expensive, changes quarterly
+CACHE_TTL_NEWS = 120       # /api/news
+
+
+def _entry_ttl(key):
+    """Per-entry lifetime, keyed off the prefix each endpoint already uses when
+    it writes to TICKER_CACHE. Bare ticker symbols (no prefix) are /api/ticker."""
+    if key.startswith('fin_'):
+        return CACHE_TTL_FINANCIALS
+    if key.startswith('news_'):
+        return CACHE_TTL_NEWS
+    if key.startswith('chart_'):
+        return CACHE_TTL_CHART
+    return CACHE_TTL
+
 
 def evict_cache():
     now = time.time()
-    expired = [k for k, v in list(TICKER_CACHE.items()) if now - v[1] > CACHE_TTL]
+    expired = [k for k, v in list(TICKER_CACHE.items()) if now - v[1] > _entry_ttl(k)]
     for k in expired: TICKER_CACHE.pop(k, None)
 
 
@@ -696,7 +724,7 @@ async def chart_data(ticker: str, period: str = "3mo", interval: str = "1d"):
     
     if cache_key in TICKER_CACHE:
         cached, ts = TICKER_CACHE[cache_key]
-        if now - ts < 300:
+        if now - ts < CACHE_TTL_CHART:
             return JSONResponse(cached)
     
     try:
@@ -733,7 +761,7 @@ async def financials(ticker: str):
     evict_cache()
     if cache_key in TICKER_CACHE:
         cached, ts = TICKER_CACHE[cache_key]
-        if now - ts < 600:
+        if now - ts < CACHE_TTL_FINANCIALS:
             return JSONResponse(cached)
     try:
         # normalize_ticker(): un-normalized, Yahoo returned nothing for dot
@@ -968,7 +996,7 @@ async def news(ticker: str):
     evict_cache()
     if cache_key in TICKER_CACHE:
         cached, ts = TICKER_CACHE[cache_key]
-        if now - ts < 120:
+        if now - ts < CACHE_TTL_NEWS:
             return JSONResponse(cached)
 
     items = []
