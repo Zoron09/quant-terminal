@@ -816,7 +816,56 @@ impact was assumed uniform and is not):**
   one-line `normalize_ticker()` reuse at each call site, but each endpoint needs its own
   before/after check rather than a blanket edit.
 
-### /api/ownership returns empty for EVERY ticker — OPEN, MEDIUM (found 2026-08-01)
+### /api/ownership returns empty for EVERY ticker — CLOSED (FIXED 2026-08-02, commit `ac227c7`)
+- **Resolution: real holders are served again.** `GET /api/ownership/AAPL` returns a
+  populated payload (`Blackrock Inc. 7.8%`, `Vanguard Capital Management LLC 6.5%`,
+  `State Street Corporation 4.1%`) instead of `{"institutional":[],"insiders":[]}`.
+  Re-confirmed over HTTP against the running server on 2026-08-02, single listener on
+  8000 verified first.
+- **Root cause — yfinance's cached auth token going stale and never revalidating.**
+  yfinance holds a process-wide `YfData` singleton; `_get_crumb_basic()` returns the
+  cached crumb whenever it is not `None` and never revalidates it. Once Yahoo rejects
+  that crumb, every crumb-authenticated call fails for the remaining life of the
+  process. This is exactly why the handler's own logic succeeded when copied into a
+  fresh Python process (see the original notes below) while the identical code returned
+  nothing inside the long-running uvicorn worker — the leading suspect recorded at the
+  time ("a poisoned yfinance session in the uvicorn worker") was correct, and the
+  mechanism is now named.
+- **Why it was silent.** `scrapers/holders.py` and `scrapers/quote.py` both absorb the
+  resulting `HTTPError` into empty results, because `YfConfig.debug.hide_exceptions`
+  defaults to `True`. The endpoint therefore returned an empty payload behind a **200**,
+  with nothing raised for the handler's own `except` to report. Chart and price kept
+  working throughout because the chart API needs no crumb — which is what made the
+  failure look ticker-agnostic-but-endpoint-specific.
+- **Fix (`api/server.py`):** `_yf_force_fresh_crumb()` drops the cached cookie/crumb, and
+  `_yf_quote_summary()` retries once with a **new** `yf.Ticker` instance — necessary
+  because yfinance memoizes the parsed result on the instance, so retrying on the old
+  object returns the same failure. Wired into `/api/ownership`, `/api/ticker` (company
+  name, P/E), `/api/financials` (valuation block) and `/api/peers` (sector lookup).
+- **Two co-fixes, each of which produced the identical empty-ownership symptom on its own:**
+  1. **`.info` raises on a stale crumb rather than degrading.** Unguarded, it escaped
+     `/api/financials` entirely, costing the balance sheet and cash flow as well as the
+     valuation block.
+  2. **NaN insider values crashed JSON serialization.** AAPL's insider rows carry
+     `Value=NaN`; `float('nan')` is not JSON-compliant, so `JSONResponse` raised and the
+     handler's `except` returned the empty payload — a second, independent path to the
+     same symptom.
+- **Frontend, same commit:** `_applyToD` only overwrote `D.owners` on a non-empty
+  response, so a hardcoded mock holder list (Vanguard 8.42%, BlackRock 7.13%, Fidelity
+  4.88%, State Street 3.94%, T. Rowe Price 2.21%) rendered as if it were live data for
+  every ticker. Literals removed outright; an explicit "Ownership data unavailable" state
+  renders instead, and an empty response now clears the previous ticker's holders.
+- **Verified against a deliberately poisoned crumb:** AAPL/MSFT/KO all return real
+  holders where the pre-fix code returns 0 rows for all three; company name, P/E,
+  valuation and peer list all recover; chart output byte-identical, since that path never
+  used the crumb.
+- **Not to be confused with `8d2af72`** (`perf(api): cache /api/peers and /api/ownership`),
+  the very next commit. That one is a caching layer only and fixes nothing here — it
+  deliberately refuses to cache an empty ownership payload *because* of this bug, since a
+  transient failure is indistinguishable from a company with no 13F/Form 4 rows.
+
+**Original investigation notes (2026-08-01) — kept for history, superseded by the
+resolution above:**
 - **Symptom:** `GET /api/ownership/{any}` returns `{"institutional":[],"insiders":[]}`.
   Reproduced on AAPL and BRK.B. Not a dual-class issue — it affects all tickers.
 - **Found incidentally** while confirming per-endpoint failure modes for the

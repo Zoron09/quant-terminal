@@ -331,6 +331,33 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-02 — **`/api/ownership` fixed, then both it and `/api/peers` cached.** Two commits,
+neither of which updated this file when it shipped (rule 12); recorded retroactively as a
+documentation-only change. Full detail for both lives in `bug_report.md` — deliberately not
+duplicated here.
+  - **`ac227c7` — `fix(api): recover from a stale yfinance crumb; drop mock ownership data`.**
+    Closes the `/api/ownership` returns-empty-for-every-ticker bug logged 2026-08-01.
+    Root cause: yfinance's process-wide cached auth crumb is never revalidated, so once
+    Yahoo rejects it every crumb-authenticated call fails for the life of the process —
+    silently, because `hide_exceptions` defaults `True` and the error is absorbed upstream
+    into an empty result behind a 200. Fixed with `_yf_force_fresh_crumb()` + a retry on a
+    **new** `yf.Ticker` (yfinance memoizes on the instance), wired into `/api/ownership`,
+    `/api/ticker`, `/api/financials` and `/api/peers`. Two co-fixes shipped with it: `.info`
+    raising instead of degrading, and a NaN insider `Value` breaking `JSONResponse`. Frontend:
+    the hardcoded mock holder list is gone, replaced by an explicit "Ownership data
+    unavailable" state. Verified against a deliberately poisoned crumb.
+  - **`8d2af72` — `perf(api): cache /api/peers and /api/ownership`.** Both endpoints
+    bypassed `TICKER_CACHE` entirely and recomputed on every search; `/api/peers` is the
+    most expensive endpoint in the app (one pipeline run **per peer**, four peers, serialized
+    behind the adapter's global lock). Both now use the per-prefix TTL mechanism at 600s.
+    Empty payloads handled asymmetrically on purpose: ownership caches only a non-empty
+    result (an empty one is indistinguishable from a transient Yahoo failure — precisely the
+    `ac227c7` bug class), while peers gates on a resolved `.info`, so a sector that
+    legitimately has no peers is cached but an `.info` failure is not. Repeat search
+    4.28s → 0.01s; cold searches unchanged.
+  - **Caching-layer only — `8d2af72` fixes nothing in the ownership bug.** Recorded because
+    the two commits are adjacent and easy to conflate; the fix is `ac227c7`.
+
 2026-08-01 (later) — **Vendoring COMPLETE — steps 5-6 done.** Continues the vendoring
 recorded in commit `6107e77` (steps 1-4: copy, hash-verify, one path fix, 20-ticker
 regression); see that commit and the entry below rather than duplicating them here.
@@ -490,10 +517,12 @@ active account as `monikaarya-work`, which lacks write access to Zoron09/quant-t
     Each was confirmed against BRK.B on the un-fixed code before editing. AAPL is
     byte-identical through all 5 endpoints before/after, with the server restarted between
     captures so `TICKER_CACHE` could not mask a difference. Detail in `bug_report.md`.
-    **New OPEN bug found while doing this:** `/api/ownership` returns empty for **every**
-    ticker, not just dot-tickers — the data exists and the handler's own logic works in a
-    fresh process, so the fault is server-process-specific and hidden by a bare `except`
-    that logs nothing. Logged in `bug_report.md`; not fixed.
+    **New bug found while doing this — since CLOSED (FIXED 2026-08-02, commit `ac227c7`).**
+    `/api/ownership` returned empty for **every** ticker, not just dot-tickers. Root cause
+    was yfinance's process-wide cached auth crumb going stale and never revalidating, with
+    the resulting error swallowed upstream by `hide_exceptions` — which is why the handler's
+    own logic worked in a fresh process. Fixed with a forced crumb refresh plus retry, and
+    two co-fixes. Full writeup in `bug_report.md`; re-confirmed live 2026-08-02.
 
   - **`requirements.txt` corrected (2026-08-01).** It was **broken for clean installs** —
     `pypfopt>=1.5.5` names an import, not a PyPI distribution, and pip aborted the whole
