@@ -41,6 +41,15 @@ CACHE_TTL = 300            # /api/ticker — carries live price, stays short
 CACHE_TTL_CHART = 300      # /api/chart
 CACHE_TTL_FINANCIALS = 600 # /api/financials — expensive, changes quarterly
 CACHE_TTL_NEWS = 120       # /api/news
+# /api/peers is the most expensive endpoint in the app: it runs the engine
+# pipeline once PER PEER (four of them) behind the adapter's global lock, and
+# was recomputing all four on every single search. Peer membership comes from a
+# hardcoded sector table and the peers' own quarterly filings — neither moves
+# minute to minute, so it gets the long window rather than the price one.
+CACHE_TTL_PEERS = 600      # /api/peers
+# Institutional holdings come from 13F filings (quarterly); insider
+# transactions from Form 4 (days). Nothing here justifies a 300s refresh.
+CACHE_TTL_OWNERSHIP = 600  # /api/ownership
 
 
 def _entry_ttl(key):
@@ -52,6 +61,10 @@ def _entry_ttl(key):
         return CACHE_TTL_NEWS
     if key.startswith('chart_'):
         return CACHE_TTL_CHART
+    if key.startswith('peers_'):
+        return CACHE_TTL_PEERS
+    if key.startswith('own_'):
+        return CACHE_TTL_OWNERSHIP
     return CACHE_TTL
 
 
@@ -1144,6 +1157,14 @@ async def ownership(ticker: str):
         except:
             return str(d)
 
+    cache_key = f"own_{ticker.upper()}"
+    now = time.time()
+    evict_cache()
+    if cache_key in TICKER_CACHE:
+        cached, ts = TICKER_CACHE[cache_key]
+        if now - ts < CACHE_TTL_OWNERSHIP:
+            return JSONResponse(cached)
+
     try:
         # normalize_ticker(): confirmed at the yfinance layer that BRK-B returns
         # 10 institutional + 36 insider rows while BRK.B returns an empty frame.
@@ -1185,10 +1206,17 @@ async def ownership(ticker: str):
                     'type': 'BUY' if val > 0 else 'SELL'
                 })
         
-        return JSONResponse({
+        result = {
             'institutional': inst_list,
             'insiders': insider_list
-        })
+        }
+        # Only cache a payload that actually carries data. An empty result is
+        # ambiguous — a company with no 13F/Form 4 rows looks identical to a
+        # transient Yahoo failure, and pinning a failure for 10 minutes is the
+        # bug class this endpoint was already caught by once.
+        if inst_list or insider_list:
+            TICKER_CACHE[cache_key] = (result, now)
+        return JSONResponse(result)
     except Exception as e:
         # Still degrades to an empty payload rather than a 500 — but says so in
         # the log now. The previous bare `except` returned this shape with no
@@ -1202,6 +1230,14 @@ async def ownership(ticker: str):
 @app.get("/api/peers/{ticker}")
 async def peers(ticker: str):
     from utils.code33_adapter import get_code33_data, CACHE_VERSION
+
+    cache_key = f"peers_{ticker.upper()}"
+    now = time.time()
+    evict_cache()
+    if cache_key in TICKER_CACHE:
+        cached, ts = TICKER_CACHE[cache_key]
+        if now - ts < CACHE_TTL_PEERS:
+            return JSONResponse(cached)
 
     try:
         # normalize_ticker(): un-normalized, .info came back without a 'sector',
@@ -1263,10 +1299,18 @@ async def peers(ticker: str):
             except:
                 continue
         
-        return JSONResponse({
+        result = {
             'ticker': ticker.upper(),
             'peers': peers_data
-        })
+        }
+        # Cache on a resolved .info, not on a non-empty peer list: a sector
+        # that simply isn't in SECTOR_PEERS (Consumer Defensive, Utilities...)
+        # legitimately yields [], and that answer is worth caching too. What
+        # must NOT be cached is [] caused by .info failing, which is exactly
+        # what _info_is_empty() distinguishes.
+        if not _info_is_empty(info):
+            TICKER_CACHE[cache_key] = (result, now)
+        return JSONResponse(result)
     except Exception as e:
         return JSONResponse({
             'ticker': ticker.upper(),
