@@ -23,3 +23,9 @@ data/scan_jobs/
 # SEC ticker->CIK map cached by code33/ticker_lookup.py (~1MB, regenerable,
 # refreshes itself weekly)
 data/company_tickers.json
+
+# News Scanner session history — today's headlines only, cleared on the first
+# request of a new calendar day. Pure runtime state, plus the user's watchlist.
+data/news_session.db
+data/news_session.db-wal
+data/news_session.db-shm

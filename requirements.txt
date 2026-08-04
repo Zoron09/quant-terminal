@@ -41,3 +41,12 @@ ws-api
 # two versions.
 secfsdstools==2.4.3
 edgartools==5.39.1
+
+# News Scanner (api/news_scanner.py). Both were REMOVED from this file on
+# 2026-08-01 after an audit found zero imports anywhere in the codebase — that
+# was correct at the time. Stage 1 of the News Scanner now genuinely imports
+# both, so they are declared again rather than left as undeclared runtime deps:
+#   - finnhub-python: free-tier general market + company news
+#   - feedparser: SEC EDGAR 8-K current-events atom feed
+finnhub-python>=2.4.28
+feedparser>=6.0.12

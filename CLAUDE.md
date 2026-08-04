@@ -168,6 +168,16 @@ All edits: decode JSON → string replace → re-encode with `<\/` escaping → 
 
 #page-journal  { left: 200vw; top: 0;     } ← swipe RIGHT from home
 
+#page-news     { left: 100vw; top: -100vh; } ← swipe DOWN from home (added 2026-08-04)
+
+**On `#page-news` sitting outside `#world`'s 300vw x 300vh box:** deliberate, and it needs no
+change to `#world`. The only clipping rule in the file is `#viewport { position: fixed; inset: 0;
+overflow: hidden; }`, which clips to the SCREEN — that is the mechanism the whole grid relies
+on. `#world` sets no `overflow` of its own, so a child above it renders normally once the world
+translates down. **The journal cell at (200vw, 0) is dead but must NOT be repurposed** —
+`nav('journal')` redirects to `/journal` before ever reading `PAGES.journal`, so taking the cell
+would steal the left-from-home gesture.
+
 **Navigation:** `goTo(page)` translates `#world` div. Touch drag `passive: false`. Arrow keys work. DO NOT TOUCH.
 
 ---
@@ -214,6 +224,19 @@ POST /api/scan                     → starts background job: {job_id, total, re
 
 GET  /api/scan/status              → {running, done, error, total, completed, current_ticker, winners: [{ticker, company, sector, mcap, eps, rev, margin, status}], excluded_banks: [tickers], meta: {total, passed, insufficient, excluded_banks}}
 
+**News Scanner (Stage 1)** — routes live in `api/news_scanner.py`, NOT server.py. Separate
+universe from `/api/news` above: different prefix, different store, no shared code.
+
+GET    /api/news-scanner/feed?mode=market|watchlist&q=&limit= → {mode, query, session_date, count, items: [{id, source, ticker, company, headline, url, published, first_seen, meta}]}
+
+GET    /api/news-scanner/status    → {poller_running, primed, in_market_window, market_window_et, now_et, scan_running, session_date, items_in_memory, items_today, watchlist_size, sources: {edgar|finnhub_general|finnhub_company: {last_ok, last_error, last_attempt, items}}, intervals: {}}
+
+GET    /api/news-scanner/watchlist → {tickers: []}
+
+POST   /api/news-scanner/watchlist/{ticker}   → {tickers: []}   (400 on a malformed symbol)
+
+DELETE /api/news-scanner/watchlist/{ticker}   → {tickers: []}
+
 ---
 
 ## CURRENT STATUS (update this after every session)
@@ -225,6 +248,15 @@ GET  /api/scan/status              → {running, done, error, total, completed, 
 - Journal: separate standalone page at `frontend/journal.html` (sin-list's original file, restyled to quant-terminal's monochrome/white accent + underline tabs, own everything else — not merged into the bundled SPA). `GET /journal` serves it directly; `nav('journal')` in the SPA's bundled `nav()` redirects there (`window.location.href = '/journal'`) instead of sliding the world grid.
 - Wealthsimple auto-sync (2026-07-15): `/api/journal/wealthsimple-latest` now also triggers a debounced background refresh (5 min minimum between attempts, single-worker `ThreadPoolExecutor`, genuinely fire-and-forget — the handler never calls `.result()`/awaits it, proven via concurrent-request testing that other requests stay fast while a fetch is in flight) using `tools/wealthsimple_export.py`'s `get_cached_api_or_none()` / `run_export_with_cached_session()`. **Only ever uses the existing cached `tools/session.json`** — no password/2FA path exists in this code at all; missing/expired session degrades to serving last-known-good cached data with `live_sync: {last_attempt_ok: false}` in the response, never a crash or hang. Auto-refresh reuses whichever `--start-date` the most recent manual `ws_import_<start>_<end>.json` used (rule 14 — never a shifting window) and does nothing if no manual export has ever been run yet. `_atomic_write_json` (in `wealthsimple_export.py`) now qualifies its temp filename with the process PID so the server's auto-fetch and a manual CLI run can never collide on the same temp file.
 - Current Capital stat card (2026-07-15): a real Wealthsimple NAV (`financials.currentCombined.netLiquidationValue`), not derived from trade P&L — this field is already returned by the same `get_accounts()` call `_build_account_labels()`/`_get_account_ids()` already make (no new API scope, no extra network call). New `_build_account_balances(api, account_labels)` writes `tools/account_balances.json` (gitignored — real balance data) as a sibling to `ws_import_latest.json`, keyed by the same resolved label used for `trade.acc`, **summed** (not overwritten) when two raw accounts resolve to the same label — confirmed against real data that this actually happens (two of Meet's cash sub-accounts both carry the nickname "Meet"); naively overwriting silently dropped one account's real dollar balance. Frontend's "Combined" sums only the accounts the switcher itself tracks (labels actually present in `TRADES`), not every Wealthsimple account on the profile — Meet's FHSA/RRSP/unrelated cash accounts don't inflate it.
+- **News Scanner tab (2026-08-04, Stage 1 of 5)**: new page in the world grid's previously
+  unused **down-from-home** direction (`#page-news` at `top:-100vh`, `PAGES.news = {x:0,
+  y:+innerHeight}`). Headlines only — SEC EDGAR 8-K current-events feed + Finnhub general
+  market news, whole-market/watchlist toggle, today-only session history with search.
+  Backend is `api/news_scanner.py`: one daemon-thread poller (never an asyncio task — the
+  event loop already blocks on `/api/financials`), its own store behind its own lock, its
+  own SQLite at `data/news_session.db` (WAL, gitignored). Never calls `get_code33_data()`,
+  so it never touches `_PIPELINE_LOCK`. **Stages 2-5 not built:** catalyst tagging +
+  visual highlight (2), full article text via trafilatura (3), wire RSS + dedup (4).
 - News: tradingview-scraper primary, yfinance fallback, 60s cache
 - Chart: dynamic color (green/red), period % + $ gain label, YTD/1D/1W/1M/3M/1Y/5Y timeframes, 30s price poll
 
@@ -331,6 +363,55 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-04 — **News Scanner tab, Stage 1 of 5: core feed, headlines only.** New isolated
+feature. Nothing pre-existing was modified: `code33/`, `code33_adapter.py`, `_PIPELINE_LOCK`,
+`/api/news` and its FinNews/tradingview-scraper path are all untouched.
+  - **New module `api/news_scanner.py`** (routes under `/api/news-scanner`, listed in BACKEND
+    API ROUTES above). Sources: SEC EDGAR 8-K current-events atom feed via feedparser, and
+    Finnhub free-tier general market news. Server.py's only changes are a `lifespan` handler,
+    one import and one `include_router`.
+  - **Architecture, per the pre-build investigation:** poller on a **daemon thread**, never an
+    asyncio task — `/api/financials` calls `.result()` synchronously inside an `async def` and
+    blocks the single event loop, which would stall an async poller. Own store behind its own
+    lock; `TICKER_CACHE` is deliberately NOT shared (no lock, and a background writer would
+    race `evict_cache()`'s iteration). SEC identity is **reused**, not redeclared —
+    `code33/edgar_fill.py`'s `set_identity()` via `get_identity()`, because SEC's rate budget
+    is per-identity and the Code 33 pipeline already spends it.
+  - **Intervals:** EDGAR 120s, backing off to 300s automatically while `_scan_state['running']`;
+    Finnhub general 60s (1.7% of the 60/min free cap); Finnhub company-news 300s/ticker,
+    staggered, hard ceiling 30 calls/min. Polling is gated to **07:00-20:00 ET, weekdays** —
+    wider than 09:30-16:00 because earnings and 8-Ks cluster pre-market and after the close.
+    One priming fetch runs at startup regardless of the window, so the tab is never empty.
+  - **Session history = calendar day in ET**, in `data/news_session.db` (WAL, gitignored),
+    purged on the first request of a new day. Survives restarts, and the feed is rehydrated
+    from it on boot. Rollover confirmed live: 426 stale rows purged on 2026-08-04.
+  - **Frontend patched additively** via `tools/patch_frontend_news.py` (the mandated
+    decode/replace/re-encode flow). Six replacements, each asserting exactly one match, and
+    the patcher additionally asserts the four world-grid cell rules, the `#world` box and the
+    journal redirect are still byte-present afterwards. **No existing line was modified.**
+  - **Three defects found and fixed during the build, all in the new code** — full writeups in
+    `bug_report.md`: the Finnhub **API key being logged in plaintext** (and served over HTTP in
+    `status.last_error`), the watchlist filter running **after** the SQL `LIMIT`, and **two
+    pollers** starting because `start_poller()` ran at import time under `--reload`.
+  - **Operational hazard confirmed, NOT fixed:** `uvicorn --reload` logs "detected changes …
+    Reloading" and then never completes — the old worker keeps serving, so an edit silently
+    does not take effect, and `netstat` still shows exactly one listener so the single-listener
+    check does not catch it. Observed twice. `watchfiles` is not installed. **Until this is
+    fixed, kill the process tree and restart before trusting any test result.**
+  - **Verified:** exactly one listener and one poller on a clean boot; live feed 198 items
+    (98 real EDGAR 8-Ks with accession numbers, 100 Finnhub headlines, 95 carrying tickers);
+    nav wiring proved by executing the real patched `PAGES`/`nav()`/gesture/keyboard code
+    against a stub DOM — **16/16 checks**, including that the four existing directions still
+    behave identically and that the news scroll-guard matches the analysis page's exactly;
+    JS parses clean under `node --check`; source-failure isolation proved by pointing EDGAR at
+    an unreachable host (feed held at 100 items, other source kept working, recovery to 197);
+    **full API regression 4,814 keys across AAPL/UNP/MU on 6 endpoints, 0 non-live diffs.**
+  - **Not verified:** the tab has not been opened in a real browser. The Chrome extension was
+    not connected, and per GSTACK POLICY `/qa` is deliberately unregistered, so driving a
+    browser was not attempted. The nav proof above is code-level, not visual.
+  - **`requirements.txt`:** `finnhub-python` and `feedparser` re-added. Both were correctly
+    removed on 2026-08-01 as unused; Stage 1 genuinely imports them. No other line touched.
+
 2026-08-02 — **`/api/ownership` fixed, then both it and `/api/peers` cached.** Two commits,
 neither of which updated this file when it shipped (rule 12); recorded retroactively as a
 documentation-only change. Full detail for both lives in `bug_report.md` — deliberately not

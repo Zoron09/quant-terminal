@@ -10,6 +10,7 @@ import os
 import re
 import math
 import threading
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 import yfinance as yf
 from functools import lru_cache
@@ -230,7 +231,24 @@ def _maybe_trigger_ws_refresh():
     _ws_fetch_executor.submit(_run_ws_background_fetch)
 
 
-app = FastAPI()
+@asynccontextmanager
+async def _lifespan(app):
+    """Start the News Scanner poller here rather than at import time.
+
+    Under `--reload` this module is imported in more than one process (the
+    reloader and the spawned worker both pull it in on Windows), so an
+    import-time start produced TWO pollers and therefore double the call rate
+    against SEC and Finnhub — measured, not theorised: the priming fetch logged
+    twice. Startup runs only in the process that actually serves requests, so
+    exactly one poller exists. Imported locally because api.news_scanner is
+    registered at the bottom of this file.
+    """
+    from api.news_scanner import start_poller
+    start_poller()
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1319,3 +1337,19 @@ async def peers(ticker: str):
         })
 
 
+
+
+# ---------------------------------------------------------------------------
+# News Scanner (Stage 1) — additive, isolated
+# ---------------------------------------------------------------------------
+# Registered last and deliberately kept to three lines here. The feature owns
+# its own module, its own store, its own lock and its own daemon thread; it
+# shares no route prefix, no cache and no dependency with anything above,
+# including /api/news, which is a separate feature and is not touched by it.
+# Imported at the bottom so news_scanner's own lazy `from api import server`
+# (it reads _scan_state to back off during a Code 33 scan) always finds this
+# module fully defined. The poller itself is started from _lifespan above, not
+# here — see that docstring for why import time was wrong.
+from api.news_scanner import router as news_scanner_router
+
+app.include_router(news_scanner_router)

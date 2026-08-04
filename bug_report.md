@@ -1434,3 +1434,67 @@ tickers isn't re-investigated as a bug:
   quarter. Per-quarter provenance exists in the pipeline and is discarded at the adapter
   boundary. Server-log correlation was used instead to establish which quarter came from
   edgartools.
+
+---
+
+## 2026-08-04 — News Scanner Stage 1 build (new feature, isolated)
+
+Three defects found and fixed during the build of `api/news_scanner.py`, plus one
+pre-existing operational hazard confirmed. None of these touch the Code 33 engine,
+`/api/news`, or any pre-existing endpoint — the feature is a separate universe by design.
+
+### Finnhub API key written to the server log in plaintext — CLOSED (FIXED 2026-08-04)
+- **Severity: security. Found by reading the log, not by inspection** — the key was already
+  sitting in the log file at the time it was discovered.
+- **Symptom:** every Finnhub network failure logged the full request URL, and
+  `finnhub-python` passes the API key as a **query parameter**:
+  `.../api/v1//news?token=<40-char live key>&category=general&minId=0`. A timeout, a 502 and
+  a DNS failure each produced one copy. 26 Finnhub failures were logged over two days, so the
+  key was written out 26 times.
+- **Second exposure path, worse than the log:** `_run_source()` stored the same unsanitised
+  string in `_SOURCES[...]['last_error']`, and `/api/news-scanner/status` **serves that field
+  over HTTP**. Any caller of the status endpoint would have been handed the live key.
+- **Fix:** `_redact()` strips `token=` / `api_key=` / `apikey=` values, applied at the single
+  choke point every message passes through (`_log()`) *and* at the point `last_error` is
+  built, so a future call site cannot reintroduce the leak by forgetting to sanitise.
+  Verified against the four real captured message shapes plus two synthetic ones.
+- **Note:** the log holding the pre-fix copies was a scratch file outside the repo and was
+  deleted. The key itself is in `.env`, which is gitignored, and was never committed.
+
+### Watchlist filter applied after the SQL LIMIT — CLOSED (FIXED 2026-08-04)
+- **Symptom:** `GET /api/news-scanner/feed?mode=watchlist&limit=5` returned 0 items while the
+  identical query at `limit=50` returned 1. Silent wrong answer, not an error.
+- **Cause:** the handler selected the newest N rows and *then* filtered them down to the
+  watchlist in Python. Any watchlist match ranked below position N was discarded before the
+  filter ever saw it — so the smaller the limit, the emptier the watchlist view.
+- **Fix:** the filter moved into the SQL `WHERE` clause (`UPPER(IFNULL(ticker,'')) IN (...)`),
+  so `LIMIT` applies to already-filtered rows. An empty watchlist short-circuits before the
+  query, since `IN ()` is not valid SQL.
+- **Verified:** `limit=5` and `limit=50` now both return the same match.
+
+### Two pollers started, doubling the external call rate — CLOSED (FIXED 2026-08-04)
+- **Symptom:** the priming fetch logged twice on boot. Two poller threads meant double the
+  request rate against **SEC's per-identity budget** and Finnhub's 60/min free tier — i.e. the
+  rate-limit discipline the intervals were chosen for was being silently violated at source.
+- **Cause:** `start_poller()` was called at module import time, and under `--reload` on Windows
+  the app module is imported in more than one process.
+- **Fix:** the poller now starts from a FastAPI `lifespan` handler, which runs **only in the
+  process that actually serves requests**. `on_event("startup")` was rejected — FastAPI 0.138
+  raises a `DeprecationWarning` for it, confirmed by running with `-W error::DeprecationWarning`.
+- **Verified:** `grep -c "poller started"` on a clean boot returns exactly 1.
+
+### `uvicorn --reload` detects changes but never completes the restart — OPEN, operational
+- **Not caused by this feature; confirmed during it.** `StatReload` logs
+  `detected changes in '...'. Reloading...` and then **no `Started server process` line ever
+  follows**. The old worker keeps serving, so edited code silently does not take effect.
+- **Observed twice**, on `api/server.py` and on `api/news_scanner.py`. Both times the fix that
+  "did not work" was in fact never loaded.
+- `watchfiles` is **not installed**, so uvicorn falls back to `StatReload`; that is the likely
+  contributing factor but was not proven.
+- **This is the same trap as the 2026-08-01 stale-listener lesson, in a new form:** there, three
+  listeners served pre-fix code; here, one listener serves pre-fix code after a reload that
+  looked successful in the log. `netstat` shows exactly one listener in this case, so the
+  single-listener check does **not** catch it.
+- **Practical rule until fixed: do not trust `--reload`. Kill the process tree and restart, then
+  confirm the boot line, before believing any test result.** Every verification in the Stage 1
+  build was done after an explicit full restart for this reason.
