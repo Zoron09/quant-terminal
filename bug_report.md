@@ -1731,3 +1731,135 @@ grounds that its growth was too large.
 - **Scope scan discarded.** A full-universe pass measuring the guard's blast radius was
   running when the Minervini finding landed; it was killed unfinished and its partial
   output discarded. No conclusions were drawn from it.
+
+---
+
+## 2026-08-06 — insurance-sector revenue tag selection (OSCR / SLDE / SPB)
+
+### REVENUE_TAGS falls through to an ancillary tag for insurers — INVESTIGATED, NOT A DEFECT
+
+**Outcome: no code was written. Two successive fix designs were scoped and both
+abandoned on evidence — the second because measurement showed the defect does not
+exist anywhere in the universe. `git status` confirmed clean throughout; `code33/`
+and `utils/code33_adapter.py` untouched.**
+
+#### How this surfaced
+
+A long-paused suspicion held that OSCR (Oscar Health) might have an LMND-style
+revenue-tag mismatch — reading a narrow sub-component such as premiums-only and
+dropping investment income. **It does not.**
+
+- **Bank exclusion correctly does NOT apply.** `bank_signal_tags('OSCR')` returns `[]`;
+  Oscar files none of `InterestIncomeExpenseAfterProvisionForLoanLoss`,
+  `NoninterestIncome`, `RevenuesNetOfInterestExpense`. The tag list's own docstring
+  already predicted this ("REITs, insurers, and asset managers file none of these") and
+  OSCR confirms it empirically.
+- **The engine reads `Revenues` — priority #1, the true total — on every quarter.**
+  Verified against raw `data.sec.gov` companyfacts (CIK 1568651), bypassing both
+  secfsdstools and edgartools:
+
+  ```
+  2026-03-31: 4,580,862 + 60,614 + 5,718 = 4,647,194  OK
+  2025-09-30: 2,923,968 + 53,215 + 8,801 = 2,985,984  OK
+  2025-06-30: 2,803,444 + 54,004 + 6,497 = 2,863,945  OK
+  2025-03-31: 2,995,821 + 46,112 + 4,330 = 3,046,263  OK
+              PremiumsEarnedNet + NetInvestmentIncome + RevFromContract = Revenues
+  ```
+
+  Dollar-exact on all four quarters. Investment income **is** included. OSCR's revenue is
+  accurate and needs no change.
+
+What that verification *did* raise was a theoretical concern about other insurers.
+`REVENUE_TAGS` priority runs `Revenues` → `RevenueFromContractWithCustomerExcludingAssessedTax`
+→ … . On OSCR, that second tag holds **$5.7M against $4.65B of real revenue — a 0.12%
+sliver**. OSCR is safe only because it files `Revenues`, so priority 1 wins. The concern:
+an insurer filing the ancillary tag but *not* `Revenues` would have its entire top line
+replaced by that sliver, silently and with no error.
+
+#### The full-universe sweep, and why its "AT RISK" call was wrong
+
+All 606 universe tickers were swept against `data.sec.gov` companyfacts. **23 insurers**
+were detected (by presence of premium concepts); 22 resolved to `Revenues`. **SLDE**
+(Slide Insurance) was the lone outlier, with `RevenueFromContractWithCustomerExcludingAssessedTax`
+as its only available revenue tag. It was initially called a live time-bomb — currently
+harmless only because SLDE is a June-2025 IPO sitting in `insufficient`, but wrong the
+moment it accumulated history.
+
+**That call was wrong, and the method that produced it was flawed in both directions:**
+
+- **The sweep measured concept PRESENCE — does `Revenues` appear anywhere in the filer's
+  concept list — not which tag the engine actually RESOLVES per quarter with usable
+  values.** These are not the same question.
+- **False negative it produced: SPB (Spectrum Brands).** The sweep called SPB safe because
+  `Revenues` exists among its concepts. That concept carries no usable *quarterly* values,
+  so the engine actually resolves SPB through the same
+  `RevenueFromContractWithCustomerExcludingAssessedTax` fallback as SLDE — and SPB is
+  live-scored `red` on it today. The sweep never saw this.
+- **False positive in the proposed detector.** The scoped fix was "when a company files
+  premium concepts, require `Revenues` and refuse to fall through." But the premium-concept
+  signal fires on **conglomerates with incidental insurance subsidiaries** — SPB, DE
+  (Deere), CVS, C (Citigroup) — not just genuine insurers. Implemented as scoped, it would
+  have forced SPB to `Revenues`-only, found nothing usable, and moved it from correctly
+  scored `red` to `insufficient`. **The fix would have caused a regression on a
+  currently-correct ticker.** Same failure shape the CRSP entry warns about: a signal that
+  looks like it identifies the problem but keys on something broader.
+
+#### The decisive test that replaced both flawed approaches
+
+Comparing the revenue the engine actually resolves against `PremiumsEarnedNet` for the
+**same quarter** — an inputs-based test, exactly what the CRSP entry asks for instead of
+thresholding an output:
+
+| ticker | engine tag | engine revenue | PremiumsEarnedNet | ratio |
+|---|---|---|---|---|
+| OSCR | Revenues | 4,647,194,000 | 4,580,862,000 | **1.014** |
+| **SLDE** | **RevenueFromContractWithCustomer…** | **386,817,000** | **360,635,000** | **1.073** |
+| KINS | Revenues | 59,775,736 | 55,868,814 | 1.070 |
+| SAFT | Revenues | 314,666,000 | 290,986,000 | 1.081 |
+| UFCS | Revenues | 383,726,000 | 354,127,000 | 1.084 |
+| SKWD | Revenues | 475,867,000 | 434,007,000 | 1.096 |
+| MCY | Revenues | 1,681,765,000 | 1,497,767,000 | 1.123 |
+| TRV | Revenues | 12,153,000,000 | 10,753,000,000 | **1.130** |
+| UVE | Revenues | 427,033,000 | 377,273,000 | 1.132 |
+| GL | Revenues | 1,599,730,000 | 1,297,622,000 | 1.233 |
+| AIZ | Revenues | 3,454,200,000 | 2,767,400,000 | **1.248** |
+| HG | Revenues | 758,908,000 | 570,515,000 | 1.330 |
+| CNO | Revenues | 1,285,200,000 | 680,700,000 | 1.888 |
+| VOYA | Revenues | 1,896,000,000 | 716,000,000 | 2.648 |
+| **CVS** | Revenues | 106,096,000,000 | 35,117,000,000 | **3.021** |
+| PFG | Revenues | 3,529,100,000 | 1,148,100,000 | 3.074 |
+| JXN | Revenues | 168,000,000 | 38,000,000 | 4.421 |
+| **UHAL** | Revenues | 1,682,027,000 | 18,066,000 | **93.105** |
+
+Two clean clusters, and **both are correct**:
+
+- **Genuine insurers sit at ~1.0-1.3** — revenue is premiums plus investment income and
+  fees, so it lands just above premiums.
+- **Conglomerates with incidental insurance sit at 2.6-93+** — premiums are immaterial to
+  the real business.
+- **Not one ticker sits far BELOW 1.0**, which is the only shape the sliver failure mode
+  could take. The hypothesised bug does not occur anywhere in the universe.
+
+#### Conclusion
+
+**SLDE's ancillary tag is its genuine, correct total revenue.** At ratio 1.073 it holds
+exactly the same economic role as OSCR's `Revenues` at 1.014 — premiums plus investment
+income — just filed under a different concept name. Oscar splits its top line across three
+concepts and files a proper `Revenues` total, which is why *its* contract-revenue line is a
+genuine $5.7M leftover; Slide reports its whole top line under that one tag. Same tag,
+completely different role, and reading tag identity without checking the value's magnitude
+is what produced the wrong call.
+
+**All 23 insurers in the universe resolve to a correct total revenue. SPB, DE, CVS, C and
+the other conglomerates are correct too. No fix warranted, and none was made.** The
+`REVENUE_TAGS` fallback is doing precisely the job it exists for — different filers report
+the same economic total under different concepts.
+
+#### Process lesson for future audits
+
+**Measuring concept presence is not equivalent to measuring resolved value.** The
+presence-based sweep produced a false positive (SLDE) *and* a false negative (SPB) in the
+same pass. Any future tag-selection audit must check **the actual per-quarter resolved tag
+and the magnitude of its value**, not merely which concepts appear in a filer's history —
+and must compare that value against an independent measure of the company's real scale
+before concluding anything is wrong.

@@ -377,6 +377,23 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-06 (later still) — **Insurance-sector revenue tag selection: investigated, NOT a
+defect, no code written.** Documentation-only close-out; full reasoning and the ratio
+table in `bug_report.md`. OSCR's revenue was verified **dollar-exact against SEC** (the
+`Revenues` tag is the true total and includes investment income — the long-paused
+LMND-style suspicion is closed), and OSCR is correctly NOT caught by the bank exclusion.
+That raised a theoretical concern about the `REVENUE_TAGS` fallback picking an ancillary
+tag for other insurers; a 606-ticker sweep found 23 insurers, 22 on `Revenues`, with SLDE
+flagged. **Both the flag and the proposed fix were wrong** — the sweep measured concept
+*presence* rather than the tag actually *resolved* per quarter (missing SPB entirely), and
+a "files premium concepts" detector fires on conglomerates with incidental insurance arms
+(SPB, DE, CVS, C), so building it as scoped would have regressed SPB from correctly-scored
+`red` to `insufficient`. The decisive test — engine revenue vs `PremiumsEarnedNet` for the
+same quarter — shows genuine insurers at ratio ~1.0-1.3 and conglomerates at 2.6-93+, with
+**nothing below 1.0**, i.e. the hypothesised failure mode occurs nowhere. **All 23 insurers
+resolve correctly; no fix warranted.** Process lesson recorded: concept presence is not
+resolved value.
+
 2026-08-06 (later) — **LQDA / `CODE33_SPEC.md` §5 ±999% N/A guard: investigated, NOT a
 defect, no code written.** Documentation-only close-out; full reasoning in
 `bug_report.md`. The guard is genuinely unimplemented, and a fix was scoped and
