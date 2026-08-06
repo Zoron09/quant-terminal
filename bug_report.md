@@ -1626,3 +1626,108 @@ pre-existing operational hazard confirmed. None of these touch the Code 33 engin
   bucket.
 - **Left open as a separate observation:** a ticker dropping to a 3-quarter pull is worth
   its own look. Not investigated here — out of scope for this fix.
+
+---
+
+## 2026-08-06 — LQDA's 4-digit revenue YoY and the CODE33_SPEC.md §5 N/A guard
+
+### LQDA's extreme YoY rates reach the acceleration check unguarded — INVESTIGATED, NOT A DEFECT
+
+**Outcome: no code was written. A fix was scoped, reconciled, and then deliberately
+abandoned on evidence. LQDA's GREEN is correct and intentional.** The `git status` at
+close-out was empty — `utils/code33_adapter.py`, `code33/` and `CODE33_SPEC.md` all
+untouched.
+
+- **How it surfaced.** During the audit of the six GREEN tickers that followed the
+  4-rate/3-jump acceleration fix, LQDA (Liquidia) was found carrying revenue YoY rates of
+  `1121.72%`, `3054.65%` and `4158.49%` inside its 4-rate window, on revenue that went
+  `$3,120,000 → $132,865,000` across five quarters. `CODE33_SPEC.md` §5 states
+  *"abs(YoY%) > 999% → rate = None, quarter stays"*, and a grep of `code33/*.py` plus the
+  adapter confirmed **no such guard exists anywhere** — the only plausibility logic
+  (`_is_implausible_revenue` / `_is_implausible_net_income`) tests derived-Q4 *raw values*
+  against 4x sibling magnitude, never a YoY rate. So the spec requirement was genuinely
+  unimplemented. The initial read was that this was a defect of the same species as the
+  acceleration-window bug: spec says one thing, code does another.
+
+#### Part 1 — the CRSP/LQDA reconciliation (done first, and it holds)
+
+The obvious risk was re-committing the mistake the "Margin plausibility guard lost in the
+engine swap" entry above already closed: CRSP's `-24450.29%` margin is **real, filed,
+dollar-exact data**, and that entry concluded a bare magnitude threshold would have
+suppressed 7 of its 8 quarters. Before writing anything, the two cases were reconciled:
+
+- **§5 is scoped to YoY RATES, not to extreme percentages generally.** Its header names
+  the object outright — *"These guards mark a **YoY% rate** as None"* — and all three of
+  its rows are conditions on a two-period comparison (near-zero **prior** value; a
+  **prior→current** sign flip; the YoY magnitude itself).
+- **Net Profit Margin is not a YoY rate in this engine.** §1 defines it as
+  `Net Income / Revenue` — a **level**, computed inside a single quarter. `_c33_status`
+  consumes `npm` as levels; there is no NPM-YoY anywhere in the codebase.
+- **Therefore CRSP is structurally outside §5.** Its extreme value is a margin level on
+  the `npm` array; §5 governs `rev_yoy`. Different array, different computation, different
+  consumer. Implementing §5 could not have touched it, and the earlier decision would not
+  have been reversed. This was going to be proven empirically by holding CRSP in the
+  control set as byte-identical, not argued.
+- **The honest limit of that distinction, recorded rather than glossed:** the CRSP entry's
+  actual objection — *"a bare magnitude threshold cannot separate"* genuinely-extreme from
+  buggy-extreme — **transfers to LQDA**. LQDA's `4158.49%` is arithmetically correct and
+  dollar-real. Nulling it would not have corrected an error; it would have declared a true
+  number unfit for screening. The defensible difference was never "CRSP real, LQDA broken"
+  (both are real) but that a YoY divides by a *different quarter's* value, so a vanishing
+  base makes successive rates measure base-smallness rather than growth — plus the fact
+  that §5 mandates the rule in writing where the margin tripwire was ad-hoc.
+
+**That reconciliation still stands and is not what stopped the fix.**
+
+#### Part 2 — the Minervini source-material check, which reversed the decision
+
+Before implementing, Minervini's own material was checked (via NotebookLM) on how he
+treats explosive percentage growth off a small base. **His methodology does not support
+discarding these numbers — it actively seeks them.**
+
+- His **"Size Matters"** material explicitly prioritises small, young companies *because*
+  they produce exactly this kind of outsized percentage growth. The magnitude is the
+  sought-after signal, not noise to be filtered.
+- For genuine turnarounds he wants **bigger** percentage jumps — 100%+ — as evidence of
+  real strength. A ceiling is the opposite of his stated preference.
+- His actual concern about extreme comparisons is **narrower and different in kind**: a
+  company that *artificially depresses a prior quarter* — via manipulated guidance or
+  accounting — specifically so the next comparison looks dramatic. That is a
+  **fraud/manipulation** concern about how the base was produced, not a concern about how
+  large the resulting ratio is. **No magnitude threshold can detect it**, and a magnitude
+  threshold would mostly catch the honest cases while missing the dishonest ones.
+- **LQDA is a real product launch, not a depressed-base comparison.** Its revenue ramp is
+  the genuine article, and it is precisely the company profile the framework exists to
+  surface.
+
+**Conclusion: implementing §5's ±999% guard would have worked against the tool's purpose**
+— it would have removed the single strongest real accelerator in the universe on the
+grounds that its growth was too large.
+
+#### Consequences recorded
+
+- **LQDA's GREEN status is correct and intentional.** No change made, none needed. Its
+  4-rate window (`141.51 → 1121.72 → 3054.65 → 4158.49` revenue;
+  `-470.51 → -6.50 → 15.82 → 39.79` margin) shows all six transitions positive, and both
+  legs are clean five rates deep. It scores GREEN on real, filed data.
+- **`CODE33_SPEC.md` §5's ±999% threshold is now FLAGGED as likely NOT reflecting actual
+  Minervini methodology.** It reads as a generic statistical convention rather than
+  something derived from his source material — note that §5's sibling row
+  (`abs(prior EPS) < 0.03`) is an EPS-specific numerical convention too, and EPS has been
+  out of this engine's scope since the swap. **Recommendation: reconsider or remove the
+  ±999% row from the spec itself in a future pass.** The spec document was deliberately
+  **not** edited as part of this close-out — this is a flag, not a spec change, because
+  amending the ground-truth document is its own decision.
+- **A second, unrelated design question was surfaced and is NOT resolved**, since the guard
+  that would have triggered it is not being built. Had any rate been nulled, `_c33_status`
+  would have compacted the `None` away (`clean = [x for x in arr if x is not None]`),
+  letting the 4-rate window **reach back across the nulled quarter and compare
+  non-adjacent quarters**. §2.3 (*"Never skip a quarter … Skipping quarters … produces
+  INSUFFICIENT"*) and §1's consecutive `Q0 > Q-1 > Q-2 > Q-3` both argue a `None` inside
+  the newest four slots should make the window unevaluable instead. **This affects any
+  ticker that already carries a `None` in its newest four positions from a missing
+  year-ago quarter — independent of §5.** Left open; it was never sized, because the scope
+  scan was stopped when the guard was abandoned.
+- **Scope scan discarded.** A full-universe pass measuring the guard's blast radius was
+  running when the Minervini finding landed; it was killed unfinished and its partial
+  output discarded. No conclusions were drawn from it.

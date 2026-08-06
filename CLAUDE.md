@@ -377,6 +377,22 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-06 (later) — **LQDA / `CODE33_SPEC.md` §5 ±999% N/A guard: investigated, NOT a
+defect, no code written.** Documentation-only close-out; full reasoning in
+`bug_report.md`. The guard is genuinely unimplemented, and a fix was scoped and
+CRSP-reconciled (§5 governs YoY *rates*; CRSP's extreme value is a margin *level*, so the
+earlier margin decision was never at risk) — then **abandoned on evidence**. Minervini's
+own material treats explosive percentage growth off a small base as a sought-after signal,
+not noise; his concern about extreme comparisons is about an *artificially depressed prior
+quarter*, which no magnitude threshold can detect. LQDA is a real product launch and its
+**GREEN is correct and intentional — unchanged**. `CODE33_SPEC.md` §5's ±999% row is now
+flagged as likely not matching actual methodology and recommended for reconsideration or
+removal in a future pass; **the spec document was deliberately not edited here**. One
+unrelated design question was surfaced and left open (a nulled rate would let
+`_c33_status` compact the `None` away and compare non-adjacent quarters — see
+`bug_report.md`). Verified at close-out: `git status` empty, `utils/code33_adapter.py`,
+`code33/` and `CODE33_SPEC.md` all untouched.
+
 2026-08-06 — **Code 33's acceleration check corrected: it was testing 2 jumps, not the
 spec's 3.** Engine-signal fix, `utils/code33_adapter.py` only — **`code33/` untouched**,
 same as the GE fix. Full writeup in `bug_report.md`.
