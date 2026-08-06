@@ -1863,3 +1863,81 @@ same pass. Any future tag-selection audit must check **the actual per-quarter re
 and the magnitude of its value**, not merely which concepts appear in a filer's history —
 and must compare that value against an independent measure of the company's real scale
 before concluding anything is wrong.
+
+---
+
+## 2026-08-06 — "no filings of any kind under this CIK" was a false statement
+
+### The local-dataset miss reported itself as "never filed" and blamed a reorg — CLOSED (FIXED 2026-08-06)
+
+- **Diagnostic accuracy only. No status changed, no scored value changed.**
+- **What it said vs what was true.** `quarterly_engine.get_quarterly_series` reported
+  `no 10-Q/10-K filings found - no filings of any kind under this CIK - if a corporate
+  reorganization recently moved this ticker to a new CIK, the operating history is on the
+  predecessor (see PREDECESSOR_CIK in ticker_lookup.py)`. **PBT (Permian Basin Royalty
+  Trust) has 118 real 10-Q/10-K filings at SEC going back to 1995.** The claim was simply
+  false, and the reorg hint sent a reader hunting a corporate action that never happened.
+- **Root cause.** `CompanyIndexReader` reads the **local secfsdstools parquet mirror**, so
+  an empty result means "absent from the local dataset", not "never filed". The message
+  asserted the latter.
+- **Why these tickers are genuinely absent, confirmed directly against SEC.** The bulk
+  dataset is built from XBRL *financial statements*; a filer publishing none can never
+  appear in it. PBT returns **HTTP 404 on companyfacts** — royalty trusts commonly file
+  10-Qs carrying no XBRL financial data. BSTZ / RMT / HQH / HQL are **closed-end funds**
+  filing N-CSR / NPORT-P / N-Q, with zero 10-Q/10-K and also 404 on companyfacts.
+  **All 5 verdicts (`insufficient`) were already correct** — only the explanation was wrong.
+- **Fix, in `code33/` (3 files).** Placement is forced by which layer knows what:
+  - `quarterly_engine.py` reports only what it actually checked — the local dataset — and
+    no longer asserts a reorg. It works from a **CIK and never sees the ticker**, so it
+    cannot ask SEC anything.
+  - `edgar_fill.py` gains `has_xbrl_quarterly_facts(ticker)`, mirroring the existing
+    `bank_signal_tags()` exactly — same `_load_facts_df` source, same per-process cache.
+    Since the adapter already calls `bank_signal_tags()` first for every ticker it scores,
+    **this costs no extra network call on the normal path.**
+  - `pipeline.py` (`_explain_local_dataset_miss`, called from `_fill_gaps`'s existing
+    early-return) appends the SEC-side half, because it is the only layer holding the
+    ticker. Placed in `_fill_gaps` so the revenue and net-income legs stay symmetric.
+  - The two halves are joined by a shared `_LOCAL_MISS_HINT` constant rather than a
+    hand-copied substring, so the matcher cannot drift from the emitted text.
+  - **The `"no 10-Q/10-K filings found - "` prefix is preserved byte-identically** —
+    `api/server.py::_classify_failure` buckets on that substring (server.py:433) and it is
+    the only consumer; a repo-wide grep confirmed nothing else matches the old wording.
+- **The message now reads**, for PBT and the four funds:
+  `no 10-Q/10-K filings found - no filings for this CIK in the local dataset - the bulk
+  dataset is built from XBRL financial statements, so a filer publishing none can never
+  appear in it - SEC has no XBRL quarterly facts for this ticker either, so there is
+  nothing to recover: not a missing-data bug`
+  A ticker that *does* have XBRL at SEC gets the opposite clause, which is the only case
+  where a predecessor-CIK hunt is worth starting — i.e. the XOM/NVRI signal is retained,
+  just no longer misapplied to filers it never fitted.
+- **Verification.** Baseline captured before any edit across **31 tickers**: the 5
+  affected, NBN, and **25 controls** deliberately including 5 20-F filers (ECO, JOYY, IFS,
+  MAAS, OPRA) that hit the *other* branch of the same `if/else`, plus greens, restated
+  (AES), predecessor-CIK (XOM, NVRI), extreme-margin (CRSP), non-calendar-FY (DELL) and
+  3 excluded banks.
+  - **Byte-level whole-payload comparison: 930 keys, ZERO violations.** All 25 controls
+    byte-identical on every field including `series_flag` and `excluded_reason`. Every
+    status unchanged. The only movement is message text on the 5 affected tickers
+    (`excluded_reason`, `series_flag`, and `sources` — which carries the same string via
+    `_empty_result`).
+  - **`_classify_failure` bucketing verified unchanged on all 31** — the 5 still bucket as
+    `no 10-Q/10-K filings in dataset`, NBN still as `ticker/CIK resolution failed`.
+  - Server process tree killed before editing (the documented `--reload` hazard), restarted
+    after, **exactly one listener confirmed** (PID 23024), HTTP smoke passed
+    (PBT `insufficient`, AAPL `red`, YOU `green`).
+  - **No fresh full scan run, deliberately:** zero statuses changed, zero scored values
+    changed, and every failure bucket is identical, so a 606-ticker scan could not surface
+    anything the 31-ticker byte comparison did not already prove. This is the one fix today
+    where that judgment applies — the acceleration-window change moved statuses and did get
+    a full scan.
+
+### NBN is a dead ticker — NOT an engine defect, no code changed
+- `NBN` has **no entry in SEC's `company_tickers.json`**, and no company titled "Northeast
+  Bank" resolves. Confirmed against the live SEC ticker map.
+- **Current behaviour is already correct and graceful**: `resolve_ticker_to_cik` returns
+  `None`, the series carries `NBN: could not resolve to a CIK`, status is `insufficient`,
+  and `_classify_failure` buckets it as `ticker/CIK resolution failed`. No exception, no
+  crash, no silent wrong number. Verified before and after the message fix — byte-identical.
+- **Universe-list maintenance, not an engine problem.** Recorded here so it is not
+  re-investigated: the ticker should be dropped from the scan list whenever that list is
+  next curated. No matching code was changed.

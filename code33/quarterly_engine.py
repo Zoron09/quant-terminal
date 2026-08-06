@@ -26,6 +26,13 @@ from code33.models import QuarterPoint, QuarterlyRevenueSeries
 
 FORMS = ["10-Q", "10-K"]
 
+# Appended to the local-dataset-miss series_flag. Kept as a module constant so
+# pipeline._fill_gaps can recognise exactly this case (and only this case) when it
+# refines the message with the SEC-side answer — matching on a shared constant
+# rather than on a hand-copied substring that could silently drift apart.
+_LOCAL_MISS_HINT = (" - the bulk dataset is built from XBRL financial statements, "
+                    "so a filer publishing none can never appear in it")
+
 # Companies file ~4 reports/year (10-K + three 10-Qs). The history window is sized off
 # `quarters`, not hardcoded, so it always covers the oldest requested quarter's fiscal
 # year plus HISTORY_MARGIN_YEARS extra years of buffer for Q4-derivation siblings and
@@ -220,10 +227,22 @@ def get_quarterly_series(
             any_reports = []
 
         if not any_reports:
-            detail = ("no filings of any kind under this CIK - if a corporate "
-                      "reorganization recently moved this ticker to a new CIK, the "
-                      "operating history is on the predecessor (see PREDECESSOR_CIK "
-                      "in ticker_lookup.py)")
+            # PRECISION MATTERS HERE. CompanyIndexReader reads the LOCAL
+            # secfsdstools parquet mirror, so an empty result means "absent from
+            # the local dataset", NOT "this company never filed". The old wording
+            # claimed the latter and then pointed at PREDECESSOR_CIK as though a
+            # holdco reorg were the likely cause — a red herring that sends anyone
+            # debugging it after a corporate action that did not happen.
+            # Confirmed on PBT (Permian Basin Royalty Trust): 118 real 10-Q/10-K
+            # filings at SEC going back to 1995, yet reported here as having none.
+            # Its actual disqualifier is that it publishes no XBRL financial data
+            # at all (companyfacts returns HTTP 404) — the bulk dataset is built
+            # from XBRL financial statements, so such filers can never appear in
+            # it. Same for the closed-end funds BSTZ/RMT/HQH/HQL, which file
+            # N-CSR/NPORT-P instead of 10-Q/10-K.
+            # pipeline._fill_gaps appends which of those two cases this actually
+            # is, since only it has the ticker needed to ask SEC.
+            detail = ("no filings for this CIK in the local dataset" + _LOCAL_MISS_HINT)
         else:
             forms = sorted({r.form for r in any_reports})
             detail = (f"CIK files {'/'.join(forms[:4])} but no 10-Q/10-K - annual-only "

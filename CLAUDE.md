@@ -377,6 +377,33 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-06 (evening) — **Fixed a false diagnostic message; NBN recorded as a dead ticker.**
+Diagnostic accuracy only — **no status and no scored value changed anywhere.** Full detail
+in `bug_report.md`.
+  - `quarterly_engine` reported `no filings of any kind under this CIK` and blamed a
+    corporate reorg, but **PBT has 118 real 10-Q/10-K filings at SEC since 1995**. Root
+    cause: `CompanyIndexReader` reads the **local secfsdstools mirror**, so empty means
+    "absent from the local dataset", not "never filed". The reorg hint was a red herring
+    for these filers.
+  - Affects 5 tickers, all verdicts already correct: PBT (royalty trust) and BSTZ/RMT/HQH/
+    HQL (closed-end funds) — all return **HTTP 404 on companyfacts**, i.e. they publish no
+    XBRL financial data, and the bulk dataset is built from XBRL financial statements.
+  - **Fix spans 3 files in `code33/`, placement forced by which layer knows what:**
+    `quarterly_engine.py` reports only what it checked (it has a CIK, never the ticker);
+    `edgar_fill.py` gains `has_xbrl_quarterly_facts()` mirroring `bank_signal_tags()` and
+    sharing its cache (**no extra network call** — the adapter already populates it);
+    `pipeline.py` appends the SEC-side half from `_fill_gaps`'s existing early return.
+    Joined by a shared `_LOCAL_MISS_HINT` constant so matcher and message cannot drift.
+  - **The `"no 10-Q/10-K filings found - "` prefix is preserved byte-identically** —
+    `_classify_failure` buckets on it and is the only consumer.
+  - Verified: 31 tickers (5 affected + NBN + **25 controls**, including 5 20-F filers on the
+    other branch of the same `if/else`), **930-key byte comparison, zero violations**, all
+    buckets identical, one listener confirmed (PID 23024), HTTP smoke passed. **No full scan
+    run — deliberately**, since nothing but message text moved.
+  - **NBN: dead ticker, no code changed.** Absent from SEC's `company_tickers.json`;
+    already degrades gracefully to `insufficient` / `ticker/CIK resolution failed`. Drop it
+    when the universe list is next curated.
+
 2026-08-06 (later still) — **Insurance-sector revenue tag selection: investigated, NOT a
 defect, no code written.** Documentation-only close-out; full reasoning and the ratio
 table in `bug_report.md`. OSCR's revenue was verified **dollar-exact against SEC** (the

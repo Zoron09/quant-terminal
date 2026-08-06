@@ -14,10 +14,14 @@ import logging
 from datetime import date, timedelta
 from typing import Callable, List, Optional
 
-from code33.edgar_fill import MATCH_TOLERANCE_DAYS, fetch_discrete_quarter
+from code33.edgar_fill import (
+    MATCH_TOLERANCE_DAYS,
+    fetch_discrete_quarter,
+    has_xbrl_quarterly_facts,
+)
 from code33.models import QuarterlyNetMarginSeries, QuarterlyRevenueSeries, QuarterPoint
 from code33.net_margin import NI_TAGS, _is_implausible_net_income, pair_margin_series
-from code33.quarterly_engine import get_quarterly_series
+from code33.quarterly_engine import _LOCAL_MISS_HINT, get_quarterly_series
 from code33.revenue import REVENUE_TAGS, _is_implausible_revenue
 from code33.ticker_lookup import resolve_ticker_to_cik
 
@@ -81,6 +85,34 @@ def expected_quarter_ends(
     return projections + known_sorted[:quarters]
 
 
+def _explain_local_dataset_miss(
+    ticker: str, series: QuarterlyRevenueSeries
+) -> QuarterlyRevenueSeries:
+    """Adds the SEC-side half of the diagnosis to a local-dataset miss.
+
+    quarterly_engine can only report what it checked — the local secfsdstools
+    mirror — because it works from a CIK and never sees the ticker. Whether SEC
+    holds any XBRL for the company is the other half, and it decides whether a
+    predecessor-CIK hunt is even worth starting. Only that one flag is touched;
+    every other series_flag (20-F filers, CIK-resolution failures) is returned
+    byte-identical.
+    """
+    if _LOCAL_MISS_HINT not in (series.series_flag or ""):
+        return series
+    try:
+        has_xbrl = has_xbrl_quarterly_facts(ticker)
+    except Exception:  # diagnosis must never become a new failure mode
+        return series
+    extra = (" - SEC HAS XBRL quarterly facts for this ticker, so the local "
+             "dataset is the gap: check whether a corporate reorganization moved "
+             "it to a new CIK (see PREDECESSOR_CIK in ticker_lookup.py)"
+             if has_xbrl else
+             " - SEC has no XBRL quarterly facts for this ticker either, so there "
+             "is nothing to recover: not a missing-data bug")
+    return QuarterlyRevenueSeries(
+        cik=series.cik, points=[], series_flag=series.series_flag + extra)
+
+
 def _fill_gaps(
     ticker: str,
     series: QuarterlyRevenueSeries,
@@ -88,7 +120,7 @@ def _fill_gaps(
     quarters: int,
 ) -> QuarterlyRevenueSeries:
     if series.series_flag is not None and not series.points:
-        return series
+        return _explain_local_dataset_miss(ticker, series)
 
     usable_ends = [p.period_end for p in series.points if p.value is not None]
     all_ends = [p.period_end for p in series.points]

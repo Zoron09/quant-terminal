@@ -94,6 +94,23 @@ def bank_signal_tags(ticker: str) -> list:
     return sorted(t.split(":", 1)[1] for t in present)
 
 
+def has_xbrl_quarterly_facts(ticker: str) -> bool:
+    """Whether SEC carries ANY discrete-quarter XBRL facts for this ticker.
+
+    Only used to explain a dead end: when a CIK is absent from the local
+    secfsdstools mirror, this separates "publishes no XBRL financial data at all"
+    (royalty trusts, closed-end funds — PBT returns HTTP 404 on companyfacts)
+    from "has XBRL at SEC but the local dataset lacks it", which is a genuinely
+    different problem and the only one where a predecessor-CIK hunt makes sense.
+
+    Deliberately reuses _load_facts_df, so it shares the per-process cache that
+    bank_signal_tags() already populates for every ticker the adapter scores —
+    on the normal path this costs no extra network call.
+    """
+    df = _load_facts_df(ticker)
+    return df is not None and not df.empty
+
+
 def fetch_discrete_quarter(
     ticker: str, target_end: date, tag_priority: List[str]
 ) -> Optional[Tuple[date, float, str, str, date, Optional[int], Optional[str]]]:
