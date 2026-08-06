@@ -307,7 +307,9 @@ that the 2026-08-01 adapter change altered again.
 ---
 
 ## ENGINE STATUS
-- **CACHE_VERSION:** v31-code33-screener
+- **CACHE_VERSION:** v32-code33-vendored (this line said `v31-code33-screener` until
+  2026-08-06; the bump happened during vendoring and the doc was never updated —
+  corrected against the constant in `utils/code33_adapter.py`, no code change)
 - **Location:** external `code33-screener` project (`pip install -e`), adapted through
   `utils/code33_adapter.py` — the ONLY in-repo engine file. The old
   `utils/code33_engine.py` + 5 helper modules (`secfs_revenue`, `secfs_net_margin`,
@@ -330,8 +332,20 @@ that the 2026-08-01 adapter change altered again.
   score them — their revenue is silently wrong under standard XBRL tags, confirmed on
   FULT). Frontend shows an explicit "EXCLUDED — BANK, NOT YET SUPPORTED" badge and an
   "Excluded — Banks" scan pill, never a silent disappearance.
-- **Status semantics:** `_c33_status` (green/yellow/red/insufficient 3-state badge)
-  ported VERBATIM into the adapter — unchanged frontend contract.
+- **Status semantics:** `_c33_status` (green/yellow/red/insufficient badge) — **corrected
+  2026-08-06, no longer the verbatim pre-swap port.** It now evaluates the spec's real
+  window: **4 YoY rates / 3 acceleration jumps** (`_ACCEL_RATES = 4`), not the 3 rates /
+  2 jumps it had been checking since the swap. The `d2 >= d1` second-derivative test for
+  green is also gone — acceleration means each rate exceeds the prior one, nothing more.
+  Frontend contract (the field and its four values) is unchanged.
+  - **YELLOW is now effectively a dead tier** — it used to mean "positive but shrinking
+    jumps", which *was* the second-derivative test. 0 yellow across all 606 tickers on the
+    2026-08-06 scan. `_scan_state['passed']` counts green + yellow, so it is now just the
+    green count. Reconciling these tiers with the spec's ACTIVE/BROKEN/NOT ACTIVE
+    vocabulary is an open, deliberately deferred decision.
+  - **`_MIN_RATES = 3` is deliberately NOT raised to 4.** It gates scoreability only;
+    raising it would move short-history tickers red → insufficient, changing the failure
+    taxonomy rather than the acceleration check. A 3-rate ticker still cannot go green.
 - **EPS:** still out of scope entirely. Raw `'ni'` is NO LONGER empty as of
   2026-08-01 — it carries real per-quarter net income, alongside new
   `rev_sources`/`ni_sources` and `ni_restated`/`ni_restated_value`. All EPS
@@ -363,6 +377,48 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-06 — **Code 33's acceleration check corrected: it was testing 2 jumps, not the
+spec's 3.** Engine-signal fix, `utils/code33_adapter.py` only — **`code33/` untouched**,
+same as the GE fix. Full writeup in `bug_report.md`.
+  - **What was wrong.** `_c33_status`'s `_last3()` took the newest 3 YoY rates and built 2
+    deltas. `CODE33_SPEC.md` §2.1-2.2 requires **4 rates / 3 jumps** and names the shorter
+    form as disqualifying outright. Found via DELL scoring GREEN off `10.8 → 39.5 → 87.5`
+    while the transition *into* that window (`18.98 → 10.83`) was a deceleration nobody
+    checked. Confirmed on IESC (margin leg) and RNG (revenue leg) too — not ticker-specific.
+  - **Second defect fixed in the same edit:** green also required `d2 >= d1` (jump sizes
+    must grow — a second-derivative test). Not part of Minervini's definition; confirmed
+    against his source material via NotebookLM and removed. It made the filter too strict,
+    the opposite direction from the window bug, so the two partly masked each other.
+  - **No new data fetch.** The adapter already pulls `n_quarters + 4`, so `rev_yoy`/`npm`
+    each carried **8** clean values while the check used 3. Same class of fix as GE — read
+    what was already there.
+  - **Two judgment calls, commented in-code:** `_MIN_RATES` stayed at 3 (raising it would
+    change the failure taxonomy, not the acceleration check), and the negative-**rate** gate
+    stayed revenue-only (a margin going `-6.4 → -4.5 → -2.6` is expansion; negative
+    *transitions* are checked on both metrics).
+  - **Verified:** baseline captured before any edit across 33 pass-list + **37 controls**;
+    **byte-level whole-payload comparison, 1,960 keys, zero violations** — all 37 controls
+    byte-identical, all 29 status changes on the pass-list. Offline replay against frozen
+    baseline arrays reproduced the identical 29 changes, isolating the logic change from
+    data drift. One listener on :8000 confirmed (PID 22308); fixed code confirmed live over
+    HTTP; logs clean, no reload fired mid-scan.
+  - **Fresh full 606-ticker scan** (606/606, breaker not tripped): green 8 → **6**, yellow
+    25 → **0**, red 391 → **418**, insufficient **82 → 82**, banks **100 → 100**. The two
+    unchanged counts are independent corroboration nothing outside the acceleration check
+    moved. Survivors: **YOU, AVT, DDOG, XMTR, URGN, LQDA** — exactly what the 70-ticker
+    sample predicted.
+  - **YELLOW is now a dead tier** (see ENGINE STATUS). Flagged, not fixed — the tier
+    vocabulary question was explicitly out of scope.
+  - **Two operational findings recorded in `bug_report.md`, neither fixed:** (1) a scan
+    checkpoint silently **resumes pre-fix rows across a code change**, because `job_id` is
+    a hash of the ticker list with no notion of engine version — the old checkpoint had to
+    be archived first, and `resumed_from: 0` is the check to confirm. (2) NOVT and IRM were
+    already stale in the 2026-08-04 checkpoint before any code changed.
+  - **One anomaly investigated and cleared:** SN's failure bucket changed. Proven
+    code-independent by running it with the old `_c33_status` monkeypatched back in
+    (identical result); actual cause is SN's revenue series now returning only 3 quarters,
+    so it exits before `_c33_status` is ever called. Left open as a separate observation.
+
 2026-08-04 — **News Scanner tab, Stage 1 of 5: core feed, headlines only.** New isolated
 feature. Nothing pre-existing was modified: `code33/`, `code33_adapter.py`, `_PIPELINE_LOCK`,
 `/api/news` and its FinNews/tradingview-scraper path are all untouched.

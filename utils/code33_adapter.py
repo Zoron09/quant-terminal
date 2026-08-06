@@ -52,47 +52,91 @@ _PIPELINE_LOCK = threading.Lock()
 _PAIR_TOLERANCE_DAYS = 25  # matches code33.edgar_fill.MATCH_TOLERANCE_DAYS
 
 
+# Code 33's acceleration window. CODE33_SPEC.md §2.1-2.2 is explicit: 8 raw
+# quarters -> 4 YoY rates -> 3 acceleration jumps, and it names 3 rates / 2 jumps
+# as NOT enough ("With only 6 raw quarters you get 3 YoY rates = only 2
+# acceleration jumps = NOT enough for Code 33"). The original port checked
+# exactly that rejected configuration, which is how DELL scored green off
+# 10.83 -> 39.48 -> 87.54: the transition INTO that window, 18.98 -> 10.83, is a
+# deceleration and nothing ever looked at it. Same shape confirmed on IESC
+# (margin leg) and RNG (revenue leg).
+#
+# The 4th rate was already in hand — the adapter pulls n_quarters+4 and emits a
+# YoY for all 8 displayed quarters, so this reads data that was always present
+# rather than fetching more. Same class of fix as the GE restatement one.
+_ACCEL_RATES = 4
+
+# Scoreability floor, deliberately left at 3 and NOT raised to _ACCEL_RATES.
+# Raising it would reclassify short-history tickers red -> insufficient, which is
+# a change to the failure taxonomy (and would invalidate _diagnose_insufficient's
+# "of 3" wording), not to the acceleration check this fix is about. A ticker with
+# only 3 rates still cannot reach green below — proving 3 jumps requires 4 rates —
+# so the spec's bar is enforced without altering how anything gets excluded.
+_MIN_RATES = 3
+
+
 def _c33_status(rev_rates: list, npm_vals: list = None) -> tuple:
     """(status, d1, d2) — green/yellow/red/insufficient.
 
-    Ported VERBATIM from the old utils/code33_engine.py — the 3-state badge
-    semantics the frontend renders. Code 33 (EPS removed from the signal —
-    Revenue + Net Margin only) requires BOTH simultaneously for 3 consecutive
-    quarters:
-      - Revenue YoY growth RATE accelerating (delta > 0)
-      - Net Profit Margin expanding (delta > 0)
+    Code 33 (EPS removed from the signal — Revenue + Net Margin only) requires
+    BOTH metrics to accelerate simultaneously across the 4-rate window:
+      - Revenue YoY growth RATE rising every quarter
+      - Net Profit Margin rising every quarter
+
+    Acceleration is the FIRST derivative only: each rate must be higher than the
+    one before it. There is NO requirement that the jumps themselves grow. The
+    old port demanded `d2 >= d1` for green — a second-derivative test that is not
+    part of Minervini's definition; removed 2026-08-06 after confirmation against
+    his source material.
 
     Status rules:
-      GREEN  = both metrics have positive deltas, accelerating (d2 >= d1)
-      YELLOW = both deltas positive but acceleration shrinking (d2 < d1)
-      RED    = revenue rate negative, OR any delta negative (deceleration)
+      GREEN  = a full 4-rate window on both metrics, all 3 transitions positive
+      RED    = any revenue rate negative, or any negative transition on either
+               metric anywhere in the window
+      YELLOW = neither (see the boundary note at the bottom of this function)
     """
-    def _last3(arr):
+    def _window(arr):
         if not arr: return None
         clean = [x for x in arr if x is not None]
-        return clean[-3:] if len(clean) >= 3 else None
+        return clean[-_ACCEL_RATES:] if len(clean) >= _MIN_RATES else None
 
-    rev3 = _last3(rev_rates)
-    npm3 = _last3(npm_vals) if npm_vals else None
+    def _deltas(w):
+        return [w[i] - w[i - 1] for i in range(1, len(w))]
 
-    if rev3 is None or npm3 is None:
+    rev_w = _window(rev_rates)
+    npm_w = _window(npm_vals) if npm_vals else None
+
+    if rev_w is None or npm_w is None:
         return 'insufficient', None, None
 
-    if any(r < 0 for r in rev3):
+    # Negative-RATE gate stays revenue-only, exactly as before. A negative net
+    # margin is not disqualifying: -6.4 -> -4.5 -> -2.6 is margin expansion,
+    # which is the thing being measured. Shrinking revenue is disqualifying.
+    if any(r < 0 for r in rev_w):
         return 'red', None, None
 
-    all_d = []
-    for m in [rev3, npm3]:
-        all_d.append((m[1] - m[0], m[2] - m[1]))
+    rev_d, npm_d = _deltas(rev_w), _deltas(npm_w)
+    # Signature compatibility: the two deltas the old 3-rate check returned are
+    # the last two here. Nothing consumes them — the adapter discards both.
+    rev_d1, rev_d2 = rev_d[-2], rev_d[-1]
 
-    rev_d1, rev_d2 = all_d[0]
-
-    if any(d1 < 0 or d2 < 0 for d1, d2 in all_d):
+    if any(d < 0 for d in rev_d + npm_d):
         return 'red', rev_d1, rev_d2
 
-    if all(d2 >= d1 for d1, d2 in all_d):
+    full_window = len(rev_w) == _ACCEL_RATES and len(npm_w) == _ACCEL_RATES
+    if full_window and all(d > 0 for d in rev_d + npm_d):
         return 'green', rev_d1, rev_d2
 
+    # YELLOW is NOT spec-defined — CODE33_SPEC.md §3 has ACTIVE/BROKEN/NOT ACTIVE,
+    # not a three-colour badge, and reconciling those vocabularies is deliberately
+    # out of scope for this fix. Under the corrected logic yellow means "not
+    # disqualified, but not a clean pass either", which is exactly two cases:
+    #   - a flat transition (delta == 0): not a decline, so not red; not an
+    #     increase either, so acceleration is not satisfied
+    #   - fewer than _ACCEL_RATES rates available: nothing decelerated, but 3
+    #     jumps cannot be proven, so green is not earnable
+    # Both are genuinely "unproven" rather than "failed", which is the tier
+    # yellow already occupied.
     return 'yellow', rev_d1, rev_d2
 
 

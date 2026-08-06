@@ -1498,3 +1498,131 @@ pre-existing operational hazard confirmed. None of these touch the Code 33 engin
 - **Practical rule until fixed: do not trust `--reload`. Kill the process tree and restart, then
   confirm the boot line, before believing any test result.** Every verification in the Stage 1
   build was done after an explicit full restart for this reason.
+
+---
+
+## 2026-08-06 — the acceleration check tested 2 jumps, not the spec's 3
+
+### `_c33_status` used 3 YoY rates / 2 jumps instead of 4 rates / 3 jumps — CLOSED (FIXED 2026-08-06)
+
+- **Severity: signal correctness.** This is the criterion the entire screener exists to
+  apply, and it was one transition short of its own definition on every ticker.
+- **Symptom, and how it surfaced.** DELL scored GREEN. Its true four most recent Revenue
+  YoY rates are `+19.62 → +10.74 → +40.13 → +87.49` (verified independently twice, via
+  external data and TradingView screenshots, agreeing to the decimal). The first
+  transition is a **deceleration**. The engine's own displayed 3-quarter summary was
+  `10.8 → 39.5 → 87.5` — exactly the last three, which alone do show two increases. The
+  transition *into* that window was never checked.
+- **Cause.** `_c33_status`'s `_last3()` helper took `clean[-3:]` from `rev_yoy` and `npm`
+  and built two deltas per metric. `CODE33_SPEC.md` §2.1-2.2 requires 8 raw quarters →
+  **4 YoY rates → 3 acceleration jumps**, and explicitly names the shorter form as
+  disqualifying: *"With only 6 raw quarters you get 3 YoY rates = only 2 acceleration
+  jumps = NOT enough for Code 33."* The implementation was running precisely the
+  configuration the spec rejects. It was ported verbatim from the pre-swap
+  `utils/code33_engine.py`, and its docstring described the wrong behaviour accurately
+  ("3 consecutive quarters"), so nothing ever read as inconsistent.
+- **A second, separate defect fixed in the same edit.** Green additionally required
+  `d2 >= d1` — that the jump *sizes* grow, a second-derivative test. Confirmed against
+  Minervini's source material (via NotebookLM, 2026-08-06) that acceleration means only
+  each rate exceeding the prior one. Removed. This one made the filter *too strict*,
+  the opposite direction from the window bug, which is why the two partly masked each
+  other in the pass counts.
+- **Not DELL-specific.** Same shape independently found on **IESC** (margin leg,
+  `11.34 → 10.50`) and **RNG** (revenue leg, `4.91 → 4.80`) during manual verification,
+  and on **ROST** (margin, `9.19 → 9.14`) and **OOMA** (revenue, `4.05 → 3.49`) during
+  this fix's verification.
+- **The missing data was already in hand — no new fetch.** The adapter pulls
+  `n_quarters + 4` quarters and emits a YoY for all 8 displayed ones, so `rev_yoy` and
+  `npm` each carried **8** clean values while the check consumed 3. Confirmed live on
+  DELL: `rev_yoy = [9.12, 9.51, 7.23, 5.1, 18.98, 10.83, 39.48, 87.54]`, with the
+  unexamined 4th rate `18.98` sitting immediately before the window. Same class of fix as
+  the GE restatement one — read what is already there.
+- **Fix, in `utils/code33_adapter.py` only. `code33/` untouched** (`git status
+  --porcelain -- code33/` empty). `_last3` → `_window` taking `clean[-4:]`, deltas built
+  across the whole window. GREEN = full 4-rate window on both metrics with all 3
+  transitions strictly positive. RED = any revenue rate negative, or any negative
+  transition on either metric.
+- **Two judgment calls, both deliberate and commented in-code:**
+  1. **The scoreability floor stayed at 3** (`_MIN_RATES = 3`, not raised to
+     `_ACCEL_RATES`). Raising it would reclassify short-history tickers red →
+     insufficient — a change to the *failure taxonomy*, not the acceleration check — and
+     would invalidate `_diagnose_insufficient`'s hardcoded "of 3" wording. A 3-rate
+     ticker still cannot reach green, since 3 jumps need 4 rates, so the spec's bar is
+     enforced without altering how anything is excluded.
+  2. **The negative-RATE gate stayed revenue-only**, exactly as before. Applying it to
+     margin would flip every negative-margin company (GKOS, XMTR, URGN, CDNA) to RED for
+     a reason unrelated to acceleration; a margin going `-6.4 → -4.5 → -2.6` *is*
+     expansion, which is the thing being measured. Negative *transitions* are checked on
+     both metrics.
+- **Consequence worth knowing: YELLOW is now effectively empty.** Its old meaning was
+  "deltas positive but jump sizes shrinking" — i.e. it *was* the second-derivative test.
+  With that removed, yellow can only survive an exactly-flat transition (`delta == 0.0`),
+  which 2-decimal rounding makes near-impossible. **0 yellow across all 606 tickers.** The
+  three-colour badge is now effectively two-tier, and `_scan_state['passed']` (which
+  counts green + yellow) is now just the green count. Reconciling the tier vocabulary with
+  the spec's ACTIVE/BROKEN/NOT ACTIVE was deliberately left out of scope.
+- **Verification.**
+  - Baseline captured **before** any edit: all 33 GREEN/YELLOW tickers from the 2026-08-04
+    scan plus **37 controls** (24 red, 10 insufficient, 3 excluded_bank).
+  - **Byte-level whole-payload comparison, 70 tickers / 1,960 keys: zero violations.**
+    All 37 controls byte-identical on every field. 29 status changes, all on the
+    pass-list, none on a control.
+  - The new logic was *also* replayed offline against the frozen baseline arrays,
+    producing the identical 29 changes — which separates the logic change from live-data
+    drift. There was none.
+  - Structural reason the 10 insufficient controls cannot move: all have `nrev=0` and
+    return from `_empty_result` before `_c33_status` is called at all.
+  - Exactly one listener on :8000 confirmed before testing (PID 22308, single process
+    chain). Fixed code confirmed live over HTTP (DELL `red`, YOU `green`). Logs clean, no
+    reload fired mid-scan.
+  - **Fresh full 606-ticker scan** (the 2026-08-04 checkpoint was archived first — see the
+    checkpoint trap below): completed 606/606, breaker not tripped, no errors.
+- **Full-scan result, before → after:**
+
+  | status | before | after |
+  |---|---|---|
+  | green | 8 | **6** |
+  | yellow | 25 | **0** |
+  | red | 391 | **418** |
+  | insufficient | 82 | **82** |
+  | excluded_bank | 100 | **100** |
+
+  31 status changes: 21 yellow→red, 6 green→red, 4 yellow→green. `insufficient` and
+  `excluded_bank` counts are **identical**, which is independent corroboration that
+  nothing outside the acceleration check moved. Surviving greens: **YOU, AVT, DDOG, XMTR,
+  URGN, LQDA** — exactly the six the 70-ticker sample predicted.
+- **Two tickers were already stale before any code changed.** NOVT and IRM scored `red` on
+  live data while the 2026-08-04 checkpoint still called them yellow/green — a newer
+  quarter had landed. Unrelated to this fix; noted because it is why the checkpoint could
+  not be used as a baseline directly.
+
+### Checkpoint resume silently reuses pre-fix rows across a code change — OPEN, operational
+- **Not a defect in the scan code; a trap for anyone verifying an engine change with it.**
+  `_start_scan_job` derives `job_id = sha1(','.join(sorted(set(tickers))))[:12]`, and
+  `_scan_worker` skips every ticker already present in that job's checkpoint CSV.
+- **So re-running the same ticker list after an engine change resumes the old file and
+  skips all 606 tickers**, returning `done` almost immediately with results computed
+  entirely by the *old* code — and it looks like a successful fresh scan. Job identity is
+  a function of the ticker list only; it has no notion of engine version or
+  `CACHE_VERSION`.
+- **Worked around here** by moving `scan_f6d3892accf3.csv` to
+  `ARCHIVED_prefix_scan_f6d3892accf3.csv.bak` before starting, then confirming
+  `resumed_from: 0` in the POST response. That confirmation is the check to run.
+- **Possible real fix (not implemented):** fold `CACHE_VERSION` into the `job_id` hash, so
+  an engine bump naturally starts a new job instead of silently resuming a stale one.
+
+### SN's failure bucket changed during this work — NOT caused by the fix
+- Between the archived scan and the fresh one, SN moved from
+  `no reported revenue (pre-revenue company)` to `insufficient revenue history`. It was
+  the only `reason`-field change in 606 tickers, and SN was not in the 70-ticker control
+  sample, so the byte comparison did not cover it. Investigated rather than assumed.
+- **Proven code-independent:** SN was run through the current adapter and again with the
+  old `_c33_status` monkeypatched back in — *identical* status and reason under both
+  (`only 2 usable revenue quarters`).
+- **Actual cause is upstream data.** SN's revenue series now returns only 3 quarters
+  (2026-06-30 and 2026-03-31 present via edgartools, 2025-12-31 `None`), so it exits at
+  the `len(rev_points) < 5` guard and **never reaches `_c33_status`**. With 1 blank of 3,
+  `_is_pre_revenue` is now False where it was previously True, which is what moved the
+  bucket.
+- **Left open as a separate observation:** a ticker dropping to a 3-quarter pull is worth
+  its own look. Not investigated here — out of scope for this fix.
