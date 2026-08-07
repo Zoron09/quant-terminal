@@ -2065,3 +2065,153 @@ transition (delta exactly 0), the narrow surviving yellow case.
   enough history to become scoreable and lands red on `20.05 → 2.21`. GRDN's `reason`
   emptying is just normal red-status behaviour. Neither is reachable by a gate that can only
   ever remove a rejection.
+
+---
+
+## 2026-08-07 — bank exclusion fired on non-banks; PLXS revenue read 1000x too small
+
+### The bank tripwire excluded 4 companies that are not lenders — CLOSED (FIXED 2026-08-07)
+
+- **The exclusion's one stated justification never applied to them.** CLAUDE.md records banks
+  as refused because *"their revenue is silently wrong under standard XBRL tags, confirmed on
+  FULT"*, and explicitly notes this is *"a different category from a sector-fit judgement"*.
+  `BANK_SIGNAL_TAGS`' own docstring says *"Deliberately NOT sector labels or ticker lists."*
+  So the rule is falsifiable per ticker: if a ticker's revenue is demonstrably correct, the
+  justification does not cover it.
+- **KMX (CarMax) is the clear case.** It trips one tag,
+  `InterestIncomeExpenseAfterProvisionForLoanLoss`, from CarMax Auto Finance — a captive
+  lending arm behind a used-car retailer. Its revenue was being read **correctly the whole
+  time**: the engine resolves priority-1 `Revenues` and produces $6-8B/quarter, verified
+  against SEC (`Revenues` 8,013,519,000 = `RevenueFromContract...` 8,013,500,000, with
+  `CostOfRevenue` 89.3% — a thin retail margin). Contrast FULT, the proven true positive,
+  where the engine reads **$69.8M** while the interest line alone is **$247.6M** — fee income
+  only, net interest income silently dropped. KMX shows nothing of that shape.
+- **AN (AutoNation) and PAG (Penske) — same industry, same captive-finance model — file zero
+  bank-signal tags.** KMX is unusual in how it *tags*, not in what it *is*.
+
+#### The measurement, and a wrong first attempt recorded deliberately
+
+The first metric tried was "ratio of whichever `BANK_SIGNAL_TAGS` entry fired first to
+revenue". **It was unsound and would have released real lenders.** The three signal tags mean
+opposite things — `NoninterestIncome` is *by definition the non-lending part* — so:
+
+| ticker | flawed metric | true lending share | what it is |
+|---|---|---|---|
+| WRLD | 12.9% | **87.3%** | World Acceptance, consumer lender |
+| ATLC | 0.1% | **100.0%** | Atlanticus, consumer credit |
+
+A `<25%` rule on the flawed metric would have cleared both. Same error class as the SLDE/SPB
+insurer episode: measuring a convenient number instead of the meaningful one.
+
+**The correct metric is lending income (`InterestAndDividendIncomeOperating`,
+`InterestAndFeeIncomeLoans*`, `InterestIncomeOperating`, ...) divided by total revenue**,
+chosen semantically, never by tag-priority order. Validated across all 100 excluded tickers:
+
+```
+KMX      5.8%   <- released
+                    (empty band — no ticker anywhere between 5.8% and 68.5%)
+HASI    68.5%   <- STAYS EXCLUDED
+STT     70.2%   <- lowest genuine lender
+MS 74.5%  QCRH 82.2%  WRLD 87.3%  RBCAA 94.5%  PNC 97.4%  USB 98.5%
+ATLC 100.0%  COF 106.6%  ... FULT 558.5% ... AVBH 38,651.5%
+```
+
+#### The rule as shipped
+
+Threshold **50%** = *"a majority of the business is banking/lending activity"*. Chosen for
+what it means, not where it sits — the band 5.8%-68.5% is empty, so any threshold inside it
+gives the same answer. **Honest note: 50% is not uniformly safer than 25%** — it is further
+from KMX (44.2pp vs 19.2pp) but *closer* to HASI (18.5pp vs 43.5pp). The principle is the
+argument, not the margin.
+
+Two branches, both validated over the full excluded set:
+1. **Files no lending-income concept at all** -> signal is vestigial -> release. Provably
+   safe: 97 of 100 excluded tickers file one, and **every bank-SIC ticker does**. The 3 that
+   file none are exactly the false positives.
+2. **Files one, but lending income is a minority of revenue** -> not a lender -> release.
+
+**Both branches additionally require a usable revenue series.** Anything unmeasurable stays
+excluded — unverifiable must never mean cleared.
+
+- **HASI: deliberately stays excluded, decision settled.** HA Sustainable Infrastructure
+  Capital (SIC *Investors, NEC*) is a specialty finance company —
+  `InterestIncomeOperating` 66,394,000 / `Revenues` 96,941,000 = **68.5%**, with
+  `InterestExpense` 99,275,000 *exceeding* quarterly revenue. A majority of its revenue is
+  banking-activity income, so it is correctly treated as a bank **even though its own numbers
+  are individually accurate**.
+- **Standing guidance for a future borderline case, recorded and deliberately NOT encoded:**
+  today's gap is wide and nothing sits near the line. If a future ticker lands close to
+  `_BANK_LENDING_SHARE`, do not decide on the ratio alone — read how the company describes
+  its own core business in its 10-K and how it positions its product, and use that as the
+  tie-breaker. Instruction for a human reviewer, not automated logic.
+
+#### A defect in the first implementation, caught by verification
+
+The shipped code initially **omitted the "AND a usable revenue series exists" condition**, on
+the mistaken reasoning that it was self-enforcing downstream. It is not. **NEWT (NewtekOne,
+SIC National Commercial Banks) — a genuine bank — was released**: it has no usable revenue
+series at all, so `lending_income_share` computed off a mismatched pair in the raw facts,
+returned 4.4%, and cleared it. The validation sweep missed this because it selected the
+measurement quarter differently from the function that shipped. Fixed by verifying against
+the pulled series, the only authoritative answer; NEWT is back to `excluded_bank`.
+
+### PLXS revenue read 1000x too small — CLOSED (FIXED 2026-08-07)
+
+- **Cause is filer-side, at SEC.** Plexus tags
+  `RevenueFromContractWithCustomerExcludingAssessedTax` **in thousands** while tagging
+  `...IncludingAssessedTax` in dollars for the same period — identical digits, exactly 1000x
+  apart, on **6 quarters** (newest 2026-07-04: `1,304,778` vs `1,304,778,000`).
+- **Only the edgartools gap-fill path was affected.** `REVENUE_TAGS` orders *Excluding* before
+  *Including*, so `fetch_discrete_quarter` picked the mis-scaled value; secfsdstools picked
+  *Including* on the same quarters and was correct. Net effect: a 1000x cliff mid-series
+  (`...980M, 1.07B, 1.16M, 1.30M`).
+- **Fix: a scale guard in `fetch_discrete_quarter`.** A candidate under 1/100th of the
+  series' established magnitude is **skipped so tag priority falls through to the next tag**,
+  recovering the correctly-scaled figure rather than dropping the quarter.
+  `pipeline._fill_gaps` supplies the median of known values as the reference.
+  **Self-limiting**: the reference is `None` until a series has established scale, so a
+  first-quarter pull can never trip it, and the guard only ever demotes a candidate — it
+  never invents a value. Confirmed firing in the log; PLXS now reads **1,304,778,000**.
+- **Universe scope, measured — and two wrong counts recorded on the way.** A crude "≥500x
+  between any two revenue concepts" test flagged **10** tickers; it conflated *scale errors*
+  with *genuinely different quantities*. A second pass comparing only the min/max pair still
+  missed two real cases. The correct test is **same mantissa, differing by a power of 1000**:
+
+  | ticker | newest affected | scale |
+  |---|---|---|
+  | **PLXS** | **2026-07-04** | 1,000x |
+  | IRDM | 2018-03-31 | 1,000x |
+  | LUV | 2011-09-30 | 1,000,000x |
+
+  7 false alarms confirmed as different quantities — including **OSCR** (813x: the $5.7M
+  ancillary line vs $4.65B total, already verified dollar-exact), AER, SKWD, TVTX, ANDE, CTO,
+  KWR. **Only PLXS has live impact**; IRDM and LUV are 7-15 years outside any 12-quarter
+  window. The bug class is real and recurs, which is why a generic guard is warranted.
+- **Hard dependency, honoured:** PLXS needed **both** fixes. Releasing it from bank exclusion
+  before fixing the scale bug would have immediately scored it on a 1000x-broken series.
+
+#### Verification (both fixes together)
+
+- Baseline before any edit: full payloads for **all 100 excluded tickers + 51 controls**.
+- **Byte-level comparison, 151 tickers / 4,116 keys.** All 96 non-released excluded tickers
+  and every control byte-identical. `still excluded_bank = 96`, expected 96.
+- **OSCR was the only control diff and is proven to be new-filing drift, not the fix:** every
+  overlapping value bit-identical with the window advanced exactly one quarter
+  (`before[1:] == after[:-1]` true for rev, rev_yoy, npm, ni and all date/label arrays); its
+  10-Q for 2026-06-30 was filed 2026-08-07, the same day. OSCR files no bank tags, and the
+  scale guard can only reject candidates — neither fix can add a quarter.
+- Server tree killed before editing (documented `--reload` hazard); **one listener confirmed**
+  after restart (PID 18640); all four releases plus HASI/NEWT verified live over HTTP.
+- **Fresh full 606-ticker scan** (checkpoint archived, `resumed_from: 0`), 606/606, breaker
+  not tripped:
+
+| status | before | after |
+|---|---|---|
+| red | 415 | **419** |
+| excluded_bank | 100 | **96** |
+| insufficient | 81 | **81** |
+| green | 9 | **9** |
+| yellow | 1 | **1** |
+
+  **Exactly 4 status changes — KMX, LOVE, PLXS, SKWD, all `excluded_bank` -> `red`.** Nothing
+  else moved anywhere in the universe.

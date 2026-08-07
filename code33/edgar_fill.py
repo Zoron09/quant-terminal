@@ -94,6 +94,86 @@ def bank_signal_tags(ticker: str) -> list:
     return sorted(t.split(":", 1)[1] for t in present)
 
 
+# Income EARNED FROM LENDING. Every entry means the same economic thing; filers
+# differ in which they use. This is deliberately NOT BANK_SIGNAL_TAGS: those three
+# are only a "might be a bank" tripwire, and one of them (NoninterestIncome) is by
+# definition the NON-lending part of a lender's income. Ratioing against that tag
+# measured the wrong quantity and scored real lenders LOW — WRLD came out at 12.9%
+# and ATLC at 0.1% when their actual lending share is 87% and 100%.
+LENDING_INCOME_TAGS = [
+    "us-gaap:InterestAndDividendIncomeOperating",      # standard bank total interest income
+    "us-gaap:InterestAndFeeIncomeLoansAndLeases",
+    "us-gaap:InterestAndFeeIncomeLoansConsumer",
+    "us-gaap:InterestAndFeeIncomeLoansAndLeasesHeldInPortfolio",
+    "us-gaap:InterestAndFeeIncomeLoansAndLeasesHeldForSale",
+    "us-gaap:InterestAndFeeIncomeLoansCommercialAndIndustrial",
+    "us-gaap:InterestAndFeeIncomeOtherLoans",
+    "us-gaap:InterestIncomeOperating",
+]
+
+# Total-revenue denominators, best first.
+_REVENUE_DENOMINATORS = [
+    "us-gaap:Revenues",
+    "us-gaap:RevenuesNetOfInterestExpense",
+    "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
+    "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+]
+
+
+def files_lending_income(ticker: str) -> bool:
+    """Whether the company files ANY lending-income concept at all.
+
+    Measured across all 100 excluded tickers: 97 file at least one, and every
+    single bank-SIC ticker does. The 3 that file none (SKWD insurance, PLXS
+    electronics, LOVE furniture retail) are exactly the false positives — their
+    bank signal is a vestigial tag with no lending business behind it. So "files
+    none" provably cannot describe a real bank.
+    """
+    df = _load_facts_df(ticker)
+    if df is None or df.empty:
+        return False
+    return bool(set(df["concept"].unique()) & set(LENDING_INCOME_TAGS))
+
+
+def lending_income_share(ticker: str) -> Optional[float]:
+    """lending income / total revenue for the newest quarter carrying both.
+
+    None when it cannot be computed (no lending concept, or no revenue concept) —
+    the caller decides, and the safe reading of None is "cannot clear it".
+
+    This is the measurement that actually separates a lender from a company with
+    an incidental finance arm. Validated across all 100 excluded tickers: KMX
+    lands at 5.8% and every genuine lender at 70.2% or above, with nothing in
+    between — HASI is the closest at 68.5% and is correctly a lender.
+    """
+    df = _load_facts_df(ticker)
+    if df is None or df.empty:
+        return None
+    lend = df[df["concept"].isin(LENDING_INCOME_TAGS)]
+    if lend.empty:
+        return None
+    rev = df[df["concept"].isin(_REVENUE_DENOMINATORS)]
+    if rev.empty:
+        return None
+    # Newest period_end where both sides have a fact, so the ratio compares one
+    # quarter against itself rather than mixing periods.
+    shared = sorted(set(lend["period_end"]) & set(rev["period_end"]), reverse=True)
+    if not shared:
+        return None
+    period = shared[0]
+    lend_v = lend[lend["period_end"] == period]["numeric_value"].max()
+    rev_rows = rev[rev["period_end"] == period]
+    rev_v = None
+    for tag in _REVENUE_DENOMINATORS:
+        hit = rev_rows[rev_rows["concept"] == tag]
+        if not hit.empty:
+            rev_v = float(hit["numeric_value"].iloc[0])
+            break
+    if not rev_v or rev_v <= 0 or lend_v is None:
+        return None
+    return float(lend_v) / rev_v
+
+
 def has_xbrl_quarterly_facts(ticker: str) -> bool:
     """Whether SEC carries ANY discrete-quarter XBRL facts for this ticker.
 
@@ -112,7 +192,10 @@ def has_xbrl_quarterly_facts(ticker: str) -> bool:
 
 
 def fetch_discrete_quarter(
-    ticker: str, target_end: date, tag_priority: List[str]
+    ticker: str,
+    target_end: date,
+    tag_priority: List[str],
+    reference_magnitude: Optional[float] = None,
 ) -> Optional[Tuple[date, float, str, str, date, Optional[int], Optional[str]]]:
     """The discrete-quarter value ending nearest target_end (within tolerance).
 
@@ -146,6 +229,35 @@ def fetch_discrete_quarter(
         if tag_rows.empty:
             continue
         row = tag_rows.sort_values("filing_date").iloc[0]
+
+        # SCALE GUARD. Filers sometimes tag one concept in thousands while tagging
+        # a sibling concept for the SAME period in dollars. PLXS does exactly this
+        # on 6 quarters: RevenueFromContractWithCustomerExcludingAssessedTax reads
+        # 1,304,778 while ...IncludingAssessedTax reads 1,304,778,000 — identical
+        # digits, 1000x apart. Excluding wins on tag priority, so the fill returned
+        # a value 1000x too small and put a cliff in the middle of the series.
+        #
+        # Skipping the candidate (rather than rejecting the whole quarter) is the
+        # point: priority then falls through to the next tag and recovers the
+        # correctly-scaled figure, so the quarter is still filled.
+        #
+        # Self-limiting by construction: reference_magnitude is None until the
+        # series already has established scale, so a first-quarter pull can never
+        # trip this. The 1/100 bound is far looser than the 1000x errors seen —
+        # a real quarter would have to collapse 99% to be caught, and the guard
+        # only ever DEMOTES a candidate, never invents a value.
+        # Universe-wide this signature appears on 3 of 606 tickers (PLXS 2026,
+        # IRDM 2018, LUV 2011); the 7 other >=500x pairs are genuinely different
+        # quantities, not scale errors, and are untouched by this.
+        if reference_magnitude:
+            value = float(row["numeric_value"])
+            if value and abs(value) * 100 < abs(reference_magnitude):
+                log.warning(
+                    "edgar_fill: %s %s tag %s value %s is <1/100th of the series "
+                    "magnitude %s — suspected units mismatch, trying next tag",
+                    ticker, target_end, tag, value, reference_magnitude)
+                continue
+
         fy_raw, fp_raw = row.get("fiscal_year"), row.get("fiscal_period")
         return (
             row["period_end"].date(),

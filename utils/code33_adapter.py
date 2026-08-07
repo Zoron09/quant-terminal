@@ -164,6 +164,57 @@ def _c33_status(rev_rates: list, npm_vals: list = None) -> tuple:
     return 'yellow', rev_d1, rev_d2
 
 
+# Share of revenue that must come from lending before a ticker counts as a bank.
+# 50% = "a majority of the business is banking/lending activity", which is the
+# principle, not a tuned number. Validated across all 100 excluded tickers: KMX
+# sits at 5.8% and the lowest genuine lender at 70.2%, with NOTHING in between —
+# so any threshold in that band gives the same answer and this one is chosen for
+# what it means rather than where it sits.
+_BANK_LENDING_SHARE = 0.50
+
+
+def _is_really_a_bank(ticker: str, bank_tags: list) -> bool:
+    """Does the bank tripwire reflect an actual lending business?
+
+    BANK_SIGNAL_TAGS only says "might be a bank". Three tickers proved it fires on
+    companies that plainly are not: KMX (CarMax Auto Finance, a captive arm behind
+    a used-car retailer), LOVE (Lovesac, furniture) and SKWD (Skyward, insurance).
+    KMX in particular had its revenue read CORRECTLY the whole time — the engine
+    resolves `Revenues` and produces its true $6-8B/quarter — so the exclusion's
+    one stated justification (revenue silently wrong under standard tags, proven
+    on FULT) never applied to it.
+
+    Two branches, both validated over the full excluded set:
+      1. Files no lending-income concept at all -> the signal is vestigial. Safe
+         because 97 of 100 excluded tickers file one, and EVERY bank-SIC ticker
+         does; the 3 that do not are exactly the false positives.
+      2. Files one, but lending income is a minority of revenue -> not a lender.
+
+    Anything else — including a ratio that cannot be computed — stays excluded.
+    That default is deliberate: unmeasurable must never mean cleared.
+
+    NOTE FOR A FUTURE BORDERLINE CASE (guidance for a human, deliberately NOT
+    encoded): today's gap is wide, so nothing sits near the line. HASI is the
+    closest at 68.5% and is correctly excluded — a specialty finance company whose
+    revenue really is majority interest income, even though its own numbers are
+    individually accurate. If a future ticker lands close to _BANK_LENDING_SHARE,
+    do not decide on the ratio alone: read how the company describes its own core
+    business in its 10-K and how it positions its product, and use that as the
+    tie-breaker.
+    """
+    if not edgar_fill.files_lending_income(ticker):
+        log.info("code33_adapter: %s files bank tags %s but NO lending-income "
+                 "concept — vestigial signal, not excluded", ticker, bank_tags)
+        return False
+    share = edgar_fill.lending_income_share(ticker)
+    if share is not None and share < _BANK_LENDING_SHARE:
+        log.info("code33_adapter: %s lending income is %.1f%% of revenue "
+                 "(< %.0f%%) — not a bank, not excluded",
+                 ticker, share * 100, _BANK_LENDING_SHARE * 100)
+        return False
+    return True
+
+
 _YOY_MIN_GAP_DAYS = 330
 _YOY_MAX_GAP_DAYS = 400
 
@@ -352,7 +403,15 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
         bank_tags = edgar_fill.bank_signal_tags(ticker)
     except Exception:
         bank_tags = []
-    if bank_tags:
+    # A ticker is only RELEASED from the bank gate if the tripwire turns out not to
+    # reflect a lending business AND a usable revenue series actually exists to
+    # score. The second half is not optional and is NOT self-enforcing: NEWT
+    # (NewtekOne, SIC National Commercial Banks) files lending concepts but has no
+    # usable revenue series at all, so the ratio got computed off a mismatched pair
+    # in the raw facts, came out at 4.4%, and released a genuine bank. Verified
+    # below against the pulled series, which is the only authoritative answer.
+    pending_release = bool(bank_tags) and not _is_really_a_bank(ticker, bank_tags)
+    if bank_tags and not pending_release:
         log.info("code33_adapter: %s excluded (bank tags: %s)", ticker, bank_tags)
         return _empty_result('excluded_bank', 'bank/depository institution — not yet supported')
 
@@ -371,6 +430,18 @@ def _get_code33_data_inner(ticker: str, n_quarters: int) -> dict:
         return _empty_result('insufficient', rev_series.series_flag)
 
     rev_points = [p for p in rev_series.points if p.value is not None]  # newest first
+
+    # The "AND a valid revenue series exists" half of the release rule. A ticker
+    # the tripwire flagged is only cleared once there is something real to score;
+    # unverifiable must never mean cleared, so it goes back to excluded_bank rather
+    # than falling through to 'insufficient' (which would silently reclassify a
+    # bank as a data problem).
+    if pending_release and len(rev_points) < 5:
+        log.info("code33_adapter: %s cleared the bank tripwire but has only %d "
+                 "usable revenue quarters — cannot verify, keeping excluded",
+                 ticker, len(rev_points))
+        return _empty_result('excluded_bank', 'bank/depository institution — not yet supported')
+
     if len(rev_points) < 5:
         # A company filing NO revenue concept at all arrives here with every
         # point value=None, stripped by the filter above — the same real-world

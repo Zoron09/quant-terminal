@@ -332,6 +332,13 @@ that the 2026-08-01 adapter change altered again.
   score them — their revenue is silently wrong under standard XBRL tags, confirmed on
   FULT). Frontend shows an explicit "EXCLUDED — BANK, NOT YET SUPPORTED" badge and an
   "Excluded — Banks" scan pill, never a silent disappearance.
+  - **Refined 2026-08-07 — `BANK_SIGNAL_TAGS` alone is only a tripwire, not the verdict.**
+    It fired on 4 non-lenders (KMX, LOVE, SKWD, PLXS). `_is_really_a_bank()` in the adapter
+    now confirms it: a ticker is excluded unless it files **no lending-income concept at all**
+    (vestigial signal) or lending income is **< `_BANK_LENDING_SHARE` (50%)** of revenue —
+    and in both cases only when a usable revenue series exists. Unmeasurable stays excluded.
+    HASI (68.5%) is correctly excluded; near-threshold cases need a human tie-breaker, see
+    the docstring. 96 excluded as of the 2026-08-07 scan, down from 100.
 - **Status semantics:** `_c33_status` (green/yellow/red/insufficient badge) — **corrected
   2026-08-06, no longer the verbatim pre-swap port.** It now evaluates the spec's real
   window: **4 YoY rates / 3 acceleration jumps** (`_ACCEL_RATES = 4`), not the 3 rates /
@@ -377,6 +384,50 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-07 (later) — **Bank exclusion no longer fires on non-banks; PLXS revenue scale bug
+fixed.** Two fixes with a hard dependency between them. Full detail, distribution table and
+the recorded wrong turns in `bug_report.md`.
+  - **4 companies were excluded as banks and are not lenders:** KMX (CarMax — captive auto
+    finance behind a used-car retailer), LOVE (Lovesac, furniture), SKWD (Skyward, insurance),
+    PLXS (Plexus, electronics). KMX's revenue was being read **correctly all along** (priority-1
+    `Revenues`, $6-8B/qtr, verified against SEC), so the exclusion's one stated justification —
+    revenue silently wrong under standard tags, proven on FULT — never applied to it.
+  - **Metric: lending income ÷ total revenue**, chosen semantically, never by tag-priority.
+    A first attempt ratioing "whichever `BANK_SIGNAL_TAGS` entry fired first" was **unsound
+    and would have released real lenders** (WRLD 12.9%→ actually 87.3%; ATLC 0.1% → 100.0%),
+    because `NoninterestIncome` is by definition the NON-lending part. Recorded in
+    `bug_report.md` so it isn't retried.
+  - **Threshold 50%** = "majority of the business is banking/lending". Validated across all
+    100 excluded tickers: KMX 5.8%, then **nothing until 68.5%**, lowest genuine lender
+    70.2%. Chosen for what it means, not where it sits. **HASI (68.5%) stays excluded** —
+    specialty finance, majority interest income, correctly a bank even though its own numbers
+    are accurate. Standing guidance for a future near-threshold case is documented in-code as
+    a **human** tie-breaker (read the company's own 10-K business description), deliberately
+    not encoded.
+  - **Two branches, both requiring a usable revenue series:** files no lending-income concept
+    at all (vestigial signal — provably safe, 97/100 file one and every bank-SIC ticker does),
+    or files one but lending is a minority of revenue. Unmeasurable stays excluded.
+  - **A defect in my first implementation, caught by verification:** I omitted the
+    "AND a usable revenue series exists" condition, and it **released NEWT (NewtekOne, a
+    genuine National Commercial Bank)** whose ratio computed off a mismatched pair at 4.4%.
+    Fixed against the pulled series; NEWT is excluded again.
+  - **PLXS scale bug (separate, and a hard dependency):** SEC carries
+    `...ExcludingAssessedTax` in **thousands** and `...IncludingAssessedTax` in dollars for
+    the same period on 6 quarters, so the edgartools fill returned values **1000x too small**.
+    Fixed with a scale guard in `fetch_discrete_quarter` that **skips** a candidate under
+    1/100th of the series' established magnitude so priority falls through to the next tag,
+    recovering the correct figure. Self-limiting — no established scale, no guard.
+    Universe-wide the true signature (same mantissa, power-of-1000 apart) hits **3 of 606**
+    (PLXS 2026, IRDM 2018, LUV 2011); only PLXS has live impact. **PLXS needed both fixes** —
+    releasing it first would have scored it on broken data.
+  - **Verified:** 100 excluded + 51 controls captured before any edit; **4,116-key byte
+    comparison, all 96 non-released excluded tickers and every control byte-identical**; OSCR
+    was the sole diff and is proven new-filing drift (its 10-Q landed the same day; every
+    overlapping value bit-identical with the window advanced one quarter). One listener
+    confirmed (PID 18640); HTTP verified. **Fresh full scan** (`resumed_from: 0`), 606/606:
+    red 415 → **419**, excluded_bank 100 → **96**, insufficient **81 → 81**, green **9 → 9**,
+    yellow **1 → 1** — exactly the 4 intended changes, nothing else moved.
+
 2026-08-07 — **Revenue sign gate corrected: it rejected Minervini's own worked example.**
 Second methodology fix confirmed directly against the source material. Full detail and the
 scope table in `bug_report.md`.

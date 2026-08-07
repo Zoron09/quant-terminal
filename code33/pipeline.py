@@ -131,9 +131,17 @@ def _fill_gaps(
         if not any(abs((target - have).days) <= MATCH_TOLERANCE_DAYS for have in usable_ends)
     ]
 
+    # Median of the values already established for this ticker, handed to the fill
+    # as a scale reference so a units-mismatched candidate can be skipped in favour
+    # of the next tag. None when nothing is established yet, which disables the
+    # guard entirely — see fetch_discrete_quarter's SCALE GUARD note.
+    known_values = sorted(abs(p.value) for p in series.points if p.value)
+    reference_magnitude = (known_values[len(known_values) // 2]
+                           if known_values else None)
+
     filled: List[QuarterPoint] = []
     for target in missing:
-        hit = fetch_discrete_quarter(ticker, target, tag_priority)
+        hit = fetch_discrete_quarter(ticker, target, tag_priority, reference_magnitude)
         if hit is None:
             log.info("pipeline: %s quarter ~%s missing from both sources", ticker, target)
             continue
