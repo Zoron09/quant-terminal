@@ -1,9 +1,27 @@
+# VERIFICATION BAR FOR ANY CHANGE TO THIS FILE: BOOT THE APP, DON'T JUST IMPORT.
+# Create a fresh venv, `pip install -r requirements.txt` into it, then actually
+# START the server against it and hit a real endpoint. An import-only smoke test
+# is NOT sufficient and has already passed this file twice while the app could not
+# start at all (2026-08-07): FastAPI raises the missing-python-multipart error from
+# inside the @app.post("/api/scan") decorator at import time, so nothing surfaces
+# until the app is genuinely run. The local .venv also hides gaps of this shape,
+# because packages removed from this file are never uninstalled from it.
+
 # Web stack. Pinned to exactly what the app was developed and verified against —
 # these were previously UNDECLARED despite being the two hard runtime deps
 # (api/server.py and run.py). Nothing installed them on purpose; they arrived as
 # transitive deps and the app happened to work.
 fastapi==0.138.0
 uvicorn==0.49.0
+
+# FastAPI needs this to parse multipart form data, which /api/scan requires for
+# its `file: UploadFile = File(...)` CSV upload. WITHOUT IT THE APP DOES NOT BOOT —
+# FastAPI raises "Form data requires python-multipart to be installed" while
+# building the route at import time, before the server ever listens.
+# It was only ever present as a TRANSITIVE dep of streamlit, so removing streamlit
+# in bdf1e71 (correct on its own terms — zero imports) silently took this with it.
+# The gap stayed invisible because the local .venv still has streamlit installed.
+python-multipart==0.0.32
 
 yfinance>=0.2.31
 pandas>=2.0.0
@@ -50,3 +68,25 @@ edgartools==5.39.1
 #   - feedparser: SEC EDGAR 8-K current-events atom feed
 finnhub-python>=2.4.28
 feedparser>=6.0.12
+
+# /api/news sources 1 and 2 (api/server.py). Both were UNDECLARED runtime deps —
+# present in the local .venv, absent from this file — so a clean install degraded
+# the endpoint to its yfinance fallback alone while still returning HTTP 200.
+# Confirmed 2026-08-07 in a fresh venv: "[news] SeekingAlpha failed: No module
+# named 'FinNews'" and "[news] tradingview-scraper failed: No module named
+# 'tradingview_scraper'". Both imports sit inside try/except blocks that only
+# print, so the loss is silent — nothing errors, the feed is just quietly thinner.
+# Pinned to the versions the running environment actually has.
+FinNews==1.1.0
+tradingview-scraper==0.4.20
+
+# Ceiling, not a floor, and NOT cosmetic: both packages above do a bare
+# `import pkg_resources` (FinNews/source_object.py:4), and setuptools DELETED
+# pkg_resources in 81.0.0. A fresh install pulls setuptools 83.x, so without this
+# both news sources raise ModuleNotFoundError and /api/news silently falls back to
+# yfinance alone — the exact failure the two lines above exist to fix, just with a
+# different error message. Found 2026-08-07 only by booting the app: declaring the
+# packages was not enough to make them importable.
+# The running .venv has 80.10.2, which predates the removal, which is why this was
+# invisible locally. Revisit if either package drops its pkg_resources use.
+setuptools<81

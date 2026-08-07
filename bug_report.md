@@ -2215,3 +2215,103 @@ the pulled series, the only authoritative answer; NEWT is back to `excluded_bank
 
   **Exactly 4 status changes — KMX, LOVE, PLXS, SKWD, all `excluded_bank` -> `red`.** Nothing
   else moved anywhere in the universe.
+
+---
+
+## 2026-08-07 — the app could not boot from requirements.txt
+
+### `pip install -r requirements.txt` produced an environment the app crashes in — CLOSED (FIXED 2026-08-07)
+
+- **Severity: total. On a genuinely clean install the server never starts.**
+  ```
+  RuntimeError: Form data requires "python-multipart" to be installed.
+  ```
+  Raised from `api/server.py:341`, inside the `@app.post("/api/scan")` decorator, while
+  FastAPI builds the route **at import time** — so it happens before the socket is ever
+  opened, and no endpoint is reachable.
+- **Root cause, and it is a direct consequence of `bdf1e71`.** `/api/scan` takes
+  `file: UploadFile = File(...)`, which FastAPI cannot construct without `python-multipart`.
+  That package was never declared — it was only ever present as a **transitive dependency of
+  `streamlit`**:
+  ```
+  Name: python-multipart   Version: 0.0.32   Required-by: streamlit
+  ```
+  `bdf1e71` removed `streamlit` after an audit found zero imports. That was **correct on its
+  own terms** — streamlit genuinely is not imported anywhere (re-confirmed: zero hits across
+  all 18 source files, and zero dynamic imports of any kind — no `importlib`, `__import__`,
+  `exec` or `eval` anywhere in the codebase). But removing it silently removed the only thing
+  that declared `python-multipart`.
+- **Why nobody noticed for six days:** the local `.venv` still has `streamlit` installed —
+  removing a line from `requirements.txt` does not uninstall anything — so the app kept
+  working locally. **A packaging gap of this shape is invisible from inside the environment
+  that has the gap.**
+
+#### A second, independent gap in the same endpoint family
+
+`/api/news`'s two primary sources were also undeclared:
+```
+[news] SeekingAlpha failed: No module named 'FinNews'
+[news] tradingview-scraper failed: No module named 'tradingview_scraper'
+```
+Both imports sit inside `try/except Exception` blocks that only `print`, so the endpoint
+still returned **HTTP 200** — with 10 items, all from the yfinance fallback. Working from the
+outside, silently running on one source of three.
+
+#### A third gap, found ONLY by booting — declaring the packages was not enough
+
+Adding `FinNews` and `tradingview-scraper` made them install but **still not import**:
+```
+[news] SeekingAlpha failed: No module named 'pkg_resources'
+```
+`FinNews/source_object.py:4` does a bare `import pkg_resources`, and **setuptools deleted
+`pkg_resources` in 81.0.0**. A fresh install pulls setuptools 83.x:
+```
+CLEAN env    setuptools=83.0.0   pkg_resources=False
+REAL .venv   setuptools=80.10.2  pkg_resources=True
+```
+The running `.venv` predates the removal, which is why this too was invisible locally. Fixed
+with a **ceiling**, `setuptools<81` — the constraint is "must still ship pkg_resources", so a
+ceiling expresses it correctly where a pin would not.
+
+#### The fix
+
+Four lines added to `requirements.txt`, each commented in the existing style, all pinned to
+the versions the running environment actually has (checked, not guessed):
+```
+python-multipart==0.0.32
+FinNews==1.1.0
+tradingview-scraper==0.4.20
+setuptools<81
+```
+Plus a standing instruction at the top of the file: **boot the app, do not just import.**
+
+#### Verification — in a throwaway venv, never the real one
+
+- Fresh venv built from Python 3.12.8 in the scratchpad. `python-multipart` was
+  **deliberately uninstalled first**, so the install had to prove `requirements.txt` itself
+  supplies it rather than relying on residue from the earlier probe.
+- `pip install -r requirements.txt` completes, exit 0.
+- **App boots with no crash; exactly one listener on :8000** (PID 6180), served by the clean
+  env with no `.venv` process in the chain.
+- End-to-end on the clean env:
+  - `/api/ticker/AAPL` -> `red`, $312.51, mcap 4.6T
+  - `/api/financials/AAPL` -> 8 real quarters (`2024-12-31 rev=124,300,000,000 rev_yoy=3.95
+    npm=29.23`)
+  - `/api/scan` multipart upload -> job accepted, 1/1 completed, no error
+  - `/api/news/AAPL` -> **30 items, zero source failures logged**, up from 10:
+    **15 Seeking Alpha (FinNews)** plus Reuters / TradingView / Dow Jones Newswires /
+    GuruFocus / Binance News (tradingview-scraper) alongside the yfinance names.
+    All three sources confirmed live, and all three imports proved directly.
+- **The real `.venv` and running server were untouched throughout** — re-checked after the
+  test: `python-multipart 0.0.32`, `FinNews 1.1.0`, `tradingview-scraper 0.4.20`,
+  `setuptools 80.10.2`, `streamlit 1.58.0`, all unchanged. `git status` shows only
+  `requirements.txt`.
+
+#### Why the earlier verification missed this
+
+`bdf1e71` was verified by installing into a clean venv and **importing every declared
+package**. Every declared package did import — the file's problem was a package it did *not*
+declare, and the failure only materialises when FastAPI builds a route. **An import-only
+smoke test cannot detect a missing runtime dependency of the framework itself.** The bar is
+now written into the file: create a fresh venv, install from it, start the server, hit a real
+endpoint. It passed the import test twice while the app could not start.

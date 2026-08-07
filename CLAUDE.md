@@ -384,6 +384,37 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-07 (evening) — **The app could not boot from `requirements.txt`. Fixed.** Packaging
+only, no engine change. Full detail in `bug_report.md`.
+  - **Hard boot failure on any clean install:** `RuntimeError: Form data requires
+    "python-multipart" to be installed`, raised from inside `@app.post("/api/scan")` at
+    import time — before the socket opens, so nothing is reachable. `/api/scan` takes
+    `UploadFile = File(...)` and FastAPI cannot build that route without it.
+  - **Caused by `bdf1e71`.** `python-multipart` was only ever a **transitive dep of
+    `streamlit`** (`Required-by: streamlit`). Removing streamlit was correct — zero imports,
+    re-confirmed, and there are **no dynamic imports anywhere** in the codebase — but it took
+    the only declaration of `python-multipart` with it. Invisible locally because the `.venv`
+    still has streamlit: removing a line never uninstalls anything.
+  - **Two more gaps found in the same pass:** `FinNews` and `tradingview-scraper` (both
+    `/api/news` sources) were undeclared, so a clean install silently degraded the endpoint
+    to its yfinance fallback while still returning HTTP 200. And declaring them was **not
+    enough** — both do a bare `import pkg_resources`, which **setuptools deleted in 81.0.0**;
+    a fresh install pulls 83.x while the `.venv` has 80.10.2. Needed a `setuptools<81`
+    ceiling on top.
+  - **Fix: 4 lines**, pinned to what the running env actually has —
+    `python-multipart==0.0.32`, `FinNews==1.1.0`, `tradingview-scraper==0.4.20`,
+    `setuptools<81`.
+  - **STANDING RULE, now written at the top of `requirements.txt`: any dependency change must
+    BOOT THE APP, not just import modules.** An import-only smoke test passed this file twice
+    while the app could not start — every declared package imported fine; the problem was one
+    that was never declared.
+  - **Verified** in a throwaway venv (Python 3.12.8), with `python-multipart` deliberately
+    uninstalled first so the file had to supply it: clean install exit 0, **no crash, exactly
+    one listener** (PID 6180), AAPL → red, `/api/financials` 8 real quarters, `/api/scan`
+    upload 1/1, and **`/api/news` 30 items with zero source failures** (15 Seeking Alpha via
+    FinNews, plus Reuters/TradingView/Dow Jones via tradingview-scraper) — up from 10
+    yfinance-only. **Real `.venv` and running server untouched throughout**, re-verified.
+
 2026-08-07 (later) — **Bank exclusion no longer fires on non-banks; PLXS revenue scale bug
 fixed.** Two fixes with a hard dependency between them. Full detail, distribution table and
 the recorded wrong turns in `bug_report.md`.
