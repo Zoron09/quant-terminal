@@ -377,6 +377,44 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-07 — **Revenue sign gate corrected: it rejected Minervini's own worked example.**
+Second methodology fix confirmed directly against the source material. Full detail and the
+scope table in `bug_report.md`.
+  - **What was wrong.** `_c33_status` ran `if any(r < 0 for r in rev_w): return 'red'` —
+    one negative rate anywhere in the 4-rate window was an instant reject, *before* the
+    acceleration test. Minervini's own qualifying Code 33 revenue sequence
+    (*Trade Like a Stock Market Wizard*, ch. 8) is **−22% → +3% → +16% → +38%**, and his
+    EPS example starts at −34%. The gate threw both out on the first element.
+  - **Never a data guard.** Entered `b565b72` (2026-06-23) citing a "CLAUDE.md §8" that no
+    longer exists; no `bug_report.md` justification ever existed; and `CODE33_SPEC.md`
+    never required it — §1 is a pure ordering condition and §5 explicitly **keeps**
+    sign-flipped rates as `[NM]`. It also created an unexplained asymmetry: margin has no
+    sign gate and correctly accepts `-6.42 → -4.49 → -2.57 → -2.32` (XMTR is GREEN on that).
+  - **The rule shipped is a refinement, not a blanket removal:** only the **newest** rate
+    must be positive (`if rev_w[-1] < 0`). The methodology wants real growth, not less
+    shrinkage — for turnarounds it demands strongly positive current results — and his
+    example *ends* at +38%. A sequence like `-50 → -40 → -30 → -20` accelerates while
+    revenue still falls every quarter, and stays red. Revenue-only; **margin unchanged**;
+    the transition test untouched.
+  - **`utils/code33_adapter.py` only — `code33/` untouched.** `_c33_status` is badge
+    logic; `code33/` is data extraction. Same boundary as the acceleration fix.
+  - **Scope (measured before implementing, full 606):** the gate was short-circuiting
+    **126** tickers whose newest rate is positive; 121 were red on transitions anyway, so
+    it masked a correct answer, and **5 were genuinely wrong**. **59** tickers with a
+    negative newest rate stay red — the population the refinement protects. Zero
+    divergence from blanket removal today.
+  - **Verified:** full 606-payload baseline captured before the edit; **1,596-key byte
+    comparison across 57 tickers, zero violations** (52 controls byte-identical, including
+    12 newest-rate-negative and 13 re-evaluated-still-red); proof the change **cannot**
+    create a red (`newest<0` ⊂ `any<0`, measured 0 across the universe); one listener
+    confirmed (PID 19956); HTTP verified.
+  - **Fresh full scan** (checkpoint archived, `resumed_from: 0`), 606/606: green 6 → **9**,
+    yellow 0 → **1**, red 418 → **415**, insufficient 82 → **81**, banks **100 → 100**.
+    Changes: HELE/ST/INSW/VLO red→green, CSX red→yellow.
+  - **2 further scan changes are NOT from this fix** — `DDOG` (green→red) and `GRDN`
+    (insufficient→red) were already red in the pre-edit baseline; both are data drift from
+    newly-landed quarters.
+
 2026-08-06 (evening) — **Fixed a false diagnostic message; NBN recorded as a dead ticker.**
 Diagnostic accuracy only — **no status and no scored value changed anywhere.** Full detail
 in `bug_report.md`.

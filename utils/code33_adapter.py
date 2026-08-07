@@ -109,10 +109,34 @@ def _c33_status(rev_rates: list, npm_vals: list = None) -> tuple:
     if rev_w is None or npm_w is None:
         return 'insufficient', None, None
 
-    # Negative-RATE gate stays revenue-only, exactly as before. A negative net
-    # margin is not disqualifying: -6.4 -> -4.5 -> -2.6 is margin expansion,
-    # which is the thing being measured. Shrinking revenue is disqualifying.
-    if any(r < 0 for r in rev_w):
+    # Sign gate: only the NEWEST rate has to be positive.
+    #
+    # This used to be `any(r < 0 for r in rev_w)` — one negative rate ANYWHERE in
+    # the window was an instant reject, before the acceleration test ever ran.
+    # That contradicts Minervini's own worked Code 33 example (Trade Like a Stock
+    # Market Wizard, ch. 8 "The Code 33"), whose qualifying revenue sequence is
+    # -22% -> +3% -> +16% -> +38%. It starts negative, and the old gate threw it
+    # out on the first element. His EPS example starts at -34% and fails the same
+    # way. The gate was never a data guard — it entered in b565b72 (2026-06-23)
+    # commented "Rev rates must all be positive (negative = pre-profit /
+    # declining)", citing a CLAUDE.md section that no longer exists, and
+    # CODE33_SPEC.md never required it either (§1 is a pure ordering condition,
+    # and §5 explicitly COMPUTES AND KEEPS sign-flipped rates, merely labelling
+    # them [NM]).
+    #
+    # But the newest rate must still be positive. The book does not spell that
+    # out, yet the methodology points hard at it: it wants real revenue GROWTH,
+    # not merely less shrinkage, and for turnarounds it demands current results be
+    # strongly positive (+100%-ish), not just improving. A sequence like
+    # -50 -> -40 -> -30 -> -20 accelerates on every step while revenue is still
+    # falling year-over-year in every quarter of the window — improvement, not
+    # growth. His own example ends at +38%. So the test is the endpoint, not the
+    # whole window.
+    #
+    # Revenue-only, matching how margin is already treated: margin has NO sign
+    # gate at all, because -6.42 -> -4.49 -> -2.57 -> -2.32 is genuine margin
+    # expansion (XMTR scores GREEN on exactly that). Unchanged here.
+    if rev_w[-1] < 0:
         return 'red', None, None
 
     rev_d, npm_d = _deltas(rev_w), _deltas(npm_w)

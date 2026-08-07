@@ -1941,3 +1941,127 @@ before concluding anything is wrong.
 - **Universe-list maintenance, not an engine problem.** Recorded here so it is not
   re-investigated: the ticker should be dropped from the scan list whenever that list is
   next curated. No matching code was changed.
+
+---
+
+## 2026-08-07 — the revenue sign gate rejected Minervini's own worked example
+
+### `_c33_status` instant-rejected any window containing a negative revenue rate — CLOSED (FIXED 2026-08-07)
+
+- **Severity: signal correctness.** A hard gate ran *before* the acceleration test and
+  threw out the exact setup shape the methodology is built to find.
+- **The gate.** `utils/code33_adapter.py`: `if any(r < 0 for r in rev_w): return 'red'`.
+  One negative rate anywhere in the 4-rate window was an instant reject.
+- **What proves it wrong — the source material, not a judgment call.** Minervini's own
+  worked Code 33 example (*Trade Like a Stock Market Wizard*, ch. 8, "The Code 33") has a
+  qualifying revenue sequence of **-22% → +3% → +16% → +38%**, and his EPS example starts
+  at **-34%**. Both start negative. The old gate rejected them on the first element and
+  never reached the acceleration test. This is a **sign** question settled by a cited
+  example — deliberately NOT the same class as the DELL window-length fix (structural, spec
+  §2.1) or the LQDA magnitude question (statistical, and correctly abandoned). It should
+  not be conflated with either.
+- **The gate was never a data guard.** Traced through git: it entered in `b565b72`
+  (2026-06-23) with the comment *"EPS and Rev rates must all be positive (negative =
+  pre-profit / declining)"*, citing a "CLAUDE.md §8" rule that no longer exists; carried
+  verbatim through the `dc77f59` engine swap; preserved deliberately (and wrongly) by
+  today's `edc3b8f` acceleration fix. Three independent absences confirm there was no
+  data-integrity reason: **no `bug_report.md` entry** ever justified it; it never guarded a
+  named bad-data pattern (the TRT `_to_m()` and ±1000% margin work is separate machinery on
+  different quantities); and **`CODE33_SPEC.md` never required it** — §1's condition is the
+  pure ordering `Q0 > Q-1 > Q-2 > Q-3`, and §5 explicitly **computes and keeps** sign-flipped
+  rates, labelling them `[NM]` rather than rejecting them.
+- **The asymmetry it created.** Margin already had no sign gate at all and correctly
+  accepts `-6.42 → -4.49 → -2.57 → -2.32` (XMTR scores GREEN on exactly that). Revenue was
+  held to a stricter standard for no documented reason.
+
+#### The rule as implemented — a refinement, not a blanket removal
+
+A second round of source-material confirmation established that **blanket removal would
+over-correct**. The book does not explicitly ban a still-negative-throughout sequence, but
+the methodology points hard against it: it requires real revenue **growth**, not merely
+less shrinkage, demands *rapid* growth, and for turnarounds explicitly wants current
+results strongly positive (+100% or better), not just improving. His own example **ends at
++38%**. A sequence like `-50 → -40 → -30 → -20` accelerates on every step while revenue is
+still falling year-over-year in every quarter of the window — improvement, not growth.
+
+So the test is the **endpoint**, not the whole window:
+
+```python
+- if any(r < 0 for r in rev_w):    # rejects Minervini's own example
++ if rev_w[-1] < 0:                # only the NEWEST rate must be positive
+      return 'red', None, None
+```
+
+Revenue-only. **Margin keeps no sign gate**, unchanged. The transition test (each rate
+higher than the last, 3 consecutive times across 4 rates) is untouched — this changes only
+the sign gate.
+
+- **Placement: `utils/code33_adapter.py` only, `code33/` untouched.** `_c33_status` is
+  badge/methodology logic and lives in the adapter; `code33/` is data extraction. Same
+  boundary as the acceleration fix.
+
+#### Scope, measured across the full 606-ticker universe before implementing
+
+```
+tickers with >=1 negative rate in window (blanket gate fires):  185
+  ...newest rate NEGATIVE  -> still correctly red:               59
+  ...newest rate POSITIVE  -> re-evaluated:                     126
+     ...of those, still red on their transitions anyway:        121
+tickers actually changing:                                        5
+tickers where the revised rule differs from blanket REMOVAL:      0
+```
+
+The gate was short-circuiting **126** tickers on an earlier quarter's sign. 121 were red on
+their transitions anyway, so it was masking a correct answer; **5 were genuinely wrong**.
+The **59** with a negative newest rate stay red — the population the refinement protects.
+No all-negative-throughout sequence exists in the universe today, so the refinement costs
+nothing in current coverage while still guarding the case on principle.
+
+#### The 5 changes, with the sequences that explain each
+
+| ticker | before | after | revenue YoY window (oldest → newest) | margin window |
+|---|---|---|---|---|
+| CSX | red | **yellow** | −0.88 → −0.88 → +1.72 → +10.10 | +19.35 → +20.52 → +23.18 → +25.46 |
+| HELE | red | **green** | −10.84 → −8.95 → −3.37 → +8.20 | −121.27 → −71.48 → −16.39 → +8.89 |
+| INSW | red | **green** | −24.00 → −12.79 → +37.65 → +77.47 | +31.51 → +35.92 → +47.60 → +87.92 |
+| ST | red | **green** | −5.17 → +1.12 → +2.58 → +5.00 | −17.44 → +6.89 → +9.32 → +10.31 |
+| VLO | red | **green** | −2.15 → −1.25 → +7.02 → +48.80 | +3.40 → +3.73 → +3.90 → +8.36 |
+
+Every one starts negative, accelerates on all three transitions, and ends positive — the
+Chapter 8 shape exactly. `INSW` (−24% → +77%) is the closest analogue to the book's own
+example. `CSX` lands yellow rather than green because of its flat `−0.88 → −0.88`
+transition (delta exactly 0), the narrow surviving yellow case.
+
+#### Verification
+
+- **Pass 1 before any edit:** full-universe pull capturing complete payloads for all 606
+  tickers plus the scope table above.
+- **Byte-level comparison, 57 tickers / 1,596 keys: ZERO violations.** 52 controls
+  byte-identical on every field; `status` moved only on the 5 predicted tickers. Controls
+  were drawn to hit the exact groups this touches: **12 newest-rate-negative** (all held),
+  **13 re-evaluated-but-still-red** (all unchanged), all current greens, 6 insufficient,
+  4 excluded banks, plus GE / DELL / NVRI / PBT.
+- **Proof the change cannot create a red:** `newest < 0` implies `any < 0`, so the new
+  red-set is a strict **subset** of the old. Measured across all 606: **0 tickers turn
+  non-red into red.**
+- Server tree killed before editing (the documented `--reload` hazard); **exactly one
+  listener confirmed** after restart (PID 19956); fixed code verified live over HTTP
+  (HELE/ST/INSW/VLO green, CSX yellow, AAPL red).
+- **Fresh full 606-ticker scan** (prior checkpoint archived first; `resumed_from: 0`
+  confirmed): 606/606, breaker not tripped, no error.
+
+| status | before | after |
+|---|---|---|
+| green | 6 | **9** |
+| yellow | 0 | **1** |
+| red | 418 | **415** |
+| insufficient | 82 | **81** |
+| excluded_bank | 100 | **100** |
+
+- **7 status changes in the scan, of which only 5 are this fix.** `DDOG` (green→red) and
+  `GRDN` (insufficient→red) are **pre-existing data drift, proven not caused by the change**:
+  both were *already* red in the Pass-1 baseline captured **before** the edit. DDOG's newest
+  margin fell `5.22 → 3.97`, a negative transition from a newly-landed quarter; GRDN gained
+  enough history to become scoreable and lands red on `20.05 → 2.21`. GRDN's `reason`
+  emptying is just normal red-status behaviour. Neither is reachable by a gate that can only
+  ever remove a rejection.
