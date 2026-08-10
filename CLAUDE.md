@@ -363,10 +363,17 @@ that the 2026-08-01 adapter change altered again.
   merger, not a correction. See the 2026-08-09 entry under LAST UPDATED.
   - **Which point sources get flagged (2026-08-09):** `_RESTATEMENT_ELIGIBLE_SOURCES` =
     `("reported", "derived_fy_minus_quarters")`. Derived Q4s were excluded until then on a
-    justification that proved false. **`edgartools` is still excluded and that is a known
-    open gap, not a decision** — `_fill_gaps` builds those points after the flagger has
-    already run, so they are never offered to it. It affects the NEWEST quarters, i.e.
-    inside the scoring window. Deferred, needs its own investigation.
+    justification that proved false. **`edgartools` remains excluded — now a DECISION, not
+    an open gap (closed 2026-08-10).** `_fill_gaps` builds those points after the flagger
+    runs, and moving the flagger would be a structural no-op because it queries the local
+    `num_df` that those quarters are absent from by definition. Measured scope: 5
+    disagreements out of 1,961 points, all on already-excluded banks. See the 2026-08-10
+    entry for the evidence and the tripwire for revisiting.
+  - **The annual mis-tag guard exists on BOTH paths (2026-08-10).**
+    `quarterly_engine._is_annual_mistagged_as_quarter` (vs `num_q4`) and
+    `edgar_fill._is_annual_mistagged_as_quarter` (vs `_ANNUAL_CACHE`) are deliberate
+    mirrors — change one, change the other. Both match on `period_end` and both ignore
+    zero values; both constraints are load-bearing and evidence-backed.
   - **Candidate matching is exact on tag, and guarded against annual mis-tags.** Both are
     load-bearing and evidence-backed — see the 2026-08-09 (later) entry. Do not loosen the
     tag match; do not replace the guard with a magnitude threshold.
@@ -401,6 +408,62 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-10 — **The annual mis-tag guard only protected half the pipeline; now ported to the
+edgartools path. Separately, the edgartools restatement gap is CLOSED as
+investigated-not-built.** Engine fix, **`code33/edgar_fill.py` only**. Full writeup, both
+parts, in `bug_report.md`.
+
+  **PART 1 — guard shipped.** `_is_annual_mistagged_as_quarter` (from `16b2fd0`) tests
+  against `num_q4`, which does not exist on the edgartools path — so `fetch_discrete_quarter`
+  would return a mis-tagged annual figure as the **PRIMARY as-filed value**, not merely a
+  restated one. Two confirmed filer errors at SEC, both ~4x the true quarter and both
+  invisible to the existing SCALE GUARD (which only demotes values *under* 1/100th of
+  magnitude, never ones too *large*):
+  - **DINO** `0001915657-26-000016`: $28,580,000,000 tagged as a 91-day quarter, identical
+    to the 365-day fact in the same filing.
+  - **AZZ** `0000008947-24-000044`: $1,537,589,000 tagged as both a 90-day quarter and the
+    365-day year.
+  - **`_load_facts_df` had to change to make the guard possible.** It applied the 75-100 day
+    filter BEFORE caching, discarding every annual row (DINO: 5,720 raw -> 1,807 quarterly,
+    2,337 annual dropped). The split now happens first, populating a narrow `_ANNUAL_CACHE`
+    from the same already-fetched frame — **no extra network call**.
+  - **Two design points the measurement forced:** `period_end` equality is load-bearing
+    (signature fires **98** times without it, **13** with it — GEO and MGTX were probe
+    false positives, disproved against SEC), and **zero values are excluded deliberately**
+    (6 of the 13 are `value == 0` on pre-revenue filers AMRX/DNTH/LASR, where `0 == 0` is
+    arithmetic not evidence, and rejecting it would risk regressing the pre-revenue
+    bucketing).
+  - **Preventive, not a live defect:** 7 real rows across 6 tickers, **zero currently reach
+    a gap-filled point**. Where the mis-tagged row is the only candidate (DINO, AZZ) the
+    quarter goes unfilled — a gap is honest, a 4x-wrong revenue value is not.
+  - **Verified:** 49-ticker byte-level whole-payload comparison weighted to heavy edgartools
+    users (248 edgartools points), all five statuses — **1,372 keys, 0 diffs, 49/49
+    byte-identical, 0 status changes**. Guard unit-proven rejecting both DINO and AZZ.
+    Single listener (PID 9540), clean boot, HTTP 200 across DINO/AZZ/IDYA/MAGN/AAPL.
+  - **No full 606 scan, deliberately** (same basis as the 2026-08-06 message-only fix): the
+    guard can only ever REMOVE a candidate, the universe-wide census already shows **zero**
+    of the 13 signature rows reaching a filled point, and the sample is byte-identical.
+    Run one if the bulk-dataset lag ever grows enough to push a mis-tagged quarter into a
+    fill window — that is when this guard starts changing output.
+
+  **PART 2 — edgartools restatement gap: INVESTIGATED, NOT BUILT.** Closes the deferred item
+  from `16b2fd0`; same disposition as the LQDA sec-5 guard and the insurer sweep.
+  - **Mechanism confirmed:** `_attach_restatement_flags` runs inside `get_quarterly_series`;
+    `_fill_gaps` constructs `source="edgartools"` points **after** it returns, so they are
+    never offered to it. They then carry a **positive `restated=False` that nothing
+    computed**, which the adapter publishes as `false` in `rev_restated`/`ni_restated`.
+  - **Option A (move the flagger after `_fill_gaps`) is a structural no-op:** the flagger
+    queries the LOCAL `num_df`, and an edgartools point exists precisely because that
+    quarter is absent from it. **1,940 of 1,961 (98.9%) have zero local `qtrs=1` rows**, and
+    the 21 that do all agree — it would catch **zero** real hits.
+  - **Scope, triaged against `data.sec.gov`: 5 disagreements out of 1,961 points, on 3
+    tickers — RBCAA, SHBI, PEBO — all `excluded_bank`, none scored.** All sub-3%.
+  - **Self-limiting by construction:** a restatement needs a LATER filing; by the time one
+    exists the bulk mirror has caught up and the point becomes `reported`, which IS checked.
+    All 5 hits are >400 days old.
+  - **Tripwire for revisiting:** 18 old-backfill points sit on scored tickers and **none
+    disagree** — rebuild the case if any of them ever does, or if the bulk-dataset lag grows.
+
 2026-08-09 (later still) — **A NaN candidate was being accepted as a restatement; IDYA was
 both unserialisable and mis-scored.** Engine fix, **`code33/quarterly_engine.py` only**.
 **Closes the deferred NaN item logged in the entry below.** Full writeup in `bug_report.md`.

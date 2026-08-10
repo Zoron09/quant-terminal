@@ -2797,3 +2797,184 @@ after  : IDYA,insufficient, 0;-100.0;78.4,  57.4;-1502.1;-1269.6, no reported re
 `nan` appeared in the scan output for 1 ticker before and **0 after**. IDYA also now lands
 in a named failure bucket instead of carrying an empty reason — the fix proving itself
 through the scan path, not only the API path.
+
+---
+
+## 2026-08-10 — the annual mis-tag guard reached only half the pipeline
+
+**Commit:** (this change) — `code33/edgar_fill.py` only.
+
+Two separate outcomes in one investigation, deliberately kept apart: a **guard shipped**
+(below), and a **restatement gap investigated and NOT built** (next section).
+
+### PART 1 — annual mis-tag guard ported to the edgartools path (FIXED)
+
+#### What was wrong
+
+`_is_annual_mistagged_as_quarter` shipped in `16b2fd0` protects the **local-dataset** path
+by testing a candidate against `num_q4`. The **edgartools gap-fill** path has no `num_q4`
+and had no equivalent, so `fetch_discrete_quarter` would return a mis-tagged annual figure
+as the **PRIMARY as-filed value** — not merely a restated one.
+
+Two confirmed filer errors at SEC, both verified against `data.sec.gov`:
+
+| ticker | accession | quarterly tag | annual twin | true scale error |
+|---|---|---|---|---|
+| DINO | `0001915657-26-000016` | 2024-10-01..2024-12-31 (91d) $28,580,000,000 | 2024-01-01..2024-12-31 (365d), identical | ~4x |
+| AZZ | `0000008947-24-000044` | 2023-12-01..2024-02-29 (90d) $1,537,589,000 | 2023-03-01..2024-02-29 (365d), identical | ~4x |
+
+**The existing SCALE GUARD cannot catch either.** It only demotes candidates *under*
+1/100th of the series magnitude; an annual figure is several times too *large*.
+
+#### Why it was invisible
+
+Both quarters are currently supplied by the local dataset, so they arrive as
+`derived_fy_minus_quarters` and the `16b2fd0` guard already protects them. The hazard is
+live only when the bulk mirror lags over one of these quarters — the fill path is exactly
+what covers that case. **Preventive, not a live defect: zero mis-tagged rows currently
+reach a gap-filled point.**
+
+#### The fix
+
+`_is_annual_mistagged_as_quarter()` in `edgar_fill.py`, a near-mirror of the
+`quarterly_engine` original with three shape differences: the comparison set is a new
+`_ANNUAL_CACHE` (350-380 day rows) rather than `num_q4` (edgartools has no `qtrs` column);
+identity is `accession`/`concept` rather than `adsh`/`tag`; and a zero value never counts.
+Applied inside the per-tag loop, dropping rows **before** the `filing_date` sort — same
+placement and reasoning as the original: a mis-tagged row is no observation of the quarter
+at all, so a genuine row behind it must still be able to win.
+
+`_load_facts_df` had to change to make this possible at all. It applied the 75-100 day
+filter **before** caching, discarding every annual row (DINO: 5,720 raw -> 1,807 quarterly,
+2,337 annual rows dropped), so the comparison set did not survive to where the guard needs
+it. The split now happens before the quarter-length filter, populating `_ANNUAL_CACHE` from
+the same already-fetched frame — **no extra network call**.
+
+#### Two design points the measurement forced, both evidence-backed
+
+- **`period_end` equality is load-bearing.** Across all 606 tickers the signature fires
+  **98** times without it and **13** with it. The 85 extra are coincidental value matches
+  against a different period. Two of them (GEO, MGTX) I initially reported as real hits and
+  then disproved against SEC — SEC shows no annual row at those period_ends at all. That
+  over-count was a defect in the probe, not in the data.
+- **Zero values are excluded deliberately.** 6 of the 13 are `value == 0` on three
+  pre-revenue filers (AMRX, DNTH, LASR) whose Q4 revenue and full-year revenue are both
+  $0.00. `0 == 0` is arithmetic, not evidence. Rejecting it would push a legitimate $0.00
+  filing into a gap and risk regressing the pre-revenue bucketing, which depends on $0.00
+  filers keeping `value=0.0` (see the 2026-08-01 pre-revenue entry).
+
+Net real population: **7 rows across 6 tickers** — DINO, AZZ (x2), OII, SPB, ZD, PBF — of
+which only DINO and AZZ-2024 sit within ~12 quarters; the rest are 7-13 years old.
+
+#### On returning None
+
+Where the mis-tagged row is the **only** candidate in the window — true for both DINO and
+AZZ — the guard rejects it and `fetch_discrete_quarter` returns `None`, leaving the quarter
+unfilled. That is the correct trade: **a gap is honest, a 4x-wrong revenue value is not**,
+and the pipeline already handles an unfilled quarter as a normal outcome. Verified directly
+that no legitimate alternative row was being rejected in either window.
+
+### PART 2 — edgartools restatement gap: INVESTIGATED, NOT BUILT
+
+Closes the deferred item logged in `16b2fd0`. Same disposition as the LQDA sec-5 guard and
+the insurance-tag sweep: mechanism real, failure mode occurs nowhere that matters, so the
+machinery is deliberately not written.
+
+#### The mechanism, confirmed exactly
+
+```
+get_complete_revenue_series (pipeline.py:181)
+  |- get_quarterly_series
+  |    |- _attach_restatement_flags   <- runs HERE
+  |    |- return points[:quarters]
+  |- _fill_gaps (pipeline.py:116)
+       |- QuarterPoint(source="edgartools")   <- built AFTER
+```
+
+`QuarterPoint` defaults `restated=False` / `restated_value=None`, so edgartools points are
+not merely unchecked — they carry a **positive assertion of "not restated" that nothing
+computed**. `_yoy_value()` and `_restated_basis()` both fall through silently, and
+`code33_adapter` publishes `false` for those quarters in `rev_restated` / `ni_restated`.
+Nothing crashes; the contract is quietly wrong.
+
+#### Why Option A (move the flagger after `_fill_gaps`) is a structural no-op
+
+`_attach_restatement_flags` queries `num_df` — the **local parquet dataset**. An edgartools
+point exists precisely *because that quarter is absent from it*. Measured: of **1,961**
+edgartools points across **548** tickers, **1,940 (98.9%) have zero `qtrs=1` local rows**.
+And the 21 that do have local rows **all agree** — so moving the flagger would add a second
+pass and catch **zero** of the real hits.
+
+#### Scope, triaged against `data.sec.gov`
+
+**5 disagreements out of 1,961 points**, on **3 tickers — RBCAA, SHBI, PEBO — all
+`excluded_bank`, none scored.** All sub-3%: +0.41%, +2.82%, +1.56%, -0.25%, -0.02%. SHBI's
+2023-09-30 even carries a real 10-Q/A. **Live impact: zero.**
+
+#### Why the count is 5 and not larger — self-limiting by construction
+
+A restatement requires a *later* filing. For a freshly-filled newest quarter that filing
+does not exist yet, and by the time it does the bulk mirror has caught up and the point
+becomes `reported`, which **is** checked. So the gap bites only quarters both old enough to
+have been restated and still missing locally. Age distribution: 854 points <=120d, 921 at
+121-210d, 23 at 211-400d, **163 >400d** — and **all 5 hits are >400d**.
+
+#### The tripwire for revisiting
+
+Of the 163 old-backfill points, **18 sit on scored (non-bank) tickers across 10 tickers,
+and zero of them disagree**. Rebuild the case if either changes:
+- any of that scored residue ever shows a real disagreement, or
+- the bulk-dataset lag grows, pushing more points into the >400d bucket.
+
+Option B (detect inside `fetch_discrete_quarter`, where `.iloc[0]` is as-filed and
+`.iloc[-1]` is the later figure — both already in hand) remains the right shape if it is
+ever warranted. It would additionally need the scale guard extended to the `.iloc[-1]` row,
+which today is applied only to the selected candidate: a filer correcting a units error
+between filings — the documented PLXS thousands-vs-dollars class — would otherwise read as
+a 1000x restatement.
+
+#### Verification (guard)
+
+**Byte-level whole-payload comparison, 49 tickers / 1,372 keys, zero tolerance.** Sample
+deliberately weighted toward heavy edgartools users — 248 edgartools-sourced points across
+the 49 — and spanning 7 green / 1 yellow / 28 red / 7 insufficient / 6 excluded_bank, with
+DINO, AZZ and the other four mis-tag tickers (OII, SPB, ZD, PBF) plus AMRX/DNTH/LASR (the
+zero-value cases) all pinned in.
+
+```
+tickers compared      : 49
+keys compared         : 1372
+tickers with any diff : 0
+byte-identical        : 49
+STATUS CHANGES        : 0
+```
+
+**Unit proof of the guard itself**, run directly against both confirmed cases:
+
+```
+DINO 2024-12-31 : RevenueFromContractWithCustomer...Excluding  91d  28,580,000,000  REJECTED
+AZZ  2024-02-29 : RevenueFromContractWithCustomer...Excluding  90d   1,537,589,000  REJECTED
+fetch_discrete_quarter(...) -> None in both cases
+```
+
+Inspected every candidate in both windows: the mis-tagged row is the ONLY one present, so
+nothing legitimate is rejected and the fall-through has nothing to fall through to.
+
+Single listener confirmed (PID 9540), clean boot, zero tracebacks. HTTP verified 200 on
+`/api/ticker` and `/api/financials` for DINO, AZZ, IDYA, MAGN, AAPL.
+
+#### No full 606-ticker scan — reasoning stated explicitly
+
+Deliberately skipped, on the same basis as the 2026-08-06 message-only fix:
+
+1. **The guard can only ever REMOVE a candidate.** It cannot invent, rescale or alter a
+   value, so it has no mechanism to change a quarter that it does not reject.
+2. **Universe-wide measurement already covers all 606 tickers**, not just the sample: of
+   the 13 signature rows, **zero reach a gap-filled point**. The affected set is empty
+   today by measurement, not by inference from a subsample.
+3. **49/49 byte-identical**, including every ticker carrying the signature and the three
+   zero-value filers the guard deliberately spares.
+
+A scan would re-confirm what the signature census already established universe-wide. Run
+one if the bulk-dataset lag ever grows enough to push a mis-tagged quarter into a fill
+window — that is the condition under which this guard starts changing output.

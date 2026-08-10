@@ -34,6 +34,19 @@ MATCH_TOLERANCE_DAYS = 25
 
 _FACTS_CACHE: Dict[str, Optional[pd.DataFrame]] = {}
 
+# Annual-duration rows, kept as a SEPARATE narrow slice alongside _FACTS_CACHE.
+# _load_facts_df filters to 75-100 days before caching, so the quarterly frame
+# cannot answer "is this value also the filer's annual figure?" — the rows needed
+# for that test have already been thrown away by then. Populated in the same pass
+# from the same already-fetched frame: no extra network call, and narrowed to the
+# revenue/NI concepts fetch_discrete_quarter actually selects from, so it stays a
+# small fraction of the raw pull rather than a second full copy.
+_ANNUAL_CACHE: Dict[str, Optional[pd.DataFrame]] = {}
+
+# A fiscal year is ~365 days; the band absorbs 52/53-week calendars and leap years.
+_ANNUAL_MIN_DAYS = 350
+_ANNUAL_MAX_DAYS = 380
+
 
 def _load_facts_df(ticker: str) -> Optional[pd.DataFrame]:
     """All duration-type facts for ticker as one dataframe, cached per process."""
@@ -50,10 +63,12 @@ def _load_facts_df(ticker: str) -> Optional[pd.DataFrame]:
     except Exception as exc:
         log.warning("edgar_fill: facts pull failed for %s: %s", ticker, exc)
         _FACTS_CACHE[ticker] = None
+        _ANNUAL_CACHE[ticker] = None
         return None
 
     if df is None or df.empty:
         _FACTS_CACHE[ticker] = None
+        _ANNUAL_CACHE[ticker] = None
         return None
 
     df = df.copy()
@@ -62,8 +77,16 @@ def _load_facts_df(ticker: str) -> Optional[pd.DataFrame]:
     df["filing_date"] = pd.to_datetime(df["filing_date"], errors="coerce")
     df = df.dropna(subset=["period_start", "period_end", "numeric_value"])
     df["_days"] = (df["period_end"] - df["period_start"]).dt.days
-    df = df[(df["_days"] >= _QUARTER_MIN_DAYS) & (df["_days"] <= _QUARTER_MAX_DAYS)]
     df = df[df["form_type"].isin(["10-Q", "10-K"])]
+
+    # Split BEFORE the quarter-length filter — the annual rows are the comparison
+    # set the mis-tag guard needs, and this is the only point at which both are
+    # still in hand.
+    _ANNUAL_CACHE[ticker] = df[
+        (df["_days"] >= _ANNUAL_MIN_DAYS) & (df["_days"] <= _ANNUAL_MAX_DAYS)
+    ]
+
+    df = df[(df["_days"] >= _QUARTER_MIN_DAYS) & (df["_days"] <= _QUARTER_MAX_DAYS)]
     _FACTS_CACHE[ticker] = df
     return df
 
@@ -191,6 +214,59 @@ def has_xbrl_quarterly_facts(ticker: str) -> bool:
     return df is not None and not df.empty
 
 
+def _is_annual_mistagged_as_quarter(row, annual: pd.DataFrame) -> bool:
+    """True when a candidate 'quarterly' row is really the filer's ANNUAL figure
+    wearing a quarter-length period.
+
+    Near-mirror of `quarterly_engine._is_annual_mistagged_as_quarter`, adapted to
+    this data source. Same principle, three shape differences:
+      - the comparison set is `_ANNUAL_CACHE` (350-380 day rows) rather than
+        `num_q4`, because edgartools has no `qtrs` column;
+      - identity is `accession` rather than `adsh`, and concept rather than tag;
+      - a ZERO value never counts (see below).
+
+    Real defect at SEC, not hypothetical, and it reaches the PRIMARY as-filed value
+    on this path — not merely a restated one. Two confirmed cases:
+      - DINO's FY2025 10-K tags $28,580,000,000 for 2024-10-01..2024-12-31 as a
+        91-day quarter, bit-identical to the 365-day fact in the SAME filing.
+      - AZZ's FY2024 10-K tags $1,537,589,000 as both a 90-day quarter
+        (2023-12-01..2024-02-29) and the 365-day year, ~4x its true Q4.
+    The existing SCALE GUARD cannot catch either: it only demotes candidates UNDER
+    1/100th of series magnitude, and an annual figure is several times too LARGE.
+
+    A fiscal year ends on the same date as its own Q4, so the annual fact shares the
+    quarter's period_end — matching on it is what separates a real mis-tag from a
+    coincidence. Measured across all 606 tickers: WITHOUT the period_end match the
+    signature fires 98 times; WITH it, 13. That constraint is load-bearing, not
+    decoration.
+
+    ZERO IS EXCLUDED DELIBERATELY. 6 of those 13 are `value == 0` on three
+    pre-revenue filers (AMRX, DNTH, LASR) whose Q4 revenue and full-year revenue are
+    both $0.00. That is arithmetic, not evidence: a 0 == 0 match says nothing about
+    mis-tagging, and rejecting it would push a legitimate $0.00 filing into a gap and
+    risk regressing the pre-revenue bucketing (which depends on $0.00 filers keeping
+    value=0.0 — see the 2026-08-01 pre-revenue entry in bug_report.md).
+
+    Net real population: 7 rows across 6 tickers (DINO, AZZ x2, OII, SPB, ZD, PBF),
+    of which only DINO and AZZ-2024 are within ~12 quarters. ZERO of them currently
+    reach a gap-filled point, so this is preventive: it protects the primary value
+    if the bulk dataset ever lags over one of these quarters.
+
+    Exact value equality, deliberately NOT a magnitude ratio — the same discipline as
+    the +/-1000% margin guard lesson: a threshold cannot separate a mis-tag from a
+    real corporate action.
+    """
+    value = row["numeric_value"]
+    if value == 0 or pd.isna(value):
+        return False
+    twin = annual[
+        (annual["accession"] == row["accession"])
+        & (annual["concept"] == row["concept"])
+        & (annual["period_end"] == row["period_end"])
+    ]
+    return bool((twin["numeric_value"] == value).any())
+
+
 def fetch_discrete_quarter(
     ticker: str,
     target_end: date,
@@ -217,6 +293,7 @@ def fetch_discrete_quarter(
     df = _load_facts_df(ticker)
     if df is None or df.empty:
         return None
+    annual = _ANNUAL_CACHE.get(ticker)
 
     lo = pd.Timestamp(target_end - timedelta(days=MATCH_TOLERANCE_DAYS))
     hi = pd.Timestamp(target_end + timedelta(days=MATCH_TOLERANCE_DAYS))
@@ -228,6 +305,19 @@ def fetch_discrete_quarter(
         tag_rows = window[window["concept"] == f"us-gaap:{tag}"]
         if tag_rows.empty:
             continue
+
+        # ANNUAL MIS-TAG GUARD. Near-mirror of quarterly_engine's
+        # _is_annual_mistagged_as_quarter, adapted to this source's shape. Dropped
+        # BEFORE the filing_date sort, exactly as that guard filters candidates
+        # before picking the latest: a mis-tagged row is not a weaker observation
+        # of the quarter, it is no observation of it at all, so a genuine row
+        # behind it must still be able to win.
+        if annual is not None and not annual.empty:
+            tag_rows = tag_rows[~tag_rows.apply(
+                lambda r: _is_annual_mistagged_as_quarter(r, annual), axis=1)]
+            if tag_rows.empty:
+                continue
+
         row = tag_rows.sort_values("filing_date").iloc[0]
 
         # SCALE GUARD. Filers sometimes tag one concept in thousands while tagging
