@@ -42,6 +42,36 @@ def get_quarterly_net_income_series(cik: int, quarters: int = 8) -> QuarterlyRev
     return get_quarterly_series(cik, NI_TAGS, _is_implausible_net_income, quarters)
 
 
+def _restated_basis(point) -> Optional[float]:
+    """The value to CALCULATE with, which is not always the value to DISPLAY.
+
+    Mirrors utils/code33_adapter._yoy_value() exactly, and for the same reason.
+    When a later filing republishes a quarter — a restatement, or a spinoff or
+    acquisition changing what the company consolidates — the engine keeps serving
+    the as-first-filed figure, but the filer's own recast figure is the one that
+    describes what actually happened.
+
+    Revenue YoY has used this basis since the GE fix (2026-08-02); net margin did
+    not, so the two legs of the same signal ran on different bases. Both legs of
+    the ratio use it now: NI and revenue alike.
+
+    Note the ratio itself was never internally incoherent — numerator and
+    denominator always came from the same filing. The problem is one level up, in
+    the acceleration test: a since-corrected quarter sitting next to never-revised
+    neighbours makes a transition that is partly artifact. Measured across all 606
+    tickers before this change: 25 carry a restated NI in the displayed window, 20
+    of their margin series actually move, and ZERO statuses change — so this is a
+    latent correctness gap being closed, not an active scoring bug. Placement here
+    rather than in the adapter follows where the computation lives: the margin is
+    computed in this module, exactly as the YoY is computed in the adapter.
+    """
+    if point is None:
+        return None
+    if point.restated and point.restated_value is not None:
+        return point.restated_value
+    return point.value
+
+
 def pair_margin_series(
     revenue_series: QuarterlyRevenueSeries,
     ni_series: QuarterlyRevenueSeries,
@@ -85,12 +115,23 @@ def pair_margin_series(
     points: List[MarginPoint] = []
     for period_end, rp, nip in pairs:
 
+        # DISPLAY values — always as-first-filed. These are what MarginPoint
+        # carries out to the API as `net_income` / `revenue`, and they must not
+        # change: the payload's ni/rev arrays are the as-filed record, with
+        # ni_restated / ni_restated_value / revenue_restated /
+        # revenue_restated_value alongside to say where a filer revised itself.
         revenue_value = rp.value if rp is not None else None
         ni_value = nip.value if nip is not None else None
 
+        # CALCULATION basis — the filer's own recast figure when it published
+        # one, on BOTH legs. Deliberately separate locals from the display values
+        # above; reusing those would have silently rewritten the as-filed arrays.
+        revenue_basis = _restated_basis(rp)
+        ni_basis = _restated_basis(nip)
+
         margin: Optional[float] = None
-        if revenue_value is not None and ni_value is not None and revenue_value != 0:
-            margin = round(ni_value / revenue_value * 100, 2)
+        if revenue_basis is not None and ni_basis is not None and revenue_basis != 0:
+            margin = round(ni_basis / revenue_basis * 100, 2)
 
         fy = rp.fy if rp is not None else (nip.fy if nip is not None else None)
         fp = rp.fp if rp is not None else (nip.fp if nip is not None else None)

@@ -2315,3 +2315,93 @@ declare, and the failure only materialises when FastAPI builds a route. **An imp
 smoke test cannot detect a missing runtime dependency of the framework itself.** The bar is
 now written into the file: create a fresh venv, install from it, start the server, hit a real
 endpoint. It passed the import test twice while the app could not start.
+
+---
+
+## 2026-08-09 — net margin ran on a different basis than revenue YoY
+
+**Commit:** (this change) — `code33/net_margin.py` only.
+
+### What was wrong
+
+`pair_margin_series()` computed `margin = ni_value / revenue_value` from the
+**as-first-filed** figures on both legs, while `utils/code33_adapter.py::_yoy_value()`
+had been computing revenue YoY on the filer's own **recast** basis since the GE fix
+(2026-08-02, see "corporate actions inside a single CIK" above). So the two legs of the
+same Code 33 signal ran on two different bases.
+
+The ratio itself was never internally incoherent — numerator and denominator always came
+from the same filing. The defect is one level up, in the **acceleration test**: a
+since-corrected quarter sitting next to never-revised neighbours makes a transition that
+is partly artifact.
+
+### The fix
+
+New `_restated_basis(point)` in `code33/net_margin.py`, mirroring `_yoy_value()` exactly
+and for the same reason. Applied to **both** legs — NI and revenue alike.
+
+**Display values are deliberately untouched.** `MarginPoint.net_income` / `.revenue` still
+carry the as-filed record out to the API, with `ni_restated` / `ni_restated_value` /
+`revenue_restated` / `revenue_restated_value` alongside to say where a filer revised
+itself. The calculation basis is held in separate locals (`revenue_basis` / `ni_basis`)
+precisely so reusing the display locals could not silently rewrite the as-filed arrays.
+
+Placement in `net_margin.py` rather than the adapter follows where the computation lives:
+the margin is computed in this module, exactly as the YoY is computed in the adapter.
+
+### Scope, measured before implementing (full 606)
+
+25 tickers carry a restated NI in the displayed window, 20 of their margin series actually
+move, and **ZERO statuses change**. This is a latent correctness gap being closed, not an
+active scoring bug.
+
+### MAGN — the one apparent deviation, and why it is NOT a data error
+
+Two tickers deviated from the original prediction. Both were prediction errors, not code
+errors. The second, MAGN, was checked independently against `data.sec.gov` raw XBRL
+(bypassing secfsdstools and edgartools entirely) because a ~69% revenue correction is
+unusual enough to demand a named cause.
+
+| | period | value | source filing |
+|---|---|---|---|
+| Original | 2024-04-01 → 2024-06-30 | **$329,443,000** | 10-Q filed 2024-08-08, FY2024 Q2, accn `0000041719-24-000032` |
+| Later | 2024-03-31 → 2024-06-29 | **$556,000,000** | 10-Q filed 2025-08-06, FY2025 Q3, accn `0001140361-25-029147` |
+
+Both on `RevenueFromContractWithCustomerIncludingAssessedTax`, `qtrs=1`. The engine's
+`rev_restated_value` is **556,000,000 exactly** — dollar-for-dollar against SEC. NI is the
+same shape: as-filed −$16,279,000, later +$19,000,000, engine `ni_restated_value` =
+19,000,000. Margin = 19,000,000 / 556,000,000 = **3.42%**, which is what the fix produces.
+The originally mis-predicted 5.77% was 19M / 329.443M — restated NI over as-filed revenue,
+i.e. the mixed basis this fix exists to eliminate.
+
+**There is no 69% restatement. It is a reverse merger.** Magnera's own 10-Q states it:
+
+> "On November 4, 2024 … Treasure Holdco, Inc. ('Treasure'), which was a wholly owned
+> subsidiary of Berry Global Group, Inc. … completed its merger with the Glatfelter
+> Corporation which concurrently changed its name to Magnera Corporation. As a result,
+> pre-Transaction Treasure shareholders received shares of Magnera representing 90% of the
+> combined company and GLT shareholders retained 10%. **As Treasure was identified as the
+> accounting acquirer, the prior year presentation represents standalone Treasure
+> results** with the acquisition method of accounting being applied to the assets acquired
+> and liabilities assumed of GLT."
+
+CIK 41719 confirms it: `formerNames` = Glatfelter Corp until 2024-11-04, and
+`fiscalYearEnd` changed 12/31 → **09/26** (Berry's 52/53-week calendar), which is why the
+later period ends 2024-06-**29** rather than at calendar quarter-end.
+
+So $329M is Glatfelter's Q2 2024 and $556M is Treasure's fiscal Q3 2024 — **two different
+reporting entities over near-identical 90-day windows. Neither figure corrects the other.**
+
+The two are paired because `_attach_restatement_flags` matches on exact `ddate`, and
+DERA's data sets round period end to the nearest month-end, so 2024-06-29 and 2024-06-30
+both become `20240630`. Same tag, same `qtrs=1`, different `adsh`, latest-filed wins.
+
+**Conclusion: the value is accurate and there is no upstream data issue.** What is
+imprecise is the vocabulary — `restated` here means "a later filing published a different
+figure for this ddate", and in MAGN's case that different figure belongs to a different
+company. Worth knowing when reading the flag; not a defect in the number.
+
+### Verified
+
+Full 606-ticker byte comparison passed; MAGN confirmed dollar-exact against SEC as above;
+zero unexplained status changes. Single listener confirmed before testing.

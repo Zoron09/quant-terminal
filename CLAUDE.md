@@ -353,6 +353,14 @@ that the 2026-08-01 adapter change altered again.
   - **`_MIN_RATES = 3` is deliberately NOT raised to 4.** It gates scoreability only;
     raising it would move short-history tickers red → insufficient, changing the failure
     taxonomy rather than the acceleration check. A 3-rate ticker still cannot go green.
+- **Restatement basis — BOTH legs, as of 2026-08-09.** When a filer republishes a quarter,
+  revenue YoY (`_yoy_value()` in the adapter, since 2026-08-02) **and** net margin
+  (`_restated_basis()` in `code33/net_margin.py`, since 2026-08-09) both compute on the
+  recast figure. Displayed `rev` / `ni` / `npm` inputs stay as-filed; only the comparison
+  basis moves. The two helpers are deliberate mirrors — change one, change the other.
+  **Known vocabulary caveat:** `restated` means "a later filing published a different
+  figure for this `ddate`", which on MAGN is a different *entity's* figure after a reverse
+  merger, not a correction. See the 2026-08-09 entry under LAST UPDATED.
 - **EPS:** still out of scope entirely. Raw `'ni'` is NO LONGER empty as of
   2026-08-01 — it carries real per-quarter net income, alongside new
   `rev_sources`/`ni_sources` and `ni_restated`/`ni_restated_value`. All EPS
@@ -384,6 +392,36 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-09 — **Net margin now computes on the filer's recast basis, same as revenue YoY.**
+Engine fix, **`code33/net_margin.py` only**. Full writeup in `bug_report.md`.
+  - **What was wrong.** `pair_margin_series()` computed the margin from as-first-filed
+    figures on both legs, while `_yoy_value()` in the adapter had computed revenue YoY on
+    the filer's own recast basis since the GE fix (2026-08-02). Two legs of one signal, two
+    different bases. The ratio was never internally incoherent — numerator and denominator
+    always came from the same filing — but the **acceleration test** one level up saw a
+    since-corrected quarter sitting next to never-revised neighbours, making a transition
+    that is partly artifact.
+  - **Fix:** new `_restated_basis(point)`, mirroring `_yoy_value()` exactly, applied to
+    **both** legs. Display values deliberately unchanged — `MarginPoint.net_income` /
+    `.revenue` still carry the as-filed record, with the four `*_restated*` fields
+    alongside. Calculation basis lives in separate locals so reusing the display ones
+    could not silently rewrite the as-filed arrays.
+  - **Scope, measured before implementing (full 606):** 25 tickers carry a restated NI in
+    the displayed window, 20 margin series actually move, **ZERO statuses change**. A
+    latent correctness gap closed, not an active scoring bug.
+  - **MAGN's ~69% "restatement" is a reverse merger, not a data error.** Verified against
+    raw `data.sec.gov` XBRL, bypassing secfsdstools/edgartools: as-filed $329,443,000
+    (Glatfelter 10-Q, 2024-04-01→2024-06-30) vs $556,000,000 (Magnera 10-Q filed
+    2025-08-06, 2024-03-31→2024-06-29). Engine `rev_restated_value` = **556,000,000
+    exactly**. Treasure Holdco (Berry's health/hygiene/specialties nonwovens business) was
+    the **accounting acquirer** in the 2024-11-04 Reverse Morris Trust; CIK 41719's
+    `formerNames` shows Glatfelter → Magnera and `fiscalYearEnd` moved 12/31 → 09/26. So
+    the two figures are **different reporting entities over near-identical windows —
+    neither corrects the other.** They pair because DERA rounds `ddate` to month-end, so
+    06-29 and 06-30 collide. Value accurate; only the word "restated" is imprecise.
+  - **Verified:** full 606-ticker byte comparison passed, zero unexplained status changes,
+    single listener confirmed before testing.
+
 2026-08-07 (evening) — **The app could not boot from `requirements.txt`. Fixed.** Packaging
 only, no engine change. Full detail in `bug_report.md`.
   - **Hard boot failure on any clean install:** `RuntimeError: Form data requires
