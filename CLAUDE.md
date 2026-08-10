@@ -401,6 +401,46 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-09 (later still) — **A NaN candidate was being accepted as a restatement; IDYA was
+both unserialisable and mis-scored.** Engine fix, **`code33/quarterly_engine.py` only**.
+**Closes the deferred NaN item logged in the entry below.** Full writeup in `bug_report.md`.
+  - **What was wrong.** `pd.to_numeric(..., errors="coerce")` turns any unparseable figure
+    into NaN. `_attach_restatement_flags` then tested `restated_value != point.value` —
+    and **NaN != anything is True, including NaN != NaN** — so a NaN candidate silently
+    satisfied "differs from the point's own value" and was stored as `restated=True` with
+    `restated_value=NaN`. `_yoy_value()` and `_restated_basis()` accepted it because both
+    test `is not None`, and NaN is not None.
+  - **It was TWO defects, not one.** (1) The payload could not be serialised at all:
+    `/api/ticker/IDYA` returned **HTTP 500**, `/api/financials/IDYA` returned **HTTP 200
+    carrying an error body** — the worse of the two, since a caller checking status codes
+    sees success. (2) **The NaN was also scored as a real rate.** `_c33_status`'s
+    `_window()` filters on `x is not None`, so NaN counted toward `_MIN_RATES = 3` and
+    IDYA was ranked **red off two phantom rates** — the scan CSV literally recorded
+    `IDYA,red,nan;78.4;nan,...`. The serialisation failure was hiding the mis-scoring.
+  - **Fix:** `_is_unusable_candidate_value()` using `math.isnan` **explicitly** rather than
+    leaving it to the `!=` comparison that caused this, applied to candidates **before**
+    the latest-filed sort (same placement and reasoning as the annual-mistag guard).
+  - **Scope, measured across all 606 BEFORE implementing: exactly 1 point** — IDYA revenue
+    2024-09-30 — out of **12,010 candidate sets / 19,215 eligible points**, with **0 latent
+    cases** (no NaN candidate anywhere currently loses the sort and could surface later) and
+    **`POINT_VALUE_NAN: 0`**, confirming `_best_tag_value`'s `pd.notna` and `edgar_fill`'s
+    `dropna` already hold. Derived points are **not** a second entry path for a NaN
+    `.value` (their derivation is arithmetic over `_best_tag_value` output) but **are**
+    equally exposed on the `restated_value` side, so one candidate-level guard covers both.
+  - **Verified:** 34-ticker byte comparison (all five statuses), **952 keys — 1 changed
+    (IDYA), 0 non-IDYA movement, 33 byte-identical**; NaN sweep **before: IDYA in 3 arrays,
+    after: none anywhere**. Both endpoints confirmed fixed live — 500 → **200**, error-body
+    → **8 real quarters**, both passing a strict JSON parser rigged to reject non-standard
+    tokens. IDYA's former NaN slots resolve **correctly**, not merely vanish: -100.0% where
+    revenue is 0.0 against a positive base, `null` where the base itself is 0.0.
+  - **Fresh full scan** (checkpoint archived, `resumed_from: 0`), 606/606: red **419 →
+    418**, insufficient **81 → 82**, green **9 → 9**, yellow **1 → 1**, banks **96 → 96**.
+    **Exactly one status change and one value mover, both IDYA** (`red` → `insufficient`,
+    now with the real bucket `no reported revenue (pre-revenue company)`); zero drift this
+    run. `nan` in scan output: 1 ticker before, **0 after**. A full scan was run
+    deliberately — the earlier "1-point scope makes a scan unnecessary" judgement stopped
+    holding the moment a status moved.
+
 2026-08-09 (later) — **Restatement detection was skipping every derived Q4.** Engine fix,
 **`code33/quarterly_engine.py` only**, stacked on the margin fix below. Full writeup,
 scope table and the deferred items in `bug_report.md`.
@@ -459,10 +499,11 @@ scope table and the deferred items in `bug_report.md`.
     `_fill_gaps` builds those points AFTER `get_quarterly_series` has already run the
     flagger, so they are never offered to it; fixing it means moving the flagger, not
     adding a source string, and it hits the NEWEST quarters, i.e. inside the window.
-    (2) **A NaN `restated_value` breaks `/api/financials` for IDYA** — returns
-    `{"error":"Out of range float values are not JSON compliant: nan"}`. **Pre-existing,
-    dating to the GE fix (2026-08-02)**, proven by reconstructing `b53835d` behaviour in
-    memory; exactly 1 point universe-wide out of 14,955.
+    (2) ~~**A NaN `restated_value` breaks `/api/financials` for IDYA**~~ — **CLOSED, FIXED
+    2026-08-09, see the entry above.** It was worse than logged here: `/api/ticker` returned
+    HTTP 500 (not just `/api/financials`), and the NaN was additionally being counted as a
+    valid rate by `_c33_status`, mis-scoring IDYA as `red`. Pre-existing since the GE fix
+    (2026-08-02), exactly 1 point universe-wide.
 
 2026-08-09 — **Net margin now computes on the filer's recast basis, same as revenue YoY.**
 Engine fix, **`code33/net_margin.py` only**. Full writeup in `bug_report.md`.

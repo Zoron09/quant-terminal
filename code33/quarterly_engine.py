@@ -5,6 +5,7 @@ which some companies tag inconsistently between their 10-K and its own 10-Qs), a
 plausibility flagging. Domain modules (revenue.py, net_margin.py) supply their own
 tag priority list and plausibility rule; everything else here is tag-agnostic.
 """
+import math
 import os
 from collections import defaultdict
 from datetime import date, timedelta
@@ -157,6 +158,37 @@ def _attach_plausibility(
 _RESTATEMENT_ELIGIBLE_SOURCES = ("reported", "derived_fy_minus_quarters")
 
 
+def _is_unusable_candidate_value(value) -> bool:
+    """True when a candidate row carries no usable number.
+
+    `get_quarterly_series` runs `pd.to_numeric(..., errors="coerce")` over the value
+    column, so anything unparseable becomes NaN. A NaN here means "this row had no
+    readable figure" — not "this figure is zero".
+
+    Tested with `math.isnan` rather than left to the `restated_value != point.value`
+    comparison below, because that comparison is precisely what let this through:
+    NaN != anything is True, including NaN != NaN. So a NaN candidate silently
+    satisfied "differs from the point's own value" and was recorded as a restatement
+    with `restated_value=NaN`. `_yoy_value()` and `_restated_basis()` then accepted it,
+    since both test `is not None` and NaN is not None. The NaN reached `rev_yoy` and
+    `npm` and made the whole payload unserialisable: `/api/ticker/IDYA` returned
+    HTTP 500 and `/api/financials/IDYA` returned HTTP 200 carrying
+    {"error": "Out of range float values are not JSON compliant: nan"}.
+
+    Same principle as the `point.value is None` / `point.tag is None` guards above: a
+    missing input is not evidence of a restatement.
+
+    Scope when fixed, measured across all 606 tickers: ONE candidate set — IDYA
+    revenue 2024-09-30, whose sole candidate (adsh 0001193125-25-264632) is NaN —
+    out of 12,010 candidate sets and 19,215 eligible points. Zero latent cases (no
+    NaN candidate anywhere currently LOSES the latest-filed sort and could surface
+    later), and zero points whose own `.value` is NaN, confirming the other readers
+    of this column (`_best_tag_value`'s `pd.notna`, `edgar_fill`'s `dropna`) already
+    hold.
+    """
+    return value is None or (isinstance(value, float) and math.isnan(value))
+
+
 def _is_annual_mistagged_as_quarter(row, num_q4: pd.DataFrame) -> bool:
     """True when a candidate 'quarterly' row is really the filer's ANNUAL figure wearing a
     90-day period.
@@ -234,9 +266,14 @@ def _attach_restatement_flags(
         if candidates.empty:
             continue
 
-        # Drop mis-tagged annual figures BEFORE picking the latest, not after: such a row
-        # is not a weaker observation, it is not an observation of this quarter at all, so
-        # a genuine earlier restatement behind it must still be able to win.
+        # Drop unreadable and mis-tagged rows BEFORE picking the latest, not after:
+        # neither is a weaker observation of this quarter, neither is an observation of
+        # it at all, so a genuine earlier restatement behind them must still be able to
+        # win.
+        candidates = candidates[~candidates["value"].map(_is_unusable_candidate_value)]
+        if candidates.empty:
+            continue
+
         candidates = candidates[~candidates.apply(
             lambda r: _is_annual_mistagged_as_quarter(r, num_q4), axis=1)]
         if candidates.empty:

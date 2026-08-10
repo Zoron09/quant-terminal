@@ -2609,7 +2609,13 @@ quarters — the ones inside the scoring window** — which makes it higher-risk
 derived-Q4 gap this entry closes. Needs its own investigation.
 
 **2. A NaN `restated_value` breaks `/api/financials` for IDYA. PRE-EXISTING, not caused by
-either of today's fixes.** A candidate row can carry `value = NaN`; `float(NaN) != point.value`
+either of today's fixes.** — **CLOSED, FIXED same day; see "a NaN candidate was accepted as
+a restatement, breaking IDYA outright" below.** Two things logged here turned out to
+understate it: `/api/ticker` returned HTTP **500** as well, and the NaN was additionally
+being counted as a valid rate by `_c33_status`, mis-scoring IDYA as `red` when it is
+`insufficient`. Original note kept below as written.
+
+A candidate row can carry `value = NaN`; `float(NaN) != point.value`
 is True, so `restated=True` with `restated_value=NaN`, and `_yoy_value()` returns it
 because `NaN is not None`. Result: `rev_yoy` carries NaN and the endpoint returns
 `{"error":"Out of range float values are not JSON compliant: nan"}` instead of data.
@@ -2623,3 +2629,171 @@ because `NaN is not None`. Result: `rev_yoy` carries NaN and the endpoint return
 - Likely fix is a `math.isnan` reject in the candidate walk, alongside the annual-mistag
   guard. Deliberately NOT bundled here: it is a different defect with its own blast radius,
   and this change is already at the edge of one commit's worth of verification.
+
+---
+
+## 2026-08-09 — a NaN candidate was accepted as a restatement, breaking IDYA outright
+
+**Commit:** (this change) — `code33/quarterly_engine.py` only. **Closes the deferred item
+logged in the derived-Q4 entry above.**
+
+### What was wrong
+
+`get_quarterly_series` runs `pd.to_numeric(num_df["value"], errors="coerce")`, so any
+unparseable figure becomes NaN. `_attach_restatement_flags` then did:
+
+```python
+restated_value = float(latest_row["value"])
+if restated_value != point.value:
+```
+
+**NaN != anything is True, including NaN != NaN.** So a NaN candidate silently satisfied
+"differs from the point's own value" and was recorded as `restated=True` with
+`restated_value=NaN`. `_yoy_value()` and `_restated_basis()` then accepted it, because both
+test `is not None` — and NaN is not None.
+
+### It was two defects, not one
+
+**1. The payload could not be serialised at all.** Both endpoints were broken for IDYA:
+
+```
+/api/ticker/IDYA      http=500  {"error":"Out of range float values are not JSON compliant: nan"}
+/api/financials/IDYA  http=200  {"error":"Out of range float values are not JSON compliant: nan"}
+```
+
+`/api/financials` is the worse of the two — HTTP **200** with an error body, so a caller
+checking status codes sees success.
+
+**2. The NaN was also scored as a real rate, and mis-ranked the ticker.** This is the part
+the serialisation failure was hiding. `_c33_status`'s `_window()` filters on
+`x is not None`, and **NaN is not None**, so a NaN counted toward `_MIN_RATES = 3`. The
+scan checkpoint recorded it literally:
+
+```
+IDYA,red,nan;78.4;nan,57.4;-1502.1;-1269.6,
+```
+
+IDYA was scored **red** off a window of two phantom rates. With the NaN gone it has only
+2 real YoY rates, is correctly **not scoreable**, and returns `insufficient` with a real
+`excluded_reason` ("no reported revenue in 6 of 12 quarters — net margin and YoY are
+undefined against a zero base"). IDYA is IDEAYA Biosciences, pre-revenue in most of the
+window, so `insufficient` is the right answer and `red` never was.
+
+### The fix
+
+New `_is_unusable_candidate_value()` using `math.isnan` **explicitly**, rather than leaving
+it to the `!=` comparison — that comparison is the exact mechanism that let this through.
+Applied to candidates **before** the latest-filed sort, immediately ahead of the
+annual-mistag guard and for the same reason: an unreadable row is not a weaker observation
+of the quarter, it is no observation at all, so a genuine earlier restatement behind it
+must still be able to win.
+
+Same principle as the `point.value is None` / `point.tag is None` guards already there: a
+missing input is not evidence of a restatement.
+
+### Scope — measured across all 606 tickers BEFORE implementing
+
+```
+points checked           : 19,215   (both eligible sources, both metrics)
+candidate sets examined  : 12,010
+POINT_VALUE_NAN          : 0        <- no point's own .value can be NaN
+NaN candidate sets       : 1
+  NaN wins sort (live)   : 1
+  NaN loses sort (latent): 0
+  by source              : reported
+```
+
+The single case: **IDYA / revenue / 2024-09-30**, `point_value = 0.0`, whose sole candidate
+(adsh `0001193125-25-264632`) is NaN.
+
+**Zero latent cases** — there is no NaN candidate anywhere that currently loses the
+latest-filed sort and would surface when a newer filing lands. That was the specific risk
+worth measuring, since a losing candidate is invisible today.
+
+**This is the only path a NaN can enter.** Confirmed by reading every consumer of the
+coerced value column and then proven empirically by `POINT_VALUE_NAN: 0`:
+
+| consumer | guard | safe? |
+|---|---|---|
+| `_best_tag_value` | `pd.notna(...)` before returning | yes — `point.value` can never be NaN |
+| derived Q4 (`fy_value - sum(q_values)`) | operands come from `_best_tag_value` | yes — arithmetic on NaN-free inputs |
+| `edgar_fill._facts` | `dropna(subset=[..., "numeric_value"])` | yes |
+| `_attach_plausibility` | reads `point.value` only | yes, transitively |
+| `_attach_restatement_flags` | **none** | **no — the hole** |
+
+**On derived points specifically** (worth stating, since they became eligible for
+restatement detection in the commit above): they are **not** a second entry path for a NaN
+`point.value`, because the derivation is arithmetic over `_best_tag_value` output. They
+*are* equally exposed on the `restated_value` side, through the same unguarded
+`float(latest_row["value"])`, so one guard at the candidate level covers both sources.
+
+### Verification
+
+**Byte-level comparison, 34 tickers / 952 keys, zero tolerance.** Sample spans 8 green /
+1 yellow / 9 red / 5 insufficient / 4 excluded_bank plus IDYA, DINO, MAGN, PAG, AAPL, GE,
+JNJ. Baseline captured at `16b2fd0` with a clean engine tree.
+
+```
+tickers compared      : 34
+keys compared         : 952
+tickers with any diff : 1  ['IDYA']
+  non-IDYA            : 0            <- zero unexplained movement
+byte-identical        : 33
+NaN sweep before      : IDYA {npm:[1], rev_restated_value:[4], rev_yoy:[3,5]}
+NaN sweep after       : no NaN anywhere
+```
+
+**IDYA before → after**, and every change traces to removing the phantom restatement:
+
+| field | before | after |
+|---|---|---|
+| `rev_yoy` | `[…, NaN, 78.43, NaN, …]` | `[…, -100.0, 78.43, null, …]` |
+| `npm` | `[-865.54, NaN, -1861.6, …]` | `[-865.54, -1861.6, …]` |
+| `rev_restated` | one `true` | all `false` |
+| `rev_restated_value` | one `NaN` | all `null` |
+| `status` | `red` | `insufficient` |
+| `excluded_reason` | `""` | real diagnosis |
+
+The two former NaN slots resolve **correctly** rather than merely vanishing: 2024-09-30 has
+revenue `0.0` against a positive year-ago base, so **-100.0%** is right; 2025-09-30 compares
+against that `0.0` base, so **null** is right — a zero base is genuinely not comparable.
+15 IDYA fields are unchanged, including `rev`, `rev_end_dates`, `rev_sources` and
+`rev_labels`, confirming no extracted value moved.
+
+**Both endpoints confirmed fixed live over HTTP:** `/api/ticker/IDYA` 500 → **200**,
+`/api/financials/IDYA` error-body → **8 real earnings quarters**, both parsing under a
+strict JSON parser with `parse_constant` rigged to reject non-standard tokens, and zero
+bare `NaN` tokens by word-boundary regex. Single listener confirmed (PID 5324); clean boot,
+zero tracebacks.
+
+**A full scan WAS run, deliberately.** The earlier judgement call — that a 1-point scope
+makes a 606-ticker scan unnecessary — stopped being right the moment a status moved. This
+is not the 2026-08-06 message-only case where nothing but text changed.
+
+### Fresh full 606-ticker scan
+
+Checkpoint archived as `ARCHIVED_pre_nanfix_scan_f6d3892accf3.csv.bak`; `resumed_from: 0`
+confirmed on start. 606/606, breaker not tripped, no errors.
+
+| status | before | after | delta |
+|---|---|---|---|
+| green | 9 | 9 | 0 |
+| yellow | 1 | 1 | 0 |
+| red | 419 | **418** | -1 |
+| insufficient | 81 | **82** | +1 |
+| excluded_bank | 96 | 96 | 0 |
+| **TOTAL** | **606** | **606** | |
+
+**Exactly one status change and exactly one value mover, both IDYA.** Zero window-shift
+drift this run (it followed the previous scan closely enough that no new 10-Q landed), so
+unlike the derived-Q4 scan there is no drift population to separate out — the single
+in-place change is the entire delta.
+
+```
+before : IDYA,red,          nan;78.4;nan,   57.4;-1502.1;-1269.6,
+after  : IDYA,insufficient, 0;-100.0;78.4,  57.4;-1502.1;-1269.6, no reported revenue (pre-revenue company)
+```
+
+`nan` appeared in the scan output for 1 ticker before and **0 after**. IDYA also now lands
+in a named failure bucket instead of carrying an empty reason — the fix proving itself
+through the scan path, not only the API path.
