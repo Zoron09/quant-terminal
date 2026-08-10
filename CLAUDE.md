@@ -361,6 +361,15 @@ that the 2026-08-01 adapter change altered again.
   **Known vocabulary caveat:** `restated` means "a later filing published a different
   figure for this `ddate`", which on MAGN is a different *entity's* figure after a reverse
   merger, not a correction. See the 2026-08-09 entry under LAST UPDATED.
+  - **Which point sources get flagged (2026-08-09):** `_RESTATEMENT_ELIGIBLE_SOURCES` =
+    `("reported", "derived_fy_minus_quarters")`. Derived Q4s were excluded until then on a
+    justification that proved false. **`edgartools` is still excluded and that is a known
+    open gap, not a decision** — `_fill_gaps` builds those points after the flagger has
+    already run, so they are never offered to it. It affects the NEWEST quarters, i.e.
+    inside the scoring window. Deferred, needs its own investigation.
+  - **Candidate matching is exact on tag, and guarded against annual mis-tags.** Both are
+    load-bearing and evidence-backed — see the 2026-08-09 (later) entry. Do not loosen the
+    tag match; do not replace the guard with a magnitude threshold.
 - **EPS:** still out of scope entirely. Raw `'ni'` is NO LONGER empty as of
   2026-08-01 — it carries real per-quarter net income, alongside new
   `rev_sources`/`ni_sources` and `ni_restated`/`ni_restated_value`. All EPS
@@ -392,6 +401,69 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-09 (later) — **Restatement detection was skipping every derived Q4.** Engine fix,
+**`code33/quarterly_engine.py` only**, stacked on the margin fix below. Full writeup,
+scope table and the deferred items in `bug_report.md`.
+  - **What was wrong.** `_attach_restatement_flags` gated on `source != "reported"`, so a
+    derived Q4 could never be flagged even when the filer's own later filing published a
+    different discrete figure for that period. The stated reason — "a derived value
+    combines multiple filings, so there's no single figure to check" — **was tested and is
+    false**: it describes the point's own provenance, which the query never reads. Derived
+    points carry both fields it needs (`.adsh`, `.tag`).
+  - **Scope, measured on the full 606 before implementing: 27 tickers, 37 quarters**, each
+    triaged against `data.sec.gov`. **Not a reverse-merger niche** — the dominant class is
+    the ordinary continuing-ops recast (JNJ/Kenvue, DD/Qnity, CALY/Topgolf, ADEA/Xperi,
+    PBI/GEC), and **30 of 37 later figures come from a 10-K comparative**, not a
+    fiscal-calendar change.
+  - **The DINO guard is not optional.** HF Sinclair's FY2025 10-K tags $28,580,000,000 for
+    2024-10-01..2024-12-31 as `qtrs=1` — bit-identical to the `qtrs=4` FY fact in the SAME
+    filing, i.e. a filer XBRL error at SEC. Naively extending the flag would have replaced
+    DINO's correct derived Q4 ($6.5B) with an annual figure and dragged a quarter **inside
+    the 4-rate scoring window from -0.55% to -77.38%**. `_is_annual_mistagged_as_quarter()`
+    rejects a candidate equal to a `qtrs=4` fact in the same accession — an **input check,
+    deliberately not a size heuristic** (the ±1000% guard lesson), applied before the
+    latest-filed sort so a genuine earlier restatement can still win.
+  - **Two things deliberately NOT done, both evidence-backed:** exact-tag matching kept
+    (relaxing it surfaces 7 cross-*concept* false positives — `NetIncomeLoss` vs
+    `ProfitLoss`, `Revenues` vs `RevenueFromContractWithCustomer...`), and no
+    magnitude/precision threshold added (the 5 sub-0.5% findings round away at 2dp with
+    zero downstream effect).
+  - **`utils/code33_adapter.py` untouched** — `_yoy_value()` and `_restated_basis()` both
+    key off `restated`/`restated_value`, so this propagates automatically, same as the GE fix.
+  - **Verified:** 75-ticker (27 affected + 48 controls, all five statuses) **byte-level
+    whole-payload comparison, 2,100 keys — 12 changed, 63 byte-identical, ZERO control
+    violations, ZERO status changes**; the 12 are exactly the 13 predicted minus DINO.
+    **DINO byte-identical, guard proven**, including its three pre-existing reported-point
+    flags left untouched. **MAGN corrected 119.11% → 35.26%**, matching prediction.
+    **Containment universe-wide: 14,955 reported points across all 606, zero behaviour
+    changes.** Single listener confirmed; fixed code confirmed live over HTTP.
+  - **"Zero status changes" is coincidence, not protection.** Eight tickers have an
+    affected value INSIDE the scoring window (DINO, CALY, DD, MCFT, MIDD, PAG, PAA, PAGP),
+    moving 2.6–59pp; `_c33_status` reds on any negative transition, so that size of move
+    flips a sign trivially. PAG — the one status change in the GE fix — moved +0.64 →
+    -3.82 in-window without crossing. Expect a nonzero rate as quarters land.
+  - **Fresh full 606-ticker scan** (checkpoint archived, `resumed_from: 0`), 606/606,
+    breaker not tripped: green **9 → 9**, yellow **1 → 1**, red **419 → 419**,
+    insufficient **81 → 81**, banks **96 → 96**. **Zero status changes universe-wide, every
+    bucket identical.** 35 tickers moved a scored value, separating cleanly: **6 in-place,
+    all in the affected set** (CALY, DD, MIDD, PAA, PAG, PAGP) — that is the fix — and
+    **28 pure window shifts** (`old[1:] == new[:-1]`), which this fix cannot structurally
+    cause since it changes a comparison basis and cannot append a quarter; those are 10-Qs
+    filed since the 2026-08-07 baseline, arriving via the live edgartools leg (the local
+    bulk dataset is unchanged, parquet mtimes all 2026-07-21). **One anomaly, PVLA,
+    investigated and cleared** — in-place margin move, not in the affected set, proven
+    **byte-identical** with the fix reverted in memory, so it is live-leg drift, not this
+    change.
+  - **TWO DEFERRED FOLLOW-UPS, neither fixed here.** (1) **`edgartools` fills are outside
+    the restatement mechanism entirely, and it is bigger than the gap just closed** —
+    `_fill_gaps` builds those points AFTER `get_quarterly_series` has already run the
+    flagger, so they are never offered to it; fixing it means moving the flagger, not
+    adding a source string, and it hits the NEWEST quarters, i.e. inside the window.
+    (2) **A NaN `restated_value` breaks `/api/financials` for IDYA** — returns
+    `{"error":"Out of range float values are not JSON compliant: nan"}`. **Pre-existing,
+    dating to the GE fix (2026-08-02)**, proven by reconstructing `b53835d` behaviour in
+    memory; exactly 1 point universe-wide out of 14,955.
+
 2026-08-09 — **Net margin now computes on the filer's recast basis, same as revenue YoY.**
 Engine fix, **`code33/net_margin.py` only**. Full writeup in `bug_report.md`.
   - **What was wrong.** `pair_margin_series()` computed the margin from as-first-filed

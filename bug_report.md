@@ -2405,3 +2405,221 @@ company. Worth knowing when reading the flag; not a defect in the number.
 
 Full 606-ticker byte comparison passed; MAGN confirmed dollar-exact against SEC as above;
 zero unexplained status changes. Single listener confirmed before testing.
+
+---
+
+## 2026-08-09 — restatement detection skipped every derived Q4
+
+**Commit:** (this change) — `code33/quarterly_engine.py` only. Separate from, and stacked on
+top of, the net-margin recast-basis fix above.
+
+### What was wrong
+
+`_attach_restatement_flags` gated on `point.source != "reported"`, so a **derived Q4**
+(`derived_fy_minus_quarters`, back-solved as FY minus Q1+Q2+Q3) could never be flagged as
+restated — even when the filer's own later filing published a different discrete figure
+for that exact period.
+
+The stated justification was *"a derived value already combines multiple filings, so
+there's no single figure to check for restatement."* **Tested and false.** That describes
+the point's OWN provenance, which the query never reads. The query asks whether some
+LATER filing published a discrete `qtrs=1` figure for the same `ddate`, and a derived
+point carries both fields that needs: `.adsh` (the 10-K it was back-solved from) and
+`.tag` (the FY tag).
+
+Found while verifying the margin fix: MAGN's 2024-12-31 revenue YoY read **119.11%**,
+comparing Magnera/Treasure's $702M against Glatfelter's derived-Q4 base of $320.382M —
+two different accounting entities, not one company growing.
+
+### Scope — measured across all 606 tickers before implementing
+
+**27 tickers, 37 quarters.** Every one triaged against `data.sec.gov` directly.
+Distribution: 7 at >=50%, 9 at 10-50%, 13 at 2-10%, 3 at 0.5-2%, 5 under 0.5%.
+
+| ticker | quarter | derived | later-published | delta | cause |
+|---|---|---|---|---|---|
+| DINO | 2024-12-31 | 6,499,884,000 | 28,580,000,000 | +339.7% | **filer mis-tag — NOT a restatement** |
+| DBRG | 2023-12-31 | -330,790,000 | 350,310,000 | +205.9% | derived value already implausible (negative revenue) |
+| ATI | 2022-12-31 | 76,900,000 | 193,000,000 | +151.0% | NI recast |
+| MAGN | 2023-12-31 | 320,382,000 | 519,000,000 | +62.0% | reverse merger, entity swap |
+| CALY | 2024-12-31 | 924,400,000 | 371,400,000 | -59.8% | Topgolf separation |
+| ADEA | 2021-12-31 | 214,449,000 | 89,705,000 | -58.2% | Xperi separation |
+| DD | 2024-12-31 | 3,092,000,000 | 1,689,000,000 | -45.4% | Qnity electronics spinoff |
+| PBI | 2023-12-31 | 871,578,000 | 526,416,000 | -39.6% | GEC exit |
+| JNJ | 2022-12-31 | 23,706,000,000 | 19,939,000,000 | -15.9% | Kenvue separation |
+
+**This is not a reverse-merger niche.** The dominant class is the ordinary
+continuing-operations recast — exactly what this function was built for on the
+3M/Solventum case — and **30 of the 37 later figures come from a 10-K comparative**, not
+from a fiscal-calendar change.
+
+### The DINO guard — why it is not optional
+
+HF Sinclair's FY2025 10-K tags **$28,580,000,000 for 2024-10-01..2024-12-31 as `qtrs=1`** —
+bit-identical to the `qtrs=4` fact for 2024-01-01..2024-12-31 in the SAME filing. A filer
+XBRL error at SEC.
+
+Naively extending the flag replaces DINO's correct derived Q4 ($6.5B, plausible) with an
+annual figure and drags **a quarter INSIDE the 4-rate scoring window from -0.55% to
+-77.38%**. The fix would have corrupted data it was meant to correct.
+
+`_is_annual_mistagged_as_quarter()` rejects a candidate whose value equals a `qtrs=4` fact
+in the same accession at the same ddate and tag. A fiscal year ends on the same date as
+its own Q4, so the annual fact shares the quarter's ddate; the test is **exact value
+equality within one accession — an INPUT check, deliberately not a size heuristic.** A
+magnitude threshold is the mistake the +/-1000% margin guard already taught: it cannot
+separate a mis-tag from a real corporate action, and the real restatements here run 0.01%
+to 206% in BOTH directions.
+
+Placed **before** the latest-filed sort, not after: a mis-tagged row is not a weaker
+observation of the quarter, it is not an observation of that quarter at all, so a genuine
+earlier restatement behind it must still be able to win.
+
+Applied to **every** candidate, not just derived ones — a mis-tagged annual figure is not
+a valid restatement for a reported point either, and gating it by source would be
+arbitrary. That widened the blast radius beyond what the investigation measured, so it was
+proven separately (below).
+
+### Two things deliberately NOT done, both evidence-backed
+
+- **Exact-tag matching kept.** Relaxing it to "any tag in the priority list" surfaces 7
+  more apparent restatements, and all 7 are cross-CONCEPT comparisons rather than
+  revisions: `NetIncomeLoss` vs `ProfitLoss` (NCI-inclusive, the AES case) on BAX/BNY/PAA,
+  `NetIncomeLoss` vs `...AvailableToCommonStockholdersBasic` on DBRG, `Revenues` vs
+  `RevenueFromContractWithCustomer...` on DLTR (-42.6%) and SON (-18.3%). Load-bearing.
+- **No magnitude/precision threshold added.** The 5 sub-0.5% findings (ELAN, UFPT, LGND,
+  BY, CSX) all round away at 2dp and produce zero downstream change. A threshold would
+  have been unnecessary machinery.
+
+### No adapter change needed
+
+`_yoy_value()` keys purely off `restated`/`restated_value`, and (since the margin fix
+above) so does `_restated_basis()`. Both corrections propagate automatically — same shape
+as the GE fix. `utils/code33_adapter.py` untouched.
+
+### Verification
+
+**Byte-level whole-payload comparison — 75 tickers, 2,100 keys, zero tolerance.**
+27 affected + 48 controls spanning 9 green / 1 yellow / 45 red / 10 insufficient /
+10 excluded_bank. Baseline captured AFTER the margin fix was committed, so that fix is the
+floor being measured from.
+
+```
+tickers compared      : 75
+keys compared         : 2100
+tickers with any diff : 12
+  of which AFFECTED   : 12 / 27
+  of which CONTROL    : 0      <- zero violations
+byte-identical        : 63
+STATUS CHANGES        : 0
+```
+
+The 12 movers are the 13 predicted minus DINO. Margin leg moved on 6 (CALY, DD, MCFT,
+MIDD, PAA, PAG) — the predicted 7 minus DINO. **Nothing moved that was not predicted.**
+
+**DINO guard proof — byte-identical before/after**, including its three pre-existing
+*reported*-point restatement flags (7027/7846/7207M), which the guard left alone. The
+in-window 2025-12-31 rate held at -0.55%. Confirmed live over HTTP.
+
+**MAGN corrected 119.11% -> 35.26%**, matching the prediction exactly.
+
+**Containment, universe-wide: 14,955 reported points across all 606 tickers, ZERO
+behaviour changes.** Old and new logic computed from identical inputs in one pass and
+diffed. The one entry the diff initially reported was a `NaN != NaN` artifact of the check
+script itself — both sides identical (see the IDYA note below). Guard rejections
+universe-wide: exactly 1, DINO. New derived flags: 36 (the 37 findings minus DINO).
+
+**Status impact today: 0 of 27.** PAG was the ticker to watch — it was the single status
+change in the GE restatement fix and its affected quarter is in-window — and it moved
++0.64 -> -3.82 on revenue and 3.06 -> 3.09 on margin without crossing a boundary.
+
+### On "zero status changes" — this is not structural protection
+
+The eight tickers with an affected value INSIDE the 4-rate window (DINO, CALY, DD, MCFT,
+MIDD, PAG, PAA, PAGP) move by 2.6 to 59 percentage points:
+
+| ticker | in-window rate before -> after |
+|---|---|
+| CALY | -60.24 -> -1.05 |
+| DD | -45.25 -> +0.24 |
+| MCFT | +18.36 -> +46.39 |
+| MIDD | -14.54 -> +4.53 |
+| PAG | +0.64 -> -3.82 |
+| PAA / PAGP | -14.81 -> -12.21 |
+| DINO | -0.55 -> -0.55 (guard held) |
+
+`_c33_status` turns red on `any(d < 0 ...)` across window transitions, and a 19-59pp move
+flips a transition sign trivially. Nothing changed today because these tickers are red for
+other reasons. **That is coincidence, not protection** — the GE fix's own audit moved 36
+YoY values and flipped one status. Expect a nonzero rate as quarters land.
+
+MAGN's own artifact is permanently out of the window (`_window()` takes the newest 4
+non-null rates and windows only advance), so it was never at risk going forward; it is
+corrected for accuracy, not safety.
+
+### Fresh full 606-ticker scan
+
+Checkpoint archived as `ARCHIVED_pre_derivedq4_scan_f6d3892accf3.csv.bak` first;
+`resumed_from: 0` confirmed on start, so no pre-fix rows carried across the code change.
+606/606 completed, breaker not tripped, no errors.
+
+| status | before | after | delta |
+|---|---|---|---|
+| green | 9 | 9 | 0 |
+| yellow | 1 | 1 | 0 |
+| red | 419 | 419 | 0 |
+| insufficient | 81 | 81 | 0 |
+| excluded_bank | 96 | 96 | 0 |
+| **TOTAL** | **606** | **606** | |
+
+**Zero status changes universe-wide.** Every bucket identical.
+
+35 tickers moved a scored VALUE, and they separate cleanly into two populations:
+
+- **6 in-place changes, all in the affected set** — CALY, DD, MIDD, PAA, PAG, PAGP. This
+  is the fix. (LGND is in the affected set but its finding sits at 2021-12-31, long outside
+  the 12-quarter pull, so it contributes nothing; its scan movement is drift.)
+- **28 pure window shifts** — `old[1:] == new[:-1]`, i.e. the series advanced by one
+  quarter and a new value appended. **Structurally impossible for this fix to cause**: the
+  change alters the basis of an existing comparison, it cannot add a quarter. These are
+  10-Qs filed between the 2026-08-07 baseline scan and this one, picked up by the live
+  edgartools gap-fill. The local bulk dataset is unchanged (parquet mtimes all 2026-07-21),
+  so the drift is entirely from the live leg.
+
+**One anomaly investigated and cleared: PVLA.** Its newest margin moved in place
+(-9230.2 -> -4784.9) and it is NOT in the affected set, so it did not fit either population.
+Tested directly by pulling it with the fix and with pre-fix behaviour restored in memory:
+**byte-identical across every payload field.** The fix does not touch PVLA; it is drift on
+the live leg, the same cause as the 28, in a different shape (a value revision rather than
+a window advance). Recorded rather than waved through, since an unexplained in-place change
+is exactly what the zero-tolerance rule exists to catch.
+
+**DINO's scan row confirms the guard end-to-end:** `red`, `rev_yoy -0.6;11.8;53.1`,
+`margin -0.4;9.1;8.6` — unchanged from baseline, and DINO does not appear in the mover list
+at all.
+
+### DEFERRED — two follow-ups found here, neither fixed
+
+**1. `edgartools` fills are outside the restatement mechanism entirely — larger than this
+gap.** `source == "edgartools"` is absent from `_RESTATEMENT_ELIGIBLE_SOURCES`, and not by
+choice: `pipeline._fill_gaps` constructs those points AFTER `get_quarterly_series` has
+already run `_attach_restatement_flags`, so they are never offered to it at all. Fixing it
+means moving or re-running the flagger, not adding a source string. **This hits the NEWEST
+quarters — the ones inside the scoring window** — which makes it higher-risk than the
+derived-Q4 gap this entry closes. Needs its own investigation.
+
+**2. A NaN `restated_value` breaks `/api/financials` for IDYA. PRE-EXISTING, not caused by
+either of today's fixes.** A candidate row can carry `value = NaN`; `float(NaN) != point.value`
+is True, so `restated=True` with `restated_value=NaN`, and `_yoy_value()` returns it
+because `NaN is not None`. Result: `rev_yoy` carries NaN and the endpoint returns
+`{"error":"Out of range float values are not JSON compliant: nan"}` instead of data.
+- **Exactly 1 point universe-wide** — IDYA revenue 2024-09-30, out of 14,955 reported
+  points. Zero derived points affected.
+- **Dates to the GE fix (2026-08-02)**, when `_yoy_value` began consuming `restated_value`.
+  Proven by reconstructing pre-fix behaviour in memory: at `b53835d` IDYA already carried
+  NaN at `rev_yoy[3]` and `[5]` and already failed to serialise.
+- The margin fix above adds a second NaN at `npm[1]` — it widens an already-broken payload
+  but breaks nothing that worked.
+- Likely fix is a `math.isnan` reject in the candidate walk, alongside the annual-mistag
+  guard. Deliberately NOT bundled here: it is a different defect with its own blast radius,
+  and this change is already at the edge of one commit's worth of verification.

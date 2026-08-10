@@ -138,26 +138,84 @@ def _attach_plausibility(
         point.plausible = not plausibility_check(point.value, siblings)
 
 
+# Which point sources are eligible for restatement detection.
+#
+# A derived Q4 was excluded until 2026-08-09, on the stated reasoning that "a derived
+# value already combines multiple filings, so there's no single figure to check". That
+# describes the point's OWN provenance, which this query never uses: it asks whether some
+# LATER filing published a discrete qtrs=1 figure for the same ddate, and a derived point
+# carries both fields that needs — .adsh (the 10-K it was back-solved from) and .tag (the
+# FY tag). Measured across all 606 tickers, the exclusion was missing 27 tickers / 37
+# quarters, including JNJ (Kenvue), DD (Qnity), CALY (Topgolf), ADEA (Xperi), PBI (GEC)
+# and MAGN (the Magnera reverse merger). 30 of the 37 later figures come from a 10-K
+# comparative, not a fiscal-calendar change, so this is not a niche of odd filers.
+#
+# 'edgartools' is still absent, and NOT by choice: pipeline._fill_gaps constructs those
+# points AFTER get_quarterly_series has already run this function, so they are never
+# offered to it at all. That gap hits the NEWEST quarters — the ones inside the scoring
+# window — and is deliberately left for its own investigation. See bug_report.md.
+_RESTATEMENT_ELIGIBLE_SOURCES = ("reported", "derived_fy_minus_quarters")
+
+
+def _is_annual_mistagged_as_quarter(row, num_q4: pd.DataFrame) -> bool:
+    """True when a candidate 'quarterly' row is really the filer's ANNUAL figure wearing a
+    90-day period.
+
+    A real defect in SEC data, not a hypothetical. HF Sinclair's FY2025 10-K tags
+    $28,580,000,000 for 2024-10-01..2024-12-31 as qtrs=1 — bit-identical to the qtrs=4
+    fact for 2024-01-01..2024-12-31 in the SAME filing. Accepting that as a restatement
+    replaces DINO's correct derived Q4 ($6.5B) with an annual number and drags a quarter
+    that is INSIDE the 4-rate scoring window from -0.55% to -77.38%.
+
+    A fiscal year ends on the same date as its own Q4, so the annual fact shares the
+    quarter's ddate. The test is therefore exact equality of value within one accession —
+    an INPUT check, deliberately NOT a size heuristic. A magnitude threshold is the
+    mistake the +/-1000% margin guard already taught (see bug_report.md): it cannot tell
+    a mis-tag from a real corporate action, and real restatements here run from 0.01% to
+    206% in BOTH directions.
+
+    Applies to every candidate, not just derived ones: a mis-tagged annual figure is not a
+    valid restatement for a reported point either, and gating it by source would be
+    arbitrary. Proven non-regressive — across all 606 tickers, zero reported points change
+    their flag or value under this guard.
+    """
+    twin = num_q4[
+        (num_q4["adsh"] == row["adsh"])
+        & (num_q4["ddate"] == row["ddate"])
+        & (num_q4["tag"] == row["tag"])
+    ]
+    return bool((twin["value"] == row["value"]).any())
+
+
 def _attach_restatement_flags(
-    points: List[QuarterPoint], num_df: pd.DataFrame, sub_df: pd.DataFrame
+    points: List[QuarterPoint], num_df: pd.DataFrame, sub_df: pd.DataFrame,
+    num_q4: pd.DataFrame
 ) -> None:
-    """For each REPORTED point (not derived — a derived value already combines multiple
-    filings, so there's no single figure to check for restatement), looks for a row in
+    """For each point whose source is in _RESTATEMENT_ELIGIBLE_SOURCES, looks for a row in
     num_df matching the same (ddate, qtrs=1, tag) but a DIFFERENT adsh — num_df is
     already sliced to this company's own pulled filings and already filtered to
-    segments=='' by the caller's filter chain. If one or more such rows exist, takes
-    the one from whichever filing was filed latest; if its value differs from the
-    point's own, sets restated=True and restated_value to that later figure. Purely
-    additive — never touches the primary `value`, same principle as .plausible.
+    segments=='' by the caller's filter chain. Candidates that are really an annual
+    figure mis-tagged as a quarter are dropped first (see
+    _is_annual_mistagged_as_quarter). Of what survives, takes the one from whichever
+    filing was filed latest; if its value differs from the point's own, sets
+    restated=True and restated_value to that later figure. Purely additive — never
+    touches the primary `value`, same principle as .plausible.
 
     This catches cases like 3M/Solventum: a divestiture reclassifies prior-period
     revenue/NI to continuing-operations-only in later filings' comparative columns,
     without ever changing what the original filing itself reported for its own period.
+
+    The tag match is EXACT and load-bearing. Relaxing it to "any tag in the priority list"
+    surfaces 7 more apparent restatements across the universe, and all 7 are cross-CONCEPT
+    comparisons rather than revisions — NetIncomeLoss vs ProfitLoss (NCI-inclusive, the
+    AES case), Revenues vs RevenueFromContractWithCustomer... (DLTR -42.6%, SON -18.3%).
+    Do not loosen it.
     """
     filed_by_adsh = sub_df["filed"] if "filed" in sub_df.columns else None
 
     for point in points:
-        if point.source != "reported" or point.value is None or point.tag is None:
+        if (point.source not in _RESTATEMENT_ELIGIBLE_SOURCES
+                or point.value is None or point.tag is None):
             continue
 
         ddate = int(point.period_end.strftime("%Y%m%d"))
@@ -173,6 +231,14 @@ def _attach_restatement_flags(
         candidates = candidates.copy()
         candidates["_filed"] = candidates["adsh"].map(filed_by_adsh)
         candidates = candidates.dropna(subset=["_filed"])
+        if candidates.empty:
+            continue
+
+        # Drop mis-tagged annual figures BEFORE picking the latest, not after: such a row
+        # is not a weaker observation, it is not an observation of this quarter at all, so
+        # a genuine earlier restatement behind it must still be able to win.
+        candidates = candidates[~candidates.apply(
+            lambda r: _is_annual_mistagged_as_quarter(r, num_q4), axis=1)]
         if candidates.empty:
             continue
 
@@ -378,6 +444,6 @@ def get_quarterly_series(
         )
 
     _attach_plausibility(points, plausibility_check)
-    _attach_restatement_flags(points, num_df, sub_df)
+    _attach_restatement_flags(points, num_df, sub_df, num_q4)
 
     return QuarterlyRevenueSeries(cik=cik, points=points[:quarters])
