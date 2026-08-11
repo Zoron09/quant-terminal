@@ -5,6 +5,10 @@ data/screener_cache.db
 .streamlit/secrets.toml
 .venv/
 .venv-secfsdstools/
+# Rollback copy of the pre-2026-08-10 environment (149 packages). Ignored for the
+# same reason as .venv/ - it is a virtualenv, not source. Without this rule a
+# `git add -A` stages ~15,000 site-packages files.
+.venv-OLD/
 
 # Wealthsimple export — live OAuth session + real trade history, never commit
 tools/session.json
@@ -13,6 +17,33 @@ tools/needs_review.json
 tools/account_balances.json
 tools/open_positions.json
 tools/*.tmp
+
+# data/ and scripts/ — REAL BROKERAGE DATA, never commit.
+#
+# These were protected only by remembering to `git add` explicit paths, which is
+# not protection. data/ holds a 208-row options trade ledger with per-trade P&L
+# and a ws_fills_json column, 208 Wealthsimple order JSONs under
+# options_price_paths/, a contract-spec map, and cached underlying bars; scripts/
+# holds the analysis code that produced them. Same category as the tools/ rules
+# above, which already block the Wealthsimple exports by name.
+#
+# Deliberately whole-directory rather than file-by-file: the exposure is not a
+# fixed list of filenames, it is "whatever those scripts write next", and a
+# per-file rule protects only the files that happened to exist when it was
+# written. Nothing under either path is tracked (verified: `git ls-files data/
+# scripts/` returns 0), so this hides nothing that git was showing as trackable.
+#
+# Note data/scan_jobs/ was already ignored above, so scan checkpoints and the
+# ARCHIVED_*.csv.bak evidence files were never visible in `git status` anyway —
+# this rule does not change their status. To track something under these paths
+# in future, `git add -f <path>` still works.
+#
+# LEADING SLASH IS LOAD-BEARING. A bare `data/` matches a directory of that name
+# at ANY depth, which silently shadowed two tracked files under
+# .claude/agents/data/. Anchored to the repo root, it matches only the two
+# directories intended.
+/data/
+/scripts/
 
 # secfsdstools config — contains contact email; copy from .secfsdstools.cfg.example
 .secfsdstools.cfg
