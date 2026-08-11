@@ -766,6 +766,69 @@ async def ticker_data(ticker: str):
         return JSONResponse({'error': str(e)}, 
                             status_code=500)
 
+# ---------------------------------------------------------------------------
+# Quote-only endpoint for the analysis page's 30s price poll.
+# ---------------------------------------------------------------------------
+# startPricePoll() used to poll /api/ticker every 30s but reads only three
+# fields off it: price, change, change_pct. /api/ticker runs the FULL Code 33
+# pipeline behind the adapter's global lock and caches for 300s, so roughly
+# every tenth poll paid an unrequested 15-30s pipeline run that blocked the
+# event loop for every other connected client — a page nobody was touching
+# still stalled the server every ~5 minutes.
+#
+# This endpoint returns those three fields and nothing else. It must NEVER
+# call get_code33_data or reach the pipeline in any way; that is the entire
+# point of it existing. It is also deliberately NOT wired into TICKER_CACHE:
+# a live price wants to be live, and _entry_ttl()'s default for an unknown
+# prefix is CACHE_TTL (300s), which would have made the poll's own reason for
+# running stale. fast_info is a single chart-API call (~0.2s), so there is
+# nothing here worth caching.
+#
+# The three values are derived exactly as /api/ticker derives them, off the
+# same yfinance fast_info source — see the block above. fast_info is
+# chart-API backed and needs no crumb, so this path also skips the .info
+# call /api/ticker makes for company_name/pe_ratio, which the poll never reads.
+@app.get("/api/price/{ticker}")
+async def price_quote(ticker: str):
+    t = ticker.upper()
+
+    def _pull():
+        # normalize_ticker(): same reason as every other yfinance call site —
+        # Yahoo uses SEC's hyphen form (BRK-B), not the dot notation.
+        info = yf.Ticker(normalize_ticker(t)).fast_info
+
+        def fi(attr, default=None):
+            """Mirrors /api/ticker's fi(): fast_info is a lazy dict that raises
+            KeyError for symbols Yahoo returns no metadata for, and getattr's
+            default only absorbs AttributeError. Degrade to the default rather
+            than let one missing field take down the whole response."""
+            try:
+                return getattr(info, attr, default)
+            except Exception:
+                return default
+
+        last = fi('last_price', 0)
+        prev = fi('regular_market_previous_close', fi('previous_close', 0))
+        change = last - prev
+        # /api/ticker divides by fi(..., 1) and so raises ZeroDivisionError if
+        # Yahoo reports a real previous_close of 0 (the fallback default only
+        # covers a MISSING field, not a present zero). There the exception
+        # becomes a 500 the user sees; here it would be a silent gap in a
+        # background poll, so guard it explicitly. Identical output on every
+        # quote where prev is non-zero.
+        change_pct = (change / prev * 100) if prev else 0.0
+        return {'ticker': t, 'price': last,
+                'change': change, 'change_pct': change_pct}
+
+    try:
+        # Offloaded like the pipeline calls are: fast_info is a blocking HTTP
+        # request, and running it inline in an async def would put a fresh
+        # stall back on the event loop every 30s per open page — a smaller
+        # version of the problem this endpoint exists to remove.
+        return JSONResponse(await run_in_threadpool(_pull))
+    except Exception as e:
+        return JSONResponse({'error': str(e)}, status_code=500)
+
 @app.get("/api/chart/{ticker}")
 async def chart_data(ticker: str, period: str = "3mo", interval: str = "1d"):
     t = ticker.upper()

@@ -214,6 +214,8 @@ GET  /api/chart/{ticker}?period=1y&interval=1d → {ticker, period, prices: [{da
 
 GET  /api/financials/{ticker}      → {earnings: [{date, revenue, rev_yoy, net_margin, net_margin_yoy, eps, eps_yoy}], balance_sheet: {}, cash_flow: {}, valuation: {}}
 
+GET  /api/price/{ticker}           → {ticker, price, change, change_pct}  — quote only, NEVER calls get_code33_data
+
 GET  /api/news/{ticker}            → {news: [{title, source, url, time}]}
 
 GET  /api/ownership/{ticker}       → {institutional: [{name, pct}], insiders: [{name, role, date, value, type}]}
@@ -259,6 +261,10 @@ DELETE /api/news-scanner/watchlist/{ticker}   → {tickers: []}
   visual highlight (2), full article text via trafilatura (3), wire RSS + dedup (4).
 - News: tradingview-scraper primary, yfinance fallback, 60s cache
 - Chart: dynamic color (green/red), period % + $ gain label, YTD/1D/1W/1M/3M/1Y/5Y timeframes, 30s price poll
+- **Price poll is quote-only as of 2026-08-11** — `startPricePoll()` hits the new
+  `GET /api/price/{ticker}` (price/change/change_pct off one yfinance `fast_info`
+  call, no pipeline, no `TICKER_CACHE`), not `/api/ticker`. The initial page-load
+  `Promise.all` still uses `/api/ticker` and still needs to. See LAST UPDATED.
 
 ### ❌ BROKEN / PENDING
 **⚠️ All FIX items below predate the 2026-07-22 engine swap and have NOT been re-checked
@@ -408,6 +414,51 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-11 — **The 30s price poll no longer runs the Code 33 pipeline.** Came out of a
+load-time investigation of the analysis page. **No engine change** — `code33/` and
+`utils/code33_adapter.py` untouched, confirmed by `git diff`. Purely additive on the
+backend: one new route, zero existing lines modified.
+  - **What was wrong.** `startPricePoll()` polled `/api/ticker/{ticker}` every 30s but
+    reads exactly **three** fields off it — `price`, `change`, `change_pct` (verified by
+    grepping `d.<field>` across the whole callback; nothing else is consumed).
+    `/api/ticker` runs the full pipeline behind `_PIPELINE_LOCK` and caches for 300s, so
+    roughly **every tenth tick paid an unrequested 15-30s pipeline run** that blocked the
+    single event loop for every connected client. A page nobody was touching stalled the
+    server every ~5 minutes. Found live: a Chrome tab left on ST was doing exactly this
+    during the investigation's own measurements.
+  - **Fix: new `GET /api/price/{ticker}`** returning those three fields and nothing else,
+    derived **exactly** as `/api/ticker` derives them off the same `fast_info` source.
+    It skips the `.info` call `/api/ticker` makes for `company_name`/`pe_ratio`, which the
+    poll never reads. Offloaded via `run_in_threadpool` so it does not put a fresh (if
+    smaller) stall back on the event loop.
+  - **Deliberately NOT wired into `TICKER_CACHE`.** `_entry_ttl()`'s default for an
+    unrecognised prefix is `CACHE_TTL` (300s), which would have made the poll's own reason
+    for existing stale. `fast_info` is ~0.2-0.5s; there is nothing here worth caching.
+  - **One deliberate divergence from `/api/ticker`, documented in-code:** `/api/ticker`
+    divides by `fi('...previous_close', 1)`, whose fallback covers a *missing* field but
+    not a *present zero*, so a real `previous_close` of 0 raises ZeroDivisionError → 500.
+    `/api/price` guards it (`change_pct = 0.0`). Identical output on every non-zero quote.
+  - **Frontend patched via the mandated flow** (`tools/patch_frontend_price_poll.py`:
+    decode `__bundler/template` JSON → one exact replacement asserting exactly one match →
+    re-encode with `<\/` escaping). The patcher additionally asserts the `/api/ticker/`
+    call-site count goes **2 → 1** and `/api/price/` goes **0 → 1**, that
+    `loadAnalysis()`'s own `/api/ticker` fetch and the 30000ms interval are byte-present,
+    and re-checks the six world-grid/nav guards. **One line of behaviour changed**;
+    decoded diff is that line plus a 7-line comment, nothing else.
+  - **Verified:** single listener confirmed (PID 8376) before every test; patched JS
+    parses clean under `node --check`; `/api/price` vs `/api/ticker` **bit-identical on
+    all three fields across ST/XMTR/AAPL/MU/UNP**, with no extra keys; a 122s / 4-poll
+    window on ST produced **zero** `pipeline:`/`DATA KEYS`/`configmgt` lines, and a
+    cold-ticker probe (KO, never otherwise requested) confirmed **0 pipeline lines across
+    11 `/api/price` calls**. Full 6-endpoint loads on all five tickers return complete
+    data; XMTR's `npm` tail is still `-6.42 → -4.49 → -2.57 → -2.32` → green, matching
+    this file's own worked example, and AAPL still reds.
+  - **Not verified:** not opened in a real browser — same limitation and same reason as
+    the 2026-08-04 News Scanner entry (`/qa` deliberately unregistered per GSTACK POLICY).
+    The proof is HTTP-level and code-level, not visual.
+  - **Latency side effect, not the goal:** the poll went from a 2-3s warm / 15-30s cold
+    pipeline call to a flat ~0.4s quote.
+
 2026-08-10 (later) — **Two operational loose ends closed: the scan-checkpoint resume trap
 (code, committed) and the real `.venv` rebuilt to match `requirements.txt` (environment, no
 commit).** Full detail for both in `bug_report.md`.
