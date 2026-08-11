@@ -1328,6 +1328,103 @@ async def ownership(ticker: str):
             'insiders': []
         })
 
+# ---------------------------------------------------------------------------
+# Raw per-peer pipeline cache — used only by /api/peers
+# ---------------------------------------------------------------------------
+# /api/peers runs the full Code 33 pipeline once PER PEER (four of them, each
+# serialized behind the adapter's global lock), and TICKER_CACHE only holds the
+# ASSEMBLED payload keyed by the PARENT ticker. So a peer's result was never
+# reusable across parents: the sector table is hardcoded and its lists overlap
+# heavily, so searching AAPL then NVDA then MSFT recomputed the same
+# NVDA/MSFT/AAPL/GOOGL/META members from scratch every time.
+#
+# This cache is keyed by (peer_ticker, quarters) and stores the RAW
+# get_code33_data result, so ANY parent whose sector list contains that peer
+# reuses it. Deliberately a separate dict from TICKER_CACHE: that one holds
+# assembled API responses and is swept by evict_cache() on a per-prefix TTL, and
+# putting a raw engine payload behind the same keys would give one dict two
+# meanings.
+#
+# EXACT-KEY ONLY, and that is load-bearing. A wider pull is never substituted
+# for a narrower one: rev_yoy, sources, status and excluded_reason are all
+# functions of the display-window width, measured divergent on MAGN (sources)
+# and IDYA (status insufficient -> red) across a 30-ticker probe, so "12 covers
+# 8" is false. Nothing here depends on it — /api/peers has only ever asked for
+# one width — but a future caller must not assume otherwise.
+_PEER_C33_CACHE = {}        # (ticker, quarters) -> (raw result, stored_at)
+_PEER_C33_TTL = 600         # matches CACHE_TTL_PEERS — same data, same window
+_PEER_C33_STATE_LOCK = threading.Lock()   # guards both dicts below
+_PEER_C33_INFLIGHT = {}     # (ticker, quarters) -> threading.Lock
+
+# /api/peers has always called get_code33_data(p, CACHE_VERSION) with no
+# n_quarters, i.e. the adapter's default of 8. Naming it keeps the cache key
+# honest about the width it holds; it is not a new choice.
+_PEER_QUARTERS = 8
+
+
+def _peer_c33(ticker, quarters=_PEER_QUARTERS):
+    """get_code33_data for one peer, memoized and single-flighted.
+
+    Returns (result, was_cached). BLOCKING — always call it through
+    run_in_threadpool, never straight from an async handler.
+
+    Single-flight is not decoration: the analysis page fires its six requests
+    concurrently, so without it two parents sharing a peer both miss the cache
+    in the same instant and both compute. A waiter re-checks the cache after
+    acquiring the per-key lock, so it reuses the first result instead of
+    recomputing it.
+
+    Lock order is always per-key lock -> the adapter's _PIPELINE_LOCK, never the
+    reverse, so this cannot deadlock against the engine.
+
+    The cached dict is handed out by reference and callers MUST treat it as
+    read-only — /api/peers only reads scalars off it. Copying four full engine
+    payloads per request to defend against a mutation nobody performs is not
+    worth the cost.
+    """
+    key = (ticker.upper(), quarters)
+
+    def _fresh():
+        hit = _PEER_C33_CACHE.get(key)
+        if hit and time.time() - hit[1] < _PEER_C33_TTL:
+            return hit[0]
+        return None
+
+    with _PEER_C33_STATE_LOCK:
+        got = _fresh()
+        if got is not None:
+            return got, True
+        lock = _PEER_C33_INFLIGHT.get(key)
+        if lock is None:
+            lock = _PEER_C33_INFLIGHT[key] = threading.Lock()
+
+    with lock:
+        # Whoever held this lock before us has already stored their result.
+        with _PEER_C33_STATE_LOCK:
+            got = _fresh()
+        if got is not None:
+            return got, True
+        try:
+            data = get_code33_data(key[0], CACHE_VERSION, quarters)
+            with _PEER_C33_STATE_LOCK:
+                now = time.time()
+                _PEER_C33_CACHE[key] = (data, now)
+                # Sweep on write: this dict is NOT covered by evict_cache(), and
+                # a long-lived server walking a large universe would otherwise
+                # hold every peer result it ever computed.
+                for k in [k for k, v in _PEER_C33_CACHE.items()
+                          if now - v[1] > _PEER_C33_TTL]:
+                    _PEER_C33_CACHE.pop(k, None)
+        finally:
+            # Drop the in-flight entry even when the pipeline raises, or one
+            # failing ticker leaves a dead lock in the map for the life of the
+            # process. Stored BEFORE this pop, so no caller can slip into the
+            # gap and start a second compute.
+            with _PEER_C33_STATE_LOCK:
+                _PEER_C33_INFLIGHT.pop(key, None)
+        return data, False
+
+
 @app.get("/api/peers/{ticker}")
 async def peers(ticker: str):
     from utils.code33_adapter import get_code33_data, CACHE_VERSION
@@ -1375,7 +1472,13 @@ async def peers(ticker: str):
         peers_data = []
         for p in peer_tickers:
             try:
-                d = await run_in_threadpool(get_code33_data, p, CACHE_VERSION)
+                # Same pipeline call as before, now memoized per peer across
+                # parent tickers. _peer_c33 asks for _PEER_QUARTERS (8), which
+                # is the default this line passed implicitly — same width, same
+                # result, so the payload built below is unchanged.
+                d, _from_cache = await run_in_threadpool(_peer_c33, p)
+                print(f"[peers] {ticker.upper()}: {p} "
+                      f"{'cache hit' if _from_cache else 'computed'}")
                 if not d:
                     continue
                 last_eps = next((x for x in reversed(

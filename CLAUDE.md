@@ -261,6 +261,12 @@ DELETE /api/news-scanner/watchlist/{ticker}   → {tickers: []}
   visual highlight (2), full article text via trafilatura (3), wire RSS + dedup (4).
 - News: tradingview-scraper primary, yfinance fallback, 60s cache
 - Chart: dynamic color (green/red), period % + $ gain label, YTD/1D/1W/1M/3M/1Y/5Y timeframes, 30s price poll
+- **Peer pipeline results are cached across parent tickers as of 2026-08-11** —
+  `_peer_c33()` in `api/server.py` memoizes the raw `get_code33_data` result per
+  `(peer_ticker, quarters)` for 600s, single-flighted. Sector peer lists overlap
+  heavily, so the same NVDA/MSFT/GOOGL/META were recomputed on every tech search.
+  **Exact-key only — a 12-quarter result is NOT reused for an 8-quarter request**
+  (see the LAST UPDATED entry for why that is false).
 - **Price poll is quote-only as of 2026-08-11** — `startPricePoll()` hits the new
   `GET /api/price/{ticker}` (price/change/change_pct off one yfinance `fast_info`
   call, no pipeline, no `TICKER_CACHE`), not `/api/ticker`. The initial page-load
@@ -414,6 +420,55 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-11 (later) — **`/api/peers` now reuses peer pipeline results across parent
+tickers.** `api/server.py` only — `code33/` and `utils/code33_adapter.py` untouched,
+confirmed by `git diff`. One existing line changed (the call site); everything else added.
+  - **What was wrong.** `/api/peers` runs the pipeline once PER PEER — four peers,
+    serialized behind the adapter's global lock — and `TICKER_CACHE` only holds the
+    ASSEMBLED payload, keyed by the PARENT ticker. The sector table is hardcoded and its
+    lists overlap heavily, so a peer's result was never reusable across parents:
+    searching AAPL then NVDA then MSFT recomputed the same NVDA/MSFT/AAPL/GOOGL/META
+    from scratch every time. Measured cold: **18 `get_code33_data` invocations** across
+    three tech page loads, 12 of them peers.
+  - **Fix: `_peer_c33()`**, a cache keyed by `(peer_ticker, quarters)` holding the raw
+    engine result, TTL 600s (matching `CACHE_TTL_PEERS` — same data, same window), with
+    **single-flight** so two parents needing the same peer at the same instant produce
+    one pipeline run, not two. Single-flight is not decoration here: the analysis page
+    fires its six requests concurrently, so a plain check-then-compute cache would have
+    both parents miss together and both compute. Swept on write, since this dict is not
+    covered by `evict_cache()`.
+  - **Deliberately a separate dict from `TICKER_CACHE`**, which holds assembled API
+    responses on a per-prefix TTL. Mixing a raw engine payload in would give one dict two
+    meanings. `CACHE_TTL_PEERS` (600s, assembled payload) and `CACHE_TTL` (300s) are
+    untouched.
+  - **EXACT-KEY ONLY, and this is load-bearing.** A wider pull is never substituted for a
+    narrower one. The `/api/ticker` (8) + `/api/financials` (12) double-run was
+    investigated first and **rejected as unsafe**: `rev_yoy`, `sources`, `status` and
+    `excluded_reason` are all functions of the display-window width, so 12 is a superset
+    of the *data* but not of the *derived fields*. Measured on a 30-ticker probe spanning
+    every status: **2 diverge**. MAGN's `sources.rev` gains
+    `derived_fy_minus_quarters`; **IDYA's status flips `insufficient` → `red`** and its
+    `excluded_reason` blanks, because `_c33_status._window()` needs `_MIN_RATES = 3`
+    clean rates and IDYA has 2 at n=8 but 6 at n=12 (a wider pull supplies YoY bases the
+    narrower one lacks). Reusing across widths would have silently reverted the
+    2026-08-09 IDYA fix. Both reproduced with same-`n` controls, so not live drift.
+  - **Verified:** single listener confirmed before each run (BEFORE PID 2496, AFTER PID
+    18220), full tree kill between them rather than trusting `--reload`.
+    **`get_code33_data` invocations 18 → 11** across the same three cold loads (peer runs
+    12 → 5, 7 cache hits), matching the predicted 6+3+2 exactly. **All five `/api/peers`
+    payloads byte-identical** before vs after (AAPL/NVDA/MSFT/UNP/XMTR, full JSON
+    comparison, 0 differences). Single-flight proven in isolation with a counting stub:
+    6 threads released simultaneously on one cold key → **1** pipeline call, 2.0s wall
+    not 12s, all six sharing one object; `(TESTX,12)` correctly did NOT reuse
+    `(TESTX,8)`.
+  - **Timings.** First cold load is unchanged by design — nothing to reuse yet: AAPL
+    **64.33s → 63.68s**. The win is on subsequent same-sector searches: NVDA
+    **18.92s → 15.44s**, MSFT **20.27s → 14.16s**, and XMTR straight after UNP (identical
+    peer set) **5.32s → 0.48s**. Three-load sequence **103.5s → 93.3s**.
+  - **Still the dominant cost on a cold load:** the parent's own two pipeline runs
+    (`/api/ticker` + `/api/financials`), which this does not touch, and `/api/news`'s
+    flat ~11s DNS stall (see the load-time investigation).
+
 2026-08-11 — **The 30s price poll no longer runs the Code 33 pipeline.** Came out of a
 load-time investigation of the analysis page. **No engine change** — `code33/` and
 `utils/code33_adapter.py` untouched, confirmed by `git diff`. Purely additive on the
