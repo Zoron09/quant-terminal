@@ -408,6 +408,58 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-10 (later) — **Two operational loose ends closed: the scan-checkpoint resume trap
+(code, committed) and the real `.venv` rebuilt to match `requirements.txt` (environment, no
+commit).** Full detail for both in `bug_report.md`.
+
+  **PART 1 — a scan checkpoint could silently outlive its engine version. FIXED**
+  (`api/server.py` only).
+  - `job_id` was `sha1(ticker_list)` with no engine version, so re-running the same
+    universe after a `code33/` change **resumed the old checkpoint and reported pre-change
+    rows as fresh**. Hit for real during the 2026-08-06 acceleration fix; every scan since
+    has relied on someone remembering to archive the checkpoint first.
+  - Now `sha1(f"{CACHE_VERSION}:{ticker_list}")`. Same tickers + same CACHE_VERSION →
+    resume works exactly as before; different CACHE_VERSION → different job, so
+    **`resumed_from: 0` is structural instead of a manual ritual**.
+  - Scope checked first: `job_id` is computed in one place, and nothing depends on its
+    format — the frontend only tests `start.job_id` for truthiness on the 409 path.
+  - **Verified live, all three cases:** fresh → `5f81b62bcaa2` / `resumed_from 0`; same
+    list same version → same id / `resumed_from 3` (**resumes**); same list with
+    CACHE_VERSION temporarily bumped → `105e0f46391e` / `resumed_from 0` (**forced
+    fresh**). Both ids matched an independent offline hash. The temporary bump was reverted
+    and `git diff utils/code33_adapter.py` confirmed empty.
+  - **No full scan, deliberately** — this changes job identity only and cannot alter a
+    scored value; the 3-ticker test covered every branch through the real endpoint.
+  - **Intended consequence:** the existing `scan_f6d3892accf3.csv` is now unaddressable, so
+    the next full scan starts clean by construction.
+
+  **PART 2 — real `.venv` rebuilt from `requirements.txt`. NO CODE CHANGE, nothing committed.**
+  - Built fresh alongside and switched only after verification, rather than
+    `pip uninstall`-ing the delta — computing the transitive closure of 19 declarations
+    against 149 installed packages by hand is exactly where a mistake removes something
+    needed. **149 → 102 packages.**
+  - **`playwright`/`patchright`/`scrapling` were installed in the real `.venv`** despite
+    GSTACK POLICY saying Playwright was deliberately not installed — they arrived as
+    transitive deps, not by decision. Now gone, realigning the environment with the policy.
+    **Confirmed this does NOT degrade `/api/news`.**
+  - **`pytest` is gone and that is correct** (never declared, so a clean install never had
+    it). Running `tests/` now needs it installed separately. Deliberately NOT added to
+    `requirements.txt`.
+  - Two MAJOR bumps came with the rebuild: **`pyarrow` 24 → 25** (secfsdstools reads
+    parquet through it) and `websockets` 16 → 17. `pandas` 3.0.3 → 3.0.5 (patch), `numpy`
+    unchanged.
+  - **Verified: 8-ticker byte-level comparison, 224 keys, old venv vs new venv — 8/8
+    byte-identical, zero diffs**, which is the proof pyarrow 25 moved no extracted value.
+    Clean boot, single listener, zero tracebacks; `/api/ticker` + `/api/financials` 200 on
+    AAPL/HELE/FULT; `/api/scan` upload accepted; **`/api/news` 30 items, zero source
+    failures**, all three sources live.
+  - **`.venv-OLD` deliberately left on disk** as the fallback — gitignored, costs only
+    disk, and deleting it is the one irreversible step, so it is the owner's call.
+  - **Windows note:** renaming a virtualenv immediately after killing its server can fail
+    with "Access to the path is denied" from a not-yet-released handle. It briefly left the
+    project with no `.venv`; a retry succeeded on the second attempt. Allow a moment, and
+    keep a rollback rename ready.
+
 2026-08-10 — **The annual mis-tag guard only protected half the pipeline; now ported to the
 edgartools path. Separately, the edgartools restatement gap is CLOSED as
 investigated-not-built.** Engine fix, **`code33/edgar_fill.py` only**. Full writeup, both

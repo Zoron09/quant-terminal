@@ -577,7 +577,27 @@ def _scan_worker(job_id: str, tickers: list):
 
 
 def _start_scan_job(tickers, sector_map, company_map, mcap_map):
-    job_id = hashlib.sha1(','.join(sorted(set(tickers))).encode()).hexdigest()[:12]
+    # Job identity = ticker list AND engine version.
+    #
+    # CACHE_VERSION is folded in because job_id used to be the ticker list alone,
+    # which made a checkpoint silently outlive the code that produced it: re-running
+    # the same universe after an engine change RESUMED the old file and reported
+    # pre-change rows as if they were fresh. That is not hypothetical - it was hit
+    # during the 2026-08-06 acceleration fix and has been worked around ever since by
+    # manually archiving the checkpoint before every scan, which only works for as
+    # long as someone remembers.
+    #
+    # Same tickers + same CACHE_VERSION -> same job_id, so a scan interrupted by a
+    # restart still resumes exactly as before (the normal case, unchanged).
+    # Same tickers + different CACHE_VERSION -> different job_id, so a post-change
+    # scan starts clean and `resumed_from: 0` becomes a fact rather than a ritual.
+    #
+    # Nothing outside the resume mechanism depends on the value: the checkpoint
+    # filename derives from it, and the frontend only tests `start.job_id` for
+    # truthiness on the 409 path. Existing checkpoints are not migrated - they simply
+    # stop being addressed, which is the intended effect, and they are gitignored.
+    job_key = f"{CACHE_VERSION}:{','.join(sorted(set(tickers)))}"
+    job_id = hashlib.sha1(job_key.encode()).hexdigest()[:12]
     with _scan_lock:
         if _scan_state['running']:
             return JSONResponse(

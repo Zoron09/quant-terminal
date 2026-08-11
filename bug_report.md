@@ -2978,3 +2978,143 @@ Deliberately skipped, on the same basis as the 2026-08-06 message-only fix:
 A scan would re-confirm what the signature census already established universe-wide. Run
 one if the bulk-dataset lag ever grows enough to push a mis-tagged quarter into a fill
 window — that is the condition under which this guard starts changing output.
+
+---
+
+## 2026-08-10 — two operational loose ends closed
+
+Unrelated to each other; kept as separate sections. PART 1 is a code change and is
+committed. PART 2 is an environment change with **no code change and nothing to commit**.
+
+### PART 1 — a scan checkpoint could silently outlive the code that produced it (FIXED)
+
+**Commit:** (this change) — `api/server.py` only.
+
+#### What was wrong
+
+`_start_scan_job` derived job identity from the ticker list alone:
+
+```python
+job_id = hashlib.sha1(','.join(sorted(set(tickers))).encode()).hexdigest()[:12]
+```
+
+There is no notion of engine version in that, so re-running the same universe after any
+`code33/` change **resumed the old checkpoint and reported pre-change rows as fresh
+results**. Not hypothetical: it was hit during the 2026-08-06 acceleration fix, and every
+scan since has depended on a human remembering to archive the checkpoint file first.
+A safeguard that only works when someone remembers is not a safeguard.
+
+#### The fix
+
+Fold `CACHE_VERSION` into the hash input:
+
+```python
+job_key = f"{CACHE_VERSION}:{','.join(sorted(set(tickers)))}"
+job_id = hashlib.sha1(job_key.encode()).hexdigest()[:12]
+```
+
+- same tickers + same `CACHE_VERSION` -> same `job_id`, so an interrupted scan still
+  resumes exactly as before (the normal case, unchanged);
+- same tickers + different `CACHE_VERSION` -> different `job_id`, so a post-change scan
+  cannot resume stale rows and `resumed_from: 0` becomes structural rather than ritual.
+
+#### Scope confirmed before implementing
+
+`job_id` is computed in exactly one place and consumed by the checkpoint filename
+(`_job_checkpoint_path`), the resume path (`_read_checkpoint`), `_scan_state`, and two API
+responses. **Nothing depends on its format or value.** The frontend's single occurrence is
+`if (start.error && !start.job_id)` — a truthiness test on the 409 path; it never stores
+the value or derives a filename from it. `CACHE_VERSION` was already imported at line 25.
+
+#### Verification — all three cases, live over HTTP
+
+```
+RUN 1  fresh, 3 tickers          -> job_id 5f81b62bcaa2   resumed_from 0
+RUN 2  same list, same version   -> job_id 5f81b62bcaa2   resumed_from 3   RESUMES
+RUN 3  same list, bumped version -> job_id 105e0f46391e   resumed_from 0   FORCED FRESH
+```
+
+Both ids matched an independent offline hash calculation exactly. RUN 3 used a genuine
+temporary bump of `CACHE_VERSION` to `v33-TEMP-PROOF` with a full server restart, then
+reverted from a backup — `git diff utils/code33_adapter.py` confirmed empty afterwards.
+Single listener confirmed throughout; test checkpoints removed.
+
+**No full 606 scan, deliberately.** This changes job IDENTITY only — it cannot alter a
+scored value, and no `code33/` file is touched. The 3-ticker test exercised the real code
+path through the real endpoint, covering all three behaviours including the one the fix
+exists for. A 606-ticker scan would re-derive statuses this change cannot influence.
+
+**One intended consequence:** the existing `scan_f6d3892accf3.csv` checkpoint is now
+unaddressable, because the same 606 tickers hash differently under the new scheme. The
+next full scan therefore starts clean automatically. That is the point.
+
+### PART 2 — the real .venv rebuilt to match requirements.txt (NO CODE CHANGE)
+
+Removing a line from `requirements.txt` never uninstalls anything, so the daily `.venv`
+had drifted well past what the file declares. It was proven safe in a throwaway venv
+during the 2026-08-07 boot-failure fix, but the real one was never rebuilt — meaning "works
+locally" and "works on a clean install" were two different claims.
+
+**Approach: build alongside, verify, then switch** — not `pip uninstall` of the delta.
+Uninstalling "installed but not declared" requires correctly computing the transitive
+closure of 19 declarations against 149 installed packages, and one mistake removes
+something needed. Building fresh lets pip compute that closure itself, and failure is
+non-destructive: if the new environment had not worked, nothing would have been switched.
+
+**Result: 149 -> 102 packages, net -47.**
+
+Removed: the entire `streamlit` tree (altair, pydeck, blinker, watchdog, gitpython,
+jsonschema...), `matplotlib` + deps, `finviz`, `pytest`, the `aiohttp` tree, and the
+browser stack (`playwright`, `patchright`, `scrapling`, `browserforge`, `pyee`).
+
+**Two findings worth recording:**
+
+1. **`playwright`/`patchright`/`scrapling` were present in the real `.venv`**, despite
+   GSTACK POLICY stating Playwright was deliberately NOT installed. They arrived as
+   transitive dependencies (most likely of `tradingview-scraper`), not by decision. The
+   rebuild removes them, bringing the environment back in line with the documented policy
+   on a machine holding live brokerage credentials. **Verified this does not degrade
+   `/api/news`** — see below.
+2. **`pytest` is gone**, and that is correct: it is not declared, so a clean install never
+   had it. Running anything under `tests/` now needs it installed separately.
+   Deliberately NOT added to `requirements.txt` — that would be scope the task did not ask
+   for, and would re-introduce the same local-vs-clean divergence in the other direction.
+
+**Version movement.** `requirements.txt` pins only 8 of 19 exactly; the rest are floors, so
+a rebuild resolves to today's latest. 32 versions changed, two of them major:
+
+| package | old | new | note |
+|---|---|---|---|
+| pyarrow | 24.0.0 | 25.0.1 | **MAJOR** — secfsdstools reads parquet through this |
+| websockets | 16.0 | 17.0.1 | **MAJOR** — alpaca/ws-api path, not the engine |
+| pandas | 3.0.3 | 3.0.5 | patch; already on pandas 3 |
+| yfinance | 1.4.1 | 1.5.2 | minor |
+| numpy | — | — | unchanged |
+
+#### Verification
+
+- `pip freeze` of the pre-change `.venv` captured as a rollback reference (149 packages).
+- All 17 top-level imports succeed, zero failures.
+- **Byte-level comparison, 8 tickers / 224 keys, old venv vs new venv: 8/8
+  byte-identical, zero diffs.** Sample spans green/red/excluded_bank/insufficient plus
+  every ticker today's fixes touched (AAPL, HELE, XMTR, GE, MAGN, FULT, IDYA, DINO). This
+  is the check that pyarrow 25 did not move a single extracted value.
+- Clean boot, single listener, zero tracebacks.
+- Full pipeline over HTTP: `/api/ticker` and `/api/financials` 200 on AAPL/HELE/FULT with
+  real quarters; `/api/scan` multipart upload accepted and ran.
+- **`/api/news`: 30 items, zero source failures** — 15 Seeking Alpha (FinNews) plus
+  Reuters / Dow Jones / Benzinga / GuruFocus (tradingview-scraper). Both non-yfinance
+  sources live, matching the 2026-08-07 baseline exactly, which proves dropping
+  `scrapling`/`playwright` did not degrade the news path.
+
+**One hiccup during the switch, recorded because it left a transient bad state.** The
+rename `.venv -> .venv-OLD` succeeded but `.venv-new -> .venv` failed with "Access to the
+path is denied", leaving the project momentarily with **no `.venv` at all`. Cause was a
+file handle from the just-killed server not yet released — no python process held it when
+checked. A retry loop succeeded on attempt 2, with an automatic rollback to `.venv-OLD`
+wired in had it kept failing. Worth knowing: after stopping the server on Windows, allow a
+moment before renaming its virtualenv.
+
+**`.venv-OLD` is deliberately left on disk** rather than deleted. It is gitignored, costs
+only disk, and is the one irreversible step in this task — deleting it is a one-command
+decision for the owner, not something to do unprompted at the end of a long session.
