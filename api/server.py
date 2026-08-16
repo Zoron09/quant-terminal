@@ -109,12 +109,6 @@ CACHE_TTL = 300            # /api/ticker — carries live price, stays short
 CACHE_TTL_CHART = 300      # /api/chart
 CACHE_TTL_FINANCIALS = 600 # /api/financials — expensive, changes quarterly
 CACHE_TTL_NEWS = 120       # /api/news
-# /api/peers is the most expensive endpoint in the app: it runs the engine
-# pipeline once PER PEER (four of them) behind the adapter's global lock, and
-# was recomputing all four on every single search. Peer membership comes from a
-# hardcoded sector table and the peers' own quarterly filings — neither moves
-# minute to minute, so it gets the long window rather than the price one.
-CACHE_TTL_PEERS = 600      # /api/peers
 # Institutional holdings come from 13F filings (quarterly); insider
 # transactions from Form 4 (days). Nothing here justifies a 300s refresh.
 CACHE_TTL_OWNERSHIP = 600  # /api/ownership
@@ -129,8 +123,6 @@ def _entry_ttl(key):
         return CACHE_TTL_NEWS
     if key.startswith('chart_'):
         return CACHE_TTL_CHART
-    if key.startswith('peers_'):
-        return CACHE_TTL_PEERS
     if key.startswith('own_'):
         return CACHE_TTL_OWNERSHIP
     return CACHE_TTL
@@ -298,6 +290,66 @@ def _maybe_trigger_ws_refresh():
     _ws_fetch_executor.submit(_run_ws_background_fetch)
 
 
+# ---------------------------------------------------------------------------
+# Startup dataset warm-up
+# ---------------------------------------------------------------------------
+# The FIRST pipeline call in a fresh process pays a large one-time cost to stand
+# the secfsdstools dataset up. Every cold-load number this project has recorded
+# was measured as the first request to a just-restarted server, so that one-time
+# cost was being read as if it were the page's own speed. Measured on 2026-08-16,
+# same process, in order:
+#
+#   KO   first request to a fresh process ........ 44.67s
+#   AAPL next, process now warm, AAPL uncached .... 7.03s
+#   NVDA warm, uncached ........................... 5.24s
+#   UNP  warm, uncached ........................... 7.56s
+#
+# So ~37-40s of a "41s AAPL page load" was never AAPL. It was the process
+# standing up, once, and it was landing on whoever happened to search first.
+#
+# This pays it at boot instead, on a daemon thread. Deliberately:
+#   - a THREAD, not an await: the handler must not block startup, and uvicorn
+#     starts accepting connections immediately. Endpoints that never touch the
+#     pipeline (/api/price, /api/chart, /api/news, /api/ownership) stay fully
+#     responsive throughout.
+#   - the result is DISCARDED and nothing is written to TICKER_CACHE. This
+#     endpoint-level cache holds assembled API responses; a raw engine payload
+#     does not belong in it, and warming a cache entry is not the point —
+#     paying the dataset load is.
+#   - get_code33_data's DEFAULT n_quarters (8) is used. No endpoint's requested
+#     quarter count is read or changed here; window width decides what status is
+#     computed for some tickers, and that was already found unsafe to touch.
+#   - never raises. A failed warm-up must cost nothing but a log line; the next
+#     real request then pays the load exactly as it does today.
+#
+# HONEST COST: the warm-up holds the adapter's global _PIPELINE_LOCK while it
+# runs, so a pipeline request arriving inside the first ~40s queues behind it
+# rather than racing it. That is the same wait it would have paid anyway — with
+# one exception worth stating: a request landing in the first moment of boot
+# waits for the warm-up AND then its own pipeline run, a few seconds worse than
+# doing the load itself. Everyone arriving after the warm-up finishes wins the
+# full ~37-40s.
+WARMUP_TICKER = "KO"
+
+_warmup_state = {'done': False, 'seconds': None, 'error': None}
+
+
+def _run_startup_warmup():
+    """Runs on a daemon thread. Never raises out to the caller."""
+    t0 = time.time()
+    try:
+        get_code33_data(WARMUP_TICKER, CACHE_VERSION)
+        _warmup_state['seconds'] = round(time.time() - t0, 2)
+        print(f"[warmup] dataset ready after {_warmup_state['seconds']}s "
+              f"(throwaway {WARMUP_TICKER} pipeline call, result discarded)")
+    except Exception as e:
+        _warmup_state['error'] = f"{type(e).__name__}: {e}"
+        print(f"[warmup] failed after {round(time.time() - t0, 2)}s: "
+              f"{_warmup_state['error']} — the next real request pays the load instead")
+    finally:
+        _warmup_state['done'] = True
+
+
 @asynccontextmanager
 async def _lifespan(app):
     """Start the News Scanner poller here rather than at import time.
@@ -309,9 +361,14 @@ async def _lifespan(app):
     twice. Startup runs only in the process that actually serves requests, so
     exactly one poller exists. Imported locally because api.news_scanner is
     registered at the bottom of this file.
+
+    The dataset warm-up starts here for the same reason and with the same
+    single-process guarantee — see _run_startup_warmup above.
     """
     from api.news_scanner import start_poller
     start_poller()
+    threading.Thread(target=_run_startup_warmup,
+                     name='code33-warmup', daemon=True).start()
     yield
 
 
@@ -1476,218 +1533,6 @@ async def ownership(ticker: str):
             'institutional': [],
             'insiders': []
         })
-
-# ---------------------------------------------------------------------------
-# Raw per-peer pipeline cache — used only by /api/peers
-# ---------------------------------------------------------------------------
-# /api/peers runs the full Code 33 pipeline once PER PEER (four of them, each
-# serialized behind the adapter's global lock), and TICKER_CACHE only holds the
-# ASSEMBLED payload keyed by the PARENT ticker. So a peer's result was never
-# reusable across parents: the sector table is hardcoded and its lists overlap
-# heavily, so searching AAPL then NVDA then MSFT recomputed the same
-# NVDA/MSFT/AAPL/GOOGL/META members from scratch every time.
-#
-# This cache is keyed by (peer_ticker, quarters) and stores the RAW
-# get_code33_data result, so ANY parent whose sector list contains that peer
-# reuses it. Deliberately a separate dict from TICKER_CACHE: that one holds
-# assembled API responses and is swept by evict_cache() on a per-prefix TTL, and
-# putting a raw engine payload behind the same keys would give one dict two
-# meanings.
-#
-# EXACT-KEY ONLY, and that is load-bearing. A wider pull is never substituted
-# for a narrower one: rev_yoy, sources, status and excluded_reason are all
-# functions of the display-window width, measured divergent on MAGN (sources)
-# and IDYA (status insufficient -> red) across a 30-ticker probe, so "12 covers
-# 8" is false. Nothing here depends on it — /api/peers has only ever asked for
-# one width — but a future caller must not assume otherwise.
-_PEER_C33_CACHE = {}        # (ticker, quarters) -> (raw result, stored_at)
-_PEER_C33_TTL = 600         # matches CACHE_TTL_PEERS — same data, same window
-_PEER_C33_STATE_LOCK = threading.Lock()   # guards both dicts below
-_PEER_C33_INFLIGHT = {}     # (ticker, quarters) -> threading.Lock
-
-# /api/peers has always called get_code33_data(p, CACHE_VERSION) with no
-# n_quarters, i.e. the adapter's default of 8. Naming it keeps the cache key
-# honest about the width it holds; it is not a new choice.
-_PEER_QUARTERS = 8
-
-
-def _peer_c33(ticker, quarters=_PEER_QUARTERS):
-    """get_code33_data for one peer, memoized and single-flighted.
-
-    Returns (result, was_cached). BLOCKING — always call it through
-    run_in_threadpool, never straight from an async handler.
-
-    Single-flight is not decoration: the analysis page fires its six requests
-    concurrently, so without it two parents sharing a peer both miss the cache
-    in the same instant and both compute. A waiter re-checks the cache after
-    acquiring the per-key lock, so it reuses the first result instead of
-    recomputing it.
-
-    Lock order is always per-key lock -> the adapter's _PIPELINE_LOCK, never the
-    reverse, so this cannot deadlock against the engine.
-
-    The cached dict is handed out by reference and callers MUST treat it as
-    read-only — /api/peers only reads scalars off it. Copying four full engine
-    payloads per request to defend against a mutation nobody performs is not
-    worth the cost.
-    """
-    key = (ticker.upper(), quarters)
-
-    def _fresh():
-        hit = _PEER_C33_CACHE.get(key)
-        if hit and time.time() - hit[1] < _PEER_C33_TTL:
-            return hit[0]
-        return None
-
-    with _PEER_C33_STATE_LOCK:
-        got = _fresh()
-        if got is not None:
-            return got, True
-        lock = _PEER_C33_INFLIGHT.get(key)
-        if lock is None:
-            lock = _PEER_C33_INFLIGHT[key] = threading.Lock()
-
-    with lock:
-        # Whoever held this lock before us has already stored their result.
-        with _PEER_C33_STATE_LOCK:
-            got = _fresh()
-        if got is not None:
-            return got, True
-        try:
-            data = get_code33_data(key[0], CACHE_VERSION, quarters)
-            with _PEER_C33_STATE_LOCK:
-                now = time.time()
-                _PEER_C33_CACHE[key] = (data, now)
-                # Sweep on write: this dict is NOT covered by evict_cache(), and
-                # a long-lived server walking a large universe would otherwise
-                # hold every peer result it ever computed.
-                for k in [k for k, v in _PEER_C33_CACHE.items()
-                          if now - v[1] > _PEER_C33_TTL]:
-                    _PEER_C33_CACHE.pop(k, None)
-        finally:
-            # Drop the in-flight entry even when the pipeline raises, or one
-            # failing ticker leaves a dead lock in the map for the life of the
-            # process. Stored BEFORE this pop, so no caller can slip into the
-            # gap and start a second compute.
-            with _PEER_C33_STATE_LOCK:
-                _PEER_C33_INFLIGHT.pop(key, None)
-        return data, False
-
-
-@app.get("/api/peers/{ticker}")
-async def peers(ticker: str):
-    from utils.code33_adapter import get_code33_data, CACHE_VERSION
-
-    cache_key = f"peers_{ticker.upper()}"
-    now = time.time()
-    evict_cache()
-    if cache_key in TICKER_CACHE:
-        cached, ts = TICKER_CACHE[cache_key]
-        if now - ts < CACHE_TTL_PEERS:
-            return JSONResponse(cached)
-
-    try:
-        def _pull_info():
-            """The two yfinance calls this endpoint makes before it reaches the
-            already-offloaded peer pipeline. Both are blocking HTTP and both ran
-            inline in the async def, so /api/peers held the event loop before it
-            ever got to the part that was correctly threaded."""
-            # normalize_ticker(): un-normalized, .info came back without a 'sector',
-            # so SECTOR_PEERS.get('') returned [] and dot tickers got an empty peer list.
-            _yf_sym = normalize_ticker(ticker.upper())
-            # .info is crumb-authenticated: when it came back empty there was no
-            # 'sector', SECTOR_PEERS.get('') returned [], and the peer list was
-            # empty for reasons that had nothing to do with the ticker.
-            info, _retried = _yf_quote_summary(
-                _yf_sym, lambda x: x.info or {}, is_empty=_info_is_empty)
-            # Get peers from recommendationKey or sector peers
-            # Use analyst recommendations to find peer tickers
-            #
-            # NOTE: `recs` is fetched and never read — the peer list below comes
-            # entirely from the hardcoded SECTOR_PEERS table. That is a wasted
-            # HTTP round trip on every uncached /api/peers call. Deliberately
-            # left in place here: removing it is a dead-code cleanup, not a
-            # scheduling change, and this pass had to keep behaviour identical.
-            # Flagged for the follow-up quality pass.
-            recs = yf.Ticker(_yf_sym).recommendations
-            return info
-
-        info = await run_in_threadpool(_pull_info)
-        # Get sector and find similar companies
-        sector = info.get('sector', '')
-        
-        # Hardcode peers per sector as fallback
-        SECTOR_PEERS = {
-            'Technology': ['NVDA','MSFT','AAPL','GOOGL','META'],
-            'Health Technology': ['LLY','NVO','ABBV','MRK','AMGN'],
-            'Healthcare': ['LLY','NVO','ABBV','MRK','AMGN'],
-            'Consumer Cyclical': ['AMZN','TSLA','HD','MCD','NKE'],
-            'Financial Services': ['JPM','BAC','GS','MS','V'],
-            'Energy': ['XOM','CVX','COP','SLB','EOG'],
-            'Industrials': ['CAT','DE','HON','UPS','LMT'],
-            'Communication Services': ['META','GOOGL','NFLX','DIS','CMCSA'],
-        }
-        
-        peer_tickers = SECTOR_PEERS.get(sector, [])
-        # Remove self
-        peer_tickers = [p for p in peer_tickers 
-                       if p != ticker.upper()][:4]
-        
-        peers_data = []
-        for p in peer_tickers:
-            try:
-                # Same pipeline call as before, now memoized per peer across
-                # parent tickers. _peer_c33 asks for _PEER_QUARTERS (8), which
-                # is the default this line passed implicitly — same width, same
-                # result, so the payload built below is unchanged.
-                d, _from_cache = await run_in_threadpool(_peer_c33, p)
-                print(f"[peers] {ticker.upper()}: {p} "
-                      f"{'cache hit' if _from_cache else 'computed'}")
-                if not d:
-                    continue
-                last_eps = next((x for x in reversed(
-                    d.get('eps_yoy', []) or []) 
-                    if x is not None), None)
-                last_rev = next((x for x in reversed(
-                    d.get('rev_yoy', []) or []) 
-                    if x is not None), None)
-                last_npm = next((x for x in reversed(
-                    d.get('npm', []) or []) 
-                    if x is not None), None)
-                peers_data.append({
-                    'ticker': p,
-                    'eps_yoy': round(last_eps, 1) 
-                               if last_eps is not None else None,
-                    'rev_yoy': round(last_rev, 1) 
-                               if last_rev is not None else None,
-                    'npm': round(last_npm, 1) 
-                           if last_npm is not None else None,
-                    'status': d.get('status', '')
-                })
-            except:
-                continue
-        
-        result = {
-            'ticker': ticker.upper(),
-            'peers': peers_data
-        }
-        # Cache on a resolved .info, not on a non-empty peer list: a sector
-        # that simply isn't in SECTOR_PEERS (Consumer Defensive, Utilities...)
-        # legitimately yields [], and that answer is worth caching too. What
-        # must NOT be cached is [] caused by .info failing, which is exactly
-        # what _info_is_empty() distinguishes.
-        if not _info_is_empty(info):
-            TICKER_CACHE[cache_key] = (result, now)
-        return JSONResponse(result)
-    except Exception as e:
-        return JSONResponse({
-            'ticker': ticker.upper(),
-            'peers': [],
-            'error': str(e)
-        })
-
-
-
 
 # ---------------------------------------------------------------------------
 # News Scanner (Stage 1) — additive, isolated

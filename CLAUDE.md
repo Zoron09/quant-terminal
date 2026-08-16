@@ -146,7 +146,7 @@ Two things to know before anyone reconsiders `./setup`:
 |--------|----------|----------|
 | secfsdstools | Revenue + Net Margin (primary) | `C:\Users\Meet Singh\secfsdstools\data\` — 426K reports, 69 quarters |
 | edgartools | Revenue + Net Margin (targeted gap-fill only) | pip installed |
-| yfinance | Chart, price, ownership, peers | pip installed |
+| yfinance | Chart, price, ownership | pip installed |
 | tradingview-scraper | News (primary) | pip installed |
 | yfinance | News fallback | pip installed |
 
@@ -220,8 +220,6 @@ GET  /api/news/{ticker}            → {news: [{title, source, url, time}]}
 
 GET  /api/ownership/{ticker}       → {institutional: [{name, pct}], insiders: [{name, role, date, value, type}]}
 
-GET  /api/peers/{ticker}           → {ticker, peers: [{ticker, rev_yoy, npm, status}]}
-
 POST /api/scan                     → starts background job: {job_id, total, resumed_from, running} (409 {error, job_id} if one is already running)
 
 GET  /api/scan/status              → {running, done, error, total, completed, current_ticker, winners: [{ticker, company, sector, mcap, eps, rev, margin, status}], excluded_banks: [tickers], meta: {total, passed, insufficient, excluded_banks}}
@@ -261,15 +259,18 @@ DELETE /api/news-scanner/watchlist/{ticker}   → {tickers: []}
   visual highlight (2), full article text via trafilatura (3), wire RSS + dedup (4).
 - News: tradingview-scraper primary, yfinance fallback, 60s cache
 - Chart: dynamic color (green/red), period % + $ gain label, YTD/1D/1W/1M/3M/1Y/5Y timeframes, 30s price poll
-- **Peer pipeline results are cached across parent tickers as of 2026-08-11** —
-  `_peer_c33()` in `api/server.py` memoizes the raw `get_code33_data` result per
-  `(peer_ticker, quarters)` for 600s, single-flighted. Sector peer lists overlap
-  heavily, so the same NVDA/MSFT/GOOGL/META were recomputed on every tech search.
-  **Exact-key only — a 12-quarter result is NOT reused for an 8-quarter request**
-  (see the LAST UPDATED entry for why that is false).
+- **Price chart draws real data as of 2026-08-11** — `makeSVG()` emits straight
+  segments (`L`), not the cubic beziers it used to. `periodPerf()` is the single
+  definition of the above-chart number and `fmtChange()` the single badge
+  formatter; both renderers call them, so the two readouts cannot drift.
+- ~~**Peer pipeline results are cached across parent tickers as of 2026-08-11**~~
+  **GONE — the whole SECTOR PEERS feature was removed 2026-08-16.** `_peer_c33()`,
+  `_PEER_C33_CACHE` and `/api/peers` no longer exist; the cache was a fix for a cost
+  that is now simply not paid. Kept as a struck-through line so the 2026-08-11 entry
+  below is not read as describing live code.
 - **No endpoint blocks the event loop as of 2026-08-16** — every blocking call in
-  `/api/ticker`, `/api/chart`, `/api/financials`, `/api/news`, `/api/ownership` and
-  `/api/peers` runs behind `run_in_threadpool`, so the six requests the analysis page
+  `/api/ticker`, `/api/chart`, `/api/financials`, `/api/news` and `/api/ownership`
+  runs behind `run_in_threadpool`, so the requests the analysis page
   fires concurrently now genuinely overlap and a static `GET /` stays responsive
   (max 17.5s → 1.35s) while a cold load is in flight. `/api/news` additionally resolves
   `news-headlines.tradingview.com` IPv4-only, removing a flat ~11s AAAA-timeout stall.
@@ -428,6 +429,117 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-16 (later still) — **Most of the "41s AAPL page load" was one-time per-process
+warm-up, not AAPL. Paid at boot now.** `api/server.py` startup only — `code33/` and
+`utils/code33_adapter.py` untouched, no scoring logic and **no endpoint's requested
+quarter count** changed.
+  - **The measurement that settles it.** Every cold number this project has recorded was
+    the FIRST request to a just-restarted process, which bundles the dataset stand-up
+    with the page's own cost. Same process, in order:
+    KO first-request-to-fresh-process **44.67s**, then AAPL uncached **7.03s**, AAPL
+    again cached **0.70s**, NVDA **5.24s**, UNP **7.56s**. So ~37-40s of it was the
+    process starting, once, landing on whoever searched first.
+  - **There is no adapter-level cache** — `get_code33_data`'s own docstring says the
+    pipeline has no in-dict cache layer — so those warm numbers are real pipeline runs,
+    not hidden cache hits. Confirmed by reading the adapter, not assumed.
+  - **Fix: one throwaway `get_code33_data(WARMUP_TICKER)` on a daemon thread from
+    `_lifespan`.** Result discarded; **nothing written to `TICKER_CACHE`** (that dict
+    holds assembled API responses, not raw engine payloads); default `n_quarters`, so no
+    endpoint's window is read or changed; never raises — a failed warm-up costs a log
+    line and the next real request pays the load exactly as it does today. Same
+    single-process guarantee as the news-scanner poller, and for the same reason.
+  - **Verified it does not block startup:** the server answered `GET /` **0.77s** after
+    launch, and throughout the warm-up `GET /` stayed at **0.01-0.03s**, `/api/price`
+    **0.2-0.44s**, `/api/news` sub-second — the endpoints that never touch the pipeline
+    are unaffected, as intended. Warm-up itself completed in **31.65s**.
+  - **HONEST COST, stated because it is real:** the warm-up holds the adapter's global
+    `_PIPELINE_LOCK` while it runs. A pipeline request arriving in the first ~30-40s
+    queues behind it instead of racing it — the same wait it would have paid anyway,
+    except for a request landing in the very first moment of boot, which now waits for
+    the warm-up AND then its own run. Everyone arriving after it finishes wins the full
+    ~37-40s.
+  - **Cold page load, first user after boot:** AAPL **41.29 → 11.72s**, NVDA 6.02s,
+    UNP 4.19s, XMTR 3.61s, ST 4.56s.
+  - **Output unchanged:** 5 tickers x 6 endpoints, **8,163 keys**. One key differed —
+    AAPL's chart close for 2026-02-06, 277.36 vs 277.37 — and it is **upstream drift,
+    not this change**: a live re-fetch after the 300s chart TTL expired came back
+    **0 differing points out of 251**, a direct yfinance call outside the server returns
+    277.36 (raw 277.364990234375), and the warm-up only calls `get_code33_data`, which
+    never touches yfinance history. A transient Yahoo value had been frozen into a cache
+    entry at capture time.
+  - **AAPL still does NOT reach "well under 10s" and that is a separate, open question.**
+    Warm and uncached it ranges **7.03s / 11.72s / 17.33s** across page loads, and its
+    single `/api/ticker` pipeline call sampled at **3.14 / 3.25 / 7.96 / 8.79s** over
+    four properly-spaced uncached runs. Cause is visible in the log: AAPL needs **live
+    edgartools/SEC gap-fill for its two newest quarters** (2026-06-27, 2026-03-28) on
+    every run — four fetch groups per page load, whose span measured 2.3s in one run and
+    8.2s in another. That is network latency, and the obvious lever for removing the
+    second run (reusing `/api/financials`'s 12-quarter pull for `/api/ticker`'s 8) is
+    **already proven unsafe** — see the 2026-08-11 entry, where a 30-ticker probe found
+    MAGN's sources and IDYA's status both move with window width. **Left for a decision,
+    deliberately not guessed at.**
+  - **Noted, not changed:** `run.py` still launches uvicorn with `--reload`, which this
+    file already records as a hazard that "never completes" while the old worker keeps
+    serving. It also means a stray reload re-runs the warm-up. Every measurement above
+    used a full process-tree kill.
+  - **Not verified:** not opened in a real browser (`/qa` unregistered per GSTACK POLICY).
+
+2026-08-16 (later) — **SECTOR PEERS removed entirely — endpoint, cache and UI.** Feature
+removal, `api/server.py` + `frontend/index.html` only. `code33/` and
+`utils/code33_adapter.py` untouched; no scoring or engine logic changed.
+  - **Why.** `/api/peers` ran the full Code 33 pipeline once per peer, four peers, all
+    serialized behind the adapter's global lock. On a cold AAPL load it was **57.69s of a
+    57.70s page wall — the entire load.** The 2026-08-11 per-peer cache made it cheaper
+    across searches but never removed the first-load cost.
+  - **Backend, 220 lines deleted:** the `/api/peers/{ticker}` route, `_peer_c33()`,
+    `_PEER_C33_CACHE`, `_PEER_C33_TTL`, `_PEER_C33_STATE_LOCK`, `_PEER_C33_INFLIGHT`,
+    `_PEER_QUARTERS`, `CACHE_TTL_PEERS` and the now-unreachable `peers_` branch of
+    `_entry_ttl()`.
+    - **`SECTOR_PEERS` was checked before removal, as asked.** It was a local defined
+      *inside* the `peers()` handler, not a module global — grep across `api/`, `utils/`,
+      `code33/`, `tools/`, `tests/`, `scripts/` and `frontend/` found no other consumer,
+      so it dies with the function. Same check cleared `CACHE_TTL_PEERS`, whose only two
+      readers were `_entry_ttl()` and the endpoint.
+  - **Frontend via the mandated flow** (`tools/patch_frontend_remove_peers.py`: decode
+    `__bundler/template` JSON → exact replacements → re-encode with `<\/` escaping).
+    **Ten replacements, each asserting exactly one match**: the `.peer-tbl` CSS, the mock
+    `D.peers` seed, `_applyToD()`'s mapping, the idle copy that advertised "and peers",
+    the row builder, the card markup, the `/api/peers` fetch, its `pe` binding in the
+    `Promise.all` destructure, and `S.analysis.peers`.
+    - **`.bot-cols` went from `1fr 1fr` to `1fr`.** This is the one deliberate visual
+      change beyond deletion: INSTITUTIONAL OWNERSHIP is now the only card in that row,
+      and leaving a two-column grid would have parked it in the left half with an empty
+      right half — a hole exactly where the peers card was. It now spans full width like
+      the LIVE NEWS card above it. The 680px media query that also set `1fr` went with
+      it; it restated the base rule exactly.
+  - **Verified:** `/api/peers/{ticker}` returns **404** and is absent from
+    `openapi.json`; the served `index.html` contains **0** occurrences of `/api/peers`
+    and **0** of `peer-tbl`. The six surviving endpoints are **byte-identical across 5
+    tickers — 8,163 keys, 0 differences** (AAPL/NVDA/UNP/XMTR/ST); the only diffs in the
+    whole comparison are the 105 peers keys, which is the removal itself. Patched JS
+    **parses clean under `node --check`**, **0** residual `D.peers`/`pe.` references, and
+    the analysis template's tag balance is **0 open divs unclosed before and after** with
+    the table/thead/tbody/tr/th counts going to zero. Single listener confirmed (PID
+    12260), full tree kill before testing, log clean — no tracebacks, no 500s, and the
+    only 404s are the two deliberate `/api/peers` probes.
+  - **Cold page wall:** AAPL **57.70 → 41.29s** (−16.41s, −28%), UNP **16.50 → 4.71s**,
+    XMTR **3.90 → 3.60s**, ST **4.60 → 4.29s**. Five-ticker total **87.51 → 59.96s**
+    (−31%).
+    - **NVDA went the other way, 4.81 → 6.07s, and it is not a regression.** In the
+      before-run AAPL loaded first and its peer set is NVDA/MSFT/GOOGL/META, so NVDA's
+      SEC facts were already warm in-process by the time NVDA itself was requested.
+      Removing peers removes that incidental cross-ticker warming; NVDA now pays its own
+      cold cost, which is what it always should have been. 6.07s is the honest number.
+  - **AAPL's floor is now its own two pipeline runs** — `/api/ticker` 34.08s then
+    `/api/financials` finishing at 41.29s, serialized behind `_PIPELINE_LOCK`. That is
+    the remaining cold-load cost and this change does not touch it.
+  - **One cosmetic residue, deliberate:** the served bundle still contains the string
+    "SECTOR PEERS" **once**, in the CSS comment explaining why `.bot-cols` is
+    single-column. It is a comment, not markup.
+  - **Not verified:** not opened in a real browser — same limitation and same reason as
+    every entry since 2026-08-04 (`/qa` deliberately unregistered per GSTACK POLICY).
+    The DOM proof here is tag-balance and identifier-level, not visual.
+
 2026-08-16 — **The six analysis-page endpoints no longer block the event loop, and
 `/api/news`'s ~11s was DNS, not the network.** `api/server.py` only — `code33/` and
 `utils/code33_adapter.py` untouched, confirmed by `git diff`. **Scheduling change only:
@@ -514,6 +626,51 @@ no endpoint computes anything different.**
   - **Not verified:** not opened in a real browser — same limitation and same reason as
     the 2026-08-04 and 2026-08-11 entries (`/qa` deliberately unregistered per GSTACK
     POLICY). The proof is HTTP-level and timing-level, not visual.
+
+2026-08-11 (later still) — **Price chart un-smoothed, and its numbers made exact on every
+timeframe.** Frontend only (`tools/patch_frontend_chart_accuracy.py`, 8 replacements) —
+**no `api/server.py` change was needed** and none was made; `code33/` and
+`utils/code33_adapter.py` untouched.
+  - **PART 1 — the drawn line was never the data.** `makeSVG()` emitted one cubic bezier
+    per segment with BOTH control points on the segment's x-midpoint, which rounds every
+    corner and forces a horizontal tangent through each actual price. Now straight `L`
+    segments between the real points, as Yahoo/TradingView draw them. Verified by
+    extracting the shipped `makeSVG` and running it: **zero curve commands, segment count
+    == points-1, and every vertex within 0.06px of its own data point** across 5 tickers ×
+    7 tabs.
+  - **PART 2 — one definition each.** The perf arithmetic was **duplicated** in
+    `renderAnalysis()` and `renderChart()`, and the badge string was built separately by
+    `renderAnalysis()` and the 30s poll. Both are now single helpers, `periodPerf()` and
+    `fmtChange()`. This was the actual root cause of "two places disagree" — not a
+    per-timeframe recalculation of the badge, which never existed (see the investigation
+    entry: the badge has only ever been quote-driven).
+  - **1D now reuses the badge's own values**, not just its baseline, so the two are
+    identical by construction. The intraday series' first bar is NOT the previous close —
+    on NVDA that put the label at ▼$1.52 against a badge of ▲$1.79, **opposite signs**,
+    both arithmetically correct. Same on XMTR (▼$0.35 → ▲$0.69) and UNP (▼$0.20 → ▼$0.66).
+  - **Every other tab now ends at its own chart's last plotted point**, not a separately
+    fetched live quote — that was the ~1c mismatch between the label and the line beneath it.
+  - **The badge is seeded from `/api/price` at first paint** (added to `loadAnalysis()`'s
+    fan-out; ~0.4s, no pipeline), so it no longer paints an up-to-300s-stale `/api/ticker`
+    value and then jumps. Caught live during verification: NVDA `/api/ticker` 219.63
+    (+2.08) vs `/api/price` 219.62 (+2.07). The poll now also updates `D` and repaints the
+    1D label, without which the badge would move while the label kept its load-time numbers.
+  - **Two formatting bugs found in the audit and fixed.** The poll **dropped the minus sign
+    on the dollar figure entirely** — a -$1.66 move rendered as `$1.66` — while
+    `renderAnalysis()` rendered `$-1.66`; both now read `-$1.66`. And the chart's y-axis
+    ticks used `toFixed(0)`, so every tick on a sub-$10 stock read the same whole dollar;
+    now 2dp.
+  - **Deliberately NOT touched:** the two other `toFixed(0)` calls in the bundle, in
+    `runScan()` (screener revenue pills) and `buildSvgRadar()` (radar labels). Neither is a
+    price figure on the analysis page.
+  - **Verified:** single listener (PID 19628) confirmed before testing, full tree kill
+    before restart; patched JS parses clean under `node --check`; the shipped functions
+    tested directly against live API data for AAPL/NVDA/ST/XMTR/UNP across all 7 tabs —
+    **all checks passed**, 1D label numerically identical to the badge on every ticker,
+    every other tab's implied end value within half a cent of its chart's last point.
+  - **Not verified:** not opened in a real browser (same reason as the 2026-08-04 entry —
+    `/qa` unregistered per GSTACK POLICY). The no-smoothing proof is path-level, which is
+    stricter than a visual check, but the rendered result has not been seen.
 
 2026-08-11 (later) — **`/api/peers` now reuses peer pipeline results across parent
 tickers.** `api/server.py` only — `code33/` and `utils/code33_adapter.py` untouched,
