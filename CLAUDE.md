@@ -429,6 +429,106 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-16 (financials single view) — **The Financials card lost its three tabs and is
+now one Revenue / Net Margin / EPS table; `/api/financials` stopped fetching the balance
+sheet and cash flow entirely.** `api/server.py` + `frontend/index.html`. `code33/` and
+`utils/code33_adapter.py` untouched, confirmed by `git diff`; no scoring logic and no
+requested quarter count changed.
+  - **Backend, `/api/financials`:** `tk.quarterly_balance_sheet` and
+    `tk.quarterly_cashflow` are gone from the parallel fetch group — **five fetches down
+    to three** — and `balance_sheet`/`cash_flow` are gone from the response. `df_to_dict`
+    and the `numpy` import went with them; both existed only to serialise those two
+    frames. Response keys are now exactly `earnings`, `next_earnings`, `valuation`.
+  - **The income-derived values are untouched:** `revenue`, `rev_yoy`, `net_margin`,
+    `net_margin_yoy`, `eps`, `eps_yoy` all come from the same `quarterly_income_stmt`
+    fetch and the same `get_code33_data(t, CACHE_VERSION, 12)` call as before.
+    **Verified across 6 tickers, 348 fields, 0 differences** (ATKR/CROX/DELL/GRMN/KTB/MU),
+    `next_earnings` and `valuation` included.
+  - **Frontend via the mandated flow** (`tools/patch_frontend_financials_single_view.py`,
+    6 replacements each asserting exactly one match): the `div.tabs#fin-tabs` strip and
+    its three `div.tab` children are removed from the markup — not hidden — along with
+    the `#fin-tabs` click listener, `finContentHtml()`'s balance/cashflow branch,
+    `_applyToD`'s `D.bal`/`D.cf`, those two keys in the `D` seed, and `S.finTab`.
+  - **Nothing about the surviving table was redesigned.** The six rows, `.fin-scroll` /
+    `.fin-tbl` markup, the `.ind` indent on the YoY rows, the `pos`/`neg` colour classes
+    and the inline pp-delta span are byte-for-byte what the Income Statement tab already
+    rendered. Final structure: `div.card > div.card-hd "FINANCIALS"` then
+    `div#fin-content > div.fin-scroll > table.fin-tbl`, one `<th>Metric</th>` plus **8
+    quarter columns**, and six `<tr>`s — Revenue, Rev YoY, Net Margin, Margin YoY,
+    EPS (Adj), EPS YoY.
+  - **Verified rendered output is unchanged:** old (tabbed) vs new (single view) bundle
+    fed the SAME real payloads through the shipped `finContentHtml()` — **6 tickers, 42
+    row/header groups, 0 differences**, quarter columns 8 → 8, rows 6 → 6, tab strip
+    present → absent, no Balance Sheet/Cash Flow text anywhere in the rendered page.
+    The staged-loading harness still passes **21/21**. JS parses clean under
+    `node --check`; server log clean, no tracebacks, no 500s.
+  - **One cosmetic residue, deliberate:** the served bundle contains the strings
+    "Balance Sheet"/"Cash Flow" **once**, in the comment explaining what was removed and
+    why. Comment, not markup — the patcher's own check strips `//` lines before asserting
+    the code is clean.
+  - **Left alone, flagged:** the `.tabs`/`.tab` CSS rules are now unused by the analysis
+    page but were not deleted (unused CSS is a `/simplify` matter, and the classes are
+    generic enough to be worth checking against the other pages first). `fmt_val` in
+    `api/financials` was already dead before this change and still is.
+  - **Not verified:** not opened in a real browser (`/qa` unregistered per GSTACK
+    POLICY). The proof is stub-DOM and payload level, not visual.
+
+2026-08-16 (staged loading) — **The analysis page paints the fast half immediately;
+Code 33 and financials fill in when they land.** `frontend/index.html` only, via
+`tools/patch_frontend_staged_loading.py` (14 replacements, each asserting exactly one
+match). **No backend change at all** — `api/server.py`, `code33/` and
+`utils/code33_adapter.py` untouched, confirmed by `git diff`. No endpoint's requested
+quarter count changed. Timing of the paint only, not what anything computes.
+  - **Time to useful content, cold tickers:** ATKR **10.13 → 0.88s**, CROX
+    **5.70 → 0.49s**, DELL **3.41 → 0.47s**, GRMN **3.16 → 0.42s**, KTB
+    **3.00 → 0.66s**. Full page still completes at the same wall time as before; what
+    changed is that price/chart/news/ownership no longer wait behind the pipeline.
+  - **All six requests still start together.** Only the awaits are staged — the fast
+    four are awaited first and painted, the two slow ones awaited second. Nothing is
+    serialized behind anything else, so total load time is unchanged by construction.
+  - **THE MOCK SEED IS GONE, and it was not hypothetical.** `D` was seeded with real
+    -looking NVIDIA figures and `_applyToD()` only wrote a field when the API returned
+    non-null, so a missing field silently displayed NVIDIA's number. Proven live on the
+    OLD build with real payloads:
+    - **ATKR's P/E** — API returns `pe_ratio: 'N/A'`, page rendered **`52.4x`**, which is
+      NVIDIA's mock P/E. Now `—`.
+    - **KTB's EPS YoY** — API returns `eps_yoy: null`. Loaded alone the old page rendered
+      **`+197.3%`** (NVIDIA's seed); loaded after GRMN it rendered **`+35.3%`**, which is
+      **GRMN's** value. Now `—`.
+    Every slow-owned field is now written on BOTH branches — real value, or an explicit
+    marker — so it can hold neither a demo seed nor the previous ticker's number.
+    `PRICES` got the same treatment: it was seeded with a mock NVIDIA price series that
+    a failed `/api/chart` would have drawn as the searched ticker's own chart.
+  - **Three display states, deliberately distinct:** `…` = not asked yet, `—` = the API
+    had nothing here, and a real value. The badge adds `LOADING…` as a third state
+    separate from the API's own `NO SIGNAL`, which is an answer rather than a wait.
+  - **Surgical patch, not a second render.** `patchSlowSections()` updates only
+    `#id-name`, `#c33-badge`, `#stats-grid` and `#fin-content`. Re-running
+    `renderAnalysis()` would replace all of `#page-analysis` and re-attach its three
+    listeners, destroying anything typed into the search box since first paint —
+    verified: with text in the box, the slow patch leaves it untouched and
+    `#page-analysis`'s innerHTML is byte-unchanged.
+  - **Generation token.** `_analysisToken` is incremented per load and re-checked before
+    each apply, plus a second `S.analysis.ticker` check for the case where the fast group
+    failed. Search A then B inside A's window and A's late response is discarded.
+  - **Verified: 21/21 checks** executing the SHIPPED patched functions against a stub DOM
+    (same method as the 2026-08-04 nav proof) — fast content present while the slow half
+    is still pending, badge/pills/pane all showing pending markers, **zero** NVIDIA
+    markers anywhere on a pending page, typed input surviving the patch, the race
+    discarding A's data, and an empty slow payload leaking no mock values. JS parses
+    clean under `node --check`.
+  - **Display-model comparison, old vs new bundle, identical real payloads, 5 tickers,
+    180 fields — 17 differ, and every one is the old build being wrong.** 15 are on
+    `code33`/`netMargin`/`revYoY`, which **no renderer reads** (dead fields that used to
+    keep the NVIDIA seed). The other 2 are the ATKR P/E and KTB EPS YoY corrections
+    above. **No rendered value regressed; two rendered values stopped being fake.**
+  - **Not verified:** not opened in a real browser (`/qa` unregistered per GSTACK
+    POLICY). The proof is stub-DOM and display-model level, not visual.
+  - **Left alone, flagged:** `D.exchange` is never written by `_applyToD()` and still
+    renders the literal `'NASDAQ · Technology'` for every ticker — a pre-existing display
+    bug, out of scope here. `mockP`/`sn` are now unused; cleanup candidates for
+    `/simplify`.
+
 2026-08-16 (later still) — **Most of the "41s AAPL page load" was one-time per-process
 warm-up, not AAPL. Paid at boot now.** `api/server.py` startup only — `code33/` and
 `utils/code33_adapter.py` untouched, no scoring logic and **no endpoint's requested

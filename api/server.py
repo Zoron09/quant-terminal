@@ -1024,7 +1024,8 @@ async def chart_data(ticker: str, period: str = "3mo", interval: str = "1d"):
 
 @app.get("/api/financials/{ticker}")
 async def financials(ticker: str):
-    import numpy as np
+    # numpy and df_to_dict used to live here; both existed solely to serialise the
+    # balance-sheet and cash-flow frames, which this endpoint no longer fetches.
     t = ticker.upper()
     cache_key = f"fin_{t}"
     now = time.time()
@@ -1034,26 +1035,6 @@ async def financials(ticker: str):
         if now - ts < CACHE_TTL_FINANCIALS:
             return JSONResponse(cached)
     try:
-        def df_to_dict(df):
-            if df is None or df.empty:
-                return {}
-            df = df.copy()
-            result = {}
-            for idx in df.index:
-                row = {}
-                for col in df.columns:
-                    val = df.loc[idx, col]
-                    if hasattr(val, 'item'):
-                        val = val.item()
-                    if val is None or (
-                        isinstance(val, float) and 
-                        np.isnan(val)):
-                        val = None
-                    row[str(col.date() if hasattr(
-                        col, 'date') else col)] = val
-                result[str(idx)] = row
-            return result
-        
         def fmt_val(v):
             if v is None: return None
             try:
@@ -1079,26 +1060,27 @@ async def financials(ticker: str):
             one or two blocking calls.
             """
             # normalize_ticker(): un-normalized, Yahoo returned nothing for dot
-            # tickers, so balance_sheet/cash_flow/valuation all came back empty
-            # while the engine-sourced 'earnings' array (already normalized) was fine.
+            # tickers, so the valuation block came back empty while the
+            # engine-sourced 'earnings' array (already normalized) was fine.
             tk = yf.Ticker(normalize_ticker(t))
 
+            # THREE fetches, not five. quarterly_balance_sheet and
+            # quarterly_cashflow were dropped when the Financials card became a
+            # single Revenue / Net Margin / EPS view — nothing renders a balance
+            # sheet or a cash flow statement any more, and they were two network
+            # round trips per uncached load serving a payload nobody read.
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 f_inc = executor.submit(lambda: tk.quarterly_income_stmt)
-                f_bal = executor.submit(lambda: tk.quarterly_balance_sheet)
-                f_cf  = executor.submit(lambda: tk.quarterly_cashflow)
                 f_info = executor.submit(lambda: tk.info)
                 f_cal = executor.submit(lambda: tk.calendar)
 
                 inc = f_inc.result()
-                bal = f_bal.result()
-                cf  = f_cf.result()
                 # .info is the only crumb-backed call in this group that RAISES on a
                 # stale crumb (TypeError out of yfinance's own parser, confirmed by
-                # probe: income/balance/cashflow/calendar all degrade quietly). Left
-                # unguarded it escaped the whole handler, so a crumb fault cost the
-                # balance sheet and cash flow too, not just the valuation block.
+                # probe: income and calendar both degrade quietly). Left unguarded
+                # it escaped the whole handler, so a crumb fault cost the earnings
+                # rows too, not just the valuation block.
                 try:
                     info = f_info.result() or {}
                 except Exception as e:
@@ -1116,9 +1098,9 @@ async def financials(ticker: str):
                     print(f"[financials] {t} .info retry failed: {type(e).__name__}: {e}")
                     info = info or {}
 
-            return inc, bal, cf, info, cal_data
+            return inc, info, cal_data
 
-        inc, bal, cf, info, cal_data = await run_in_threadpool(_pull_yf)
+        inc, info, cal_data = await run_in_threadpool(_pull_yf)
 
         # --- Build earnings list from secfsdstools + yfinance merge ---
         earnings_list = []
@@ -1254,8 +1236,6 @@ async def financials(ticker: str):
         except: pass
         
         result = {
-            'balance_sheet': df_to_dict(bal),
-            'cash_flow': df_to_dict(cf),
             'valuation': {
                 'P/E ratio': info.get('trailingPE'),
                 'Forward P/E': info.get('forwardPE'),
