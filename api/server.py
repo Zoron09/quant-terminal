@@ -9,6 +9,7 @@ import sys
 import os
 import re
 import math
+import socket
 import threading
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +25,72 @@ TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils.code33_adapter import get_code33_data, CACHE_VERSION, normalize_ticker
 from fastapi.concurrency import run_in_threadpool
+
+# ---------------------------------------------------------------------------
+# IPv4-only DNS for news-headlines.tradingview.com — /api/news source 2
+# ---------------------------------------------------------------------------
+# That host publishes A records and NO AAAA record. This machine's resolver
+# runs the AAAA lookup to its full timeout before falling back to the A lookup,
+# on EVERY call, so every /api/news request paid a flat ~11s before a single
+# byte moved. Measured directly, three consecutive lookups:
+#
+#   socket.getaddrinfo(host, 443, AF_UNSPEC)  -> 11.119s, 4 results
+#   socket.getaddrinfo(host, 443, AF_INET)    ->  0.005s, 4 results
+#   socket.getaddrinfo(host, 443, AF_UNSPEC)  -> 11.060s, 4 results
+#
+# The two families return the SAME four addresses — every result of the
+# AF_UNSPEC lookup is already AF_INET, because there is no AAAA record to find.
+# So restricting the family cannot change which endpoint is connected to; it
+# only skips a query that is guaranteed to return nothing. Not OS-cached
+# either: the third lookup pays the full cost again.
+#
+# Why this shape and not a requests HTTPAdapter mounted on the host prefix,
+# which is the tidier form of the same idea: tradingview_scraper's
+# NewsScraper.scrape_headlines() calls the module-level `requests.get(...)`
+# directly (symbols/news.py) and exposes no Session, adapter or transport
+# seam to mount one on. The remaining options were to reimplement the
+# library's request inside this file (duplicating its URL construction and
+# sort, which is real drift risk for a value this endpoint must return
+# unchanged) or to narrow resolution for the one hostname. This does the
+# latter.
+#
+# Scope is the hostname, checked by exact match, and nothing else:
+#   - every other host falls through to the original function untouched
+#   - an explicit family (AF_INET6, AF_INET) from any caller is respected;
+#     only AF_UNSPEC — "caller has no preference" — is narrowed
+#   - install is idempotent, so a re-import cannot wrap the wrapper
+#
+# The `_qt_original` attribute is what makes that last point true, and it is
+# not decoration. importlib.reload() re-executes this module INTO THE SAME
+# module dict, so a naive `_real_getaddrinfo = socket.getaddrinfo` on the
+# second pass captures the wrapper that is already installed — and because the
+# already-installed function reads that same shared global, it then calls
+# itself. That is not theoretical: the first version of this block recursed to
+# RecursionError under reload, caught by its own unit test. Reading the
+# original back off the installed wrapper makes re-execution resolve to the
+# true socket.getaddrinfo every time, so reinstalling unconditionally is safe
+# and no guard is needed.
+#
+# Deliberately NOT urllib3's allowed_gai_family() or a global socket setting:
+# both would change resolution for every host in the process, including SEC,
+# Yahoo and Finnhub. Deliberately not a temporary swap around the call site
+# either — /api/news now runs on worker threads and can be in flight for
+# several tickers at once, so anything that toggles global state and restores
+# it would race. This wrapper is permanent and stateless, so it does not.
+_TV_NEWS_HOST = "news-headlines.tradingview.com"
+_real_getaddrinfo = getattr(socket.getaddrinfo, "_qt_original", socket.getaddrinfo)
+
+
+def _getaddrinfo_ipv4_for_tv_news(host, port, family=0, type=0, proto=0, flags=0):
+    if family == socket.AF_UNSPEC and isinstance(host, str) \
+            and host.lower() == _TV_NEWS_HOST:
+        family = socket.AF_INET
+    return _real_getaddrinfo(host, port, family, type, proto, flags)
+
+
+_getaddrinfo_ipv4_for_tv_news._qt_original = _real_getaddrinfo
+socket.getaddrinfo = _getaddrinfo_ipv4_for_tv_news
+
 
 TICKER_CACHE = {}
 
@@ -694,69 +761,89 @@ async def ticker_data(ticker: str):
                                 status_code=404)
         
         data['status'] = data.get('status', 'insufficient')
-        
 
-        # Yahoo uses SEC's hyphen form for share classes (BRK-B, not BRK.B) —
-        # the same normalization the engine already applies via
-        # normalize_ticker(). Passing the raw dotted ticker returned empty
-        # metadata, which made fast_info raise and 500'd the whole endpoint.
-        sym = normalize_ticker(t)
-        tk = yf.Ticker(sym)
+        def _pull_quote():
+            """Every yfinance read for this endpoint, on one worker thread.
 
-        info = tk.fast_info  # chart-API backed: no crumb, unaffected by the fault below
-        try:
-            # .info is crumb-authenticated like the holders call, so it goes
-            # through the same stale-crumb retry — without it, company_name
-            # silently fell back to the raw ticker and pe_ratio to 'N/A'.
-            full_info, _retried = _yf_quote_summary(
-                sym, lambda x: x.info or {}, is_empty=_info_is_empty)
-        except Exception as e:
-            print(f"[ticker] {t} .info failed: {type(e).__name__}: {e}")
-            full_info = {}
+            The pipeline call above was already offloaded, but this block was
+            not, and it is not cheap: fast_info is lazily populated, so the
+            first fi() below issues a real HTTP request, and _yf_quote_summary
+            issues one or two more. Run inline in the async def it held the
+            single event loop for their full duration — long enough that a
+            static GET / measured 17.4s while one analysis page was loading.
 
-        def fi(attr, default=None):
-            """fast_info is a lazy dict that raises KeyError (e.g.
-            'exchangeTimezoneName') when Yahoo returns no metadata for a
-            symbol. getattr's default only absorbs AttributeError, so that
-            KeyError escaped and became a 500. Degrade to the default instead —
-            a missing quote should cost one field, not the whole response."""
+            Returns the derived fields in the same order they were assigned
+            before, so data.update() reproduces the original key order and the
+            serialized payload is unchanged.
+            """
+            # Yahoo uses SEC's hyphen form for share classes (BRK-B, not BRK.B) —
+            # the same normalization the engine already applies via
+            # normalize_ticker(). Passing the raw dotted ticker returned empty
+            # metadata, which made fast_info raise and 500'd the whole endpoint.
+            sym = normalize_ticker(t)
+            tk = yf.Ticker(sym)
+
+            info = tk.fast_info  # chart-API backed: no crumb, unaffected by the fault below
             try:
-                return getattr(info, attr, default)
-            except Exception:
-                return default
+                # .info is crumb-authenticated like the holders call, so it goes
+                # through the same stale-crumb retry — without it, company_name
+                # silently fell back to the raw ticker and pe_ratio to 'N/A'.
+                full_info, _retried = _yf_quote_summary(
+                    sym, lambda x: x.info or {}, is_empty=_info_is_empty)
+            except Exception as e:
+                print(f"[ticker] {t} .info failed: {type(e).__name__}: {e}")
+                full_info = {}
 
-        data['price'] = fi('last_price', 0)
-        data['company_name'] = full_info.get(
-            'shortName', t)
+            def fi(attr, default=None):
+                """fast_info is a lazy dict that raises KeyError (e.g.
+                'exchangeTimezoneName') when Yahoo returns no metadata for a
+                symbol. getattr's default only absorbs AttributeError, so that
+                KeyError escaped and became a 500. Degrade to the default instead —
+                a missing quote should cost one field, not the whole response."""
+                try:
+                    return getattr(info, attr, default)
+                except Exception:
+                    return default
 
-        data['change'] = fi('last_price', 0) - \
-          fi('regular_market_previous_close',
-          fi('previous_close', 0))
+            out = {}
+            out['price'] = fi('last_price', 0)
+            out['company_name'] = full_info.get(
+                'shortName', t)
 
-        data['change_pct'] = (data['change'] /
-          fi('regular_market_previous_close',
-          fi('previous_close', 1))) * 100
+            out['change'] = fi('last_price', 0) - \
+              fi('regular_market_previous_close',
+              fi('previous_close', 0))
 
-        mc = fi('market_cap', None)
-        if mc is None:
-            mc = full_info.get('marketCap', 0)
-        def fmt_mcap(v):
-            try:
-                v = float(v)
-                if v >= 1e12: return f"{v/1e12:.1f}T"
-                if v >= 1e9:  return f"{v/1e9:.1f}B"
-                if v >= 1e6:  return f"{v/1e6:.1f}M"
-                return f"{v:,.0f}"
-            except: return "N/A"
-        data['market_cap_fmt'] = fmt_mcap(mc)
-        
-        data['pe_ratio'] = full_info.get(
-            'trailingPE', 'N/A')
+            out['change_pct'] = (out['change'] /
+              fi('regular_market_previous_close',
+              fi('previous_close', 1))) * 100
 
-        data['week52_high'] = fi('year_high', 0)
-        data['week52_low'] = fi('year_low', 0)
-        data['avg_volume'] = fi('three_month_average_volume', 0)
-        
+            mc = fi('market_cap', None)
+            if mc is None:
+                mc = full_info.get('marketCap', 0)
+            def fmt_mcap(v):
+                try:
+                    v = float(v)
+                    if v >= 1e12: return f"{v/1e12:.1f}T"
+                    if v >= 1e9:  return f"{v/1e9:.1f}B"
+                    if v >= 1e6:  return f"{v/1e6:.1f}M"
+                    return f"{v:,.0f}"
+                except: return "N/A"
+            out['market_cap_fmt'] = fmt_mcap(mc)
+
+            out['pe_ratio'] = full_info.get(
+                'trailingPE', 'N/A')
+
+            out['week52_high'] = fi('year_high', 0)
+            out['week52_low'] = fi('year_low', 0)
+            out['avg_volume'] = fi('three_month_average_volume', 0)
+            return out
+
+        # A ZeroDivisionError out of change_pct still propagates here and is
+        # still turned into a 500 by this handler's own except — offloading
+        # moves where the work runs, not what escapes it.
+        data.update(await run_in_threadpool(_pull_quote))
+
         import logging
         logging.warning(f"DATA KEYS: {list(data.keys())}")
         
@@ -842,23 +929,35 @@ async def chart_data(ticker: str, period: str = "3mo", interval: str = "1d"):
             return JSONResponse(cached)
     
     try:
-        # normalize_ticker(): Yahoo uses SEC's hyphen form (BRK-B), not the dot
-        # notation (BRK.B) the rest of the app carries. Un-normalized, this
-        # returned an empty history and the handler 404'd with "No data".
-        hist = yf.Ticker(normalize_ticker(t)).history(period=period, interval=interval)
-        if hist.empty:
-            return JSONResponse({'error': 'No data'}, 
+        def _pull():
+            """history() is a blocking HTTP call and was running inline in the
+            async def, so it held the event loop for its full duration.
+
+            The row loop comes with it rather than staying behind: it is the
+            only consumer of the DataFrame, so moving it too means the frame
+            never has to cross back to the loop thread. Returns None for an
+            empty history — the same signal the `hist.empty` check produced,
+            kept as a sentinel so the 404 is still raised by the handler."""
+            # normalize_ticker(): Yahoo uses SEC's hyphen form (BRK-B), not the dot
+            # notation (BRK.B) the rest of the app carries. Un-normalized, this
+            # returned an empty history and the handler 404'd with "No data".
+            hist = yf.Ticker(normalize_ticker(t)).history(period=period, interval=interval)
+            if hist.empty:
+                return None
+            return [
+                {
+                    'date': str(idx.date()),
+                    'close': round(float(row['Close']), 2)
+                }
+                for idx, row in hist.iterrows()
+            ]
+
+        prices = await run_in_threadpool(_pull)
+        if prices is None:
+            return JSONResponse({'error': 'No data'},
                                 status_code=404)
-        
-        prices = [
-            {
-                'date': str(idx.date()),
-                'close': round(float(row['Close']), 2)
-            }
-            for idx, row in hist.iterrows()
-        ]
-        
-        result = {'ticker': t, 'period': period, 
+
+        result = {'ticker': t, 'period': period,
                   'prices': prices}
         TICKER_CACHE[cache_key] = (result, now)
         return JSONResponse(result)
@@ -878,10 +977,6 @@ async def financials(ticker: str):
         if now - ts < CACHE_TTL_FINANCIALS:
             return JSONResponse(cached)
     try:
-        # normalize_ticker(): un-normalized, Yahoo returned nothing for dot
-        # tickers, so balance_sheet/cash_flow/valuation all came back empty
-        # while the engine-sourced 'earnings' array (already normalized) was fine.
-        tk = yf.Ticker(normalize_ticker(t))
         def df_to_dict(df):
             if df is None or df.empty:
                 return {}
@@ -913,38 +1008,60 @@ async def financials(ticker: str):
                 return f"{v:.2f}"
             except: return None
         
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            f_inc = executor.submit(lambda: tk.quarterly_income_stmt)
-            f_bal = executor.submit(lambda: tk.quarterly_balance_sheet)
-            f_cf  = executor.submit(lambda: tk.quarterly_cashflow)
-            f_info = executor.submit(lambda: tk.info)
-            f_cal = executor.submit(lambda: tk.calendar)
+        def _pull_yf():
+            """The five yfinance fetches plus the stale-crumb .info retry, all
+            on one worker thread.
 
-            inc = f_inc.result()
-            bal = f_bal.result()
-            cf  = f_cf.result()
-            # .info is the only crumb-backed call in this group that RAISES on a
-            # stale crumb (TypeError out of yfinance's own parser, confirmed by
-            # probe: income/balance/cashflow/calendar all degrade quietly). Left
-            # unguarded it escaped the whole handler, so a crumb fault cost the
-            # balance sheet and cash flow too, not just the valuation block.
-            try:
-                info = f_info.result() or {}
-            except Exception as e:
-                print(f"[financials] {t} .info fetch failed: {type(e).__name__}: {e}")
-                info = {}
-            cal_data = f_cal.result()
+            The inner ThreadPoolExecutor is unchanged and still fans the five
+            calls out in parallel — that part was always right. What was wrong
+            is WHERE the gathering happened: .result() is a synchronous block,
+            and it sat inside an `async def`, so the handler held the single
+            event loop for as long as the slowest of the five took. Submitting
+            work to a second pool does not help if the caller then blocks the
+            loop waiting on it. Same for the retry below, which is a further
+            one or two blocking calls.
+            """
+            # normalize_ticker(): un-normalized, Yahoo returned nothing for dot
+            # tickers, so balance_sheet/cash_flow/valuation all came back empty
+            # while the engine-sourced 'earnings' array (already normalized) was fine.
+            tk = yf.Ticker(normalize_ticker(t))
 
-        # .info feeds the whole valuation block below and is crumb-authenticated;
-        # a stale crumb returned {} here and every ratio rendered as null.
-        if _info_is_empty(info):
-            try:
-                info, _retried = _yf_quote_summary(
-                    normalize_ticker(t), lambda x: x.info or {}, is_empty=_info_is_empty)
-            except Exception as e:
-                print(f"[financials] {t} .info retry failed: {type(e).__name__}: {e}")
-                info = info or {}
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                f_inc = executor.submit(lambda: tk.quarterly_income_stmt)
+                f_bal = executor.submit(lambda: tk.quarterly_balance_sheet)
+                f_cf  = executor.submit(lambda: tk.quarterly_cashflow)
+                f_info = executor.submit(lambda: tk.info)
+                f_cal = executor.submit(lambda: tk.calendar)
+
+                inc = f_inc.result()
+                bal = f_bal.result()
+                cf  = f_cf.result()
+                # .info is the only crumb-backed call in this group that RAISES on a
+                # stale crumb (TypeError out of yfinance's own parser, confirmed by
+                # probe: income/balance/cashflow/calendar all degrade quietly). Left
+                # unguarded it escaped the whole handler, so a crumb fault cost the
+                # balance sheet and cash flow too, not just the valuation block.
+                try:
+                    info = f_info.result() or {}
+                except Exception as e:
+                    print(f"[financials] {t} .info fetch failed: {type(e).__name__}: {e}")
+                    info = {}
+                cal_data = f_cal.result()
+
+            # .info feeds the whole valuation block below and is crumb-authenticated;
+            # a stale crumb returned {} here and every ratio rendered as null.
+            if _info_is_empty(info):
+                try:
+                    info, _retried = _yf_quote_summary(
+                        normalize_ticker(t), lambda x: x.info or {}, is_empty=_info_is_empty)
+                except Exception as e:
+                    print(f"[financials] {t} .info retry failed: {type(e).__name__}: {e}")
+                    info = info or {}
+
+            return inc, bal, cf, info, cal_data
+
+        inc, bal, cf, info, cal_data = await run_in_threadpool(_pull_yf)
 
         # --- Build earnings list from secfsdstools + yfinance merge ---
         earnings_list = []
@@ -1113,83 +1230,104 @@ async def news(ticker: str):
         if now - ts < CACHE_TTL_NEWS:
             return JSONResponse(cached)
 
-    items = []
-    seen_titles = set()
+    def _gather():
+        """All three news sources on one worker thread.
 
-    # Source 1: SeekingAlpha via FinNews — fastest (0.42s), ticker-specific, analyst quality
-    try:
-        import FinNews as fn
-        sa = fn.SeekingAlpha(topics=[f'${t}'])
-        sa_news = sa.get_news() or []
-        for a in sa_news[:15]:
-            title = a.get('title', '').strip()
-            if not title or title in seen_titles:
-                continue
-            seen_titles.add(title)
-            pub = a.get('published', '')
-            items.append({
-                'title': title,
-                'source': 'Seeking Alpha',
-                'url': a.get('link', '') or a.get('url', ''),
-                'time': _parse_rfc2822(pub) if isinstance(pub, str) else (int(pub) if isinstance(pub, (int, float)) and pub > 0 else 0),
-                'ts': _parse_rfc2822(pub),
-            })
-    except Exception as e:
-        print(f"[news] SeekingAlpha failed: {e}")
+        This was the worst offender of the six: every source here is a blocking
+        HTTP call made directly inside the `async def`, and they run one after
+        another, so the endpoint held the single event loop for its entire
+        duration. A static GET / measured 12.66s during one of these in the
+        original diagnosis — that request touches no network and no pipeline,
+        it was purely waiting for the loop to come back.
 
-    # Source 2: tradingview-scraper — ticker-specific, Dow Jones/Barron's/MarketWatch
-    try:
-        from tradingview_scraper.symbols.news import NewsScraper
-        ns = NewsScraper()
-        articles = ns.scrape_headlines(symbol=t, exchange='NASDAQ', sort='latest')
-        if not isinstance(articles, list):
-            articles = articles.get('data', [])
-        for a in articles[:15]:
-            title = a.get('title', '').strip()
-            if not title or title in seen_titles:
-                continue
-            seen_titles.add(title)
-            url = a.get('link', '')
-            if not url and a.get('storyPath'):
-                url = 'https://www.tradingview.com' + a['storyPath']
-            pub = a.get('published', 0)
-            items.append({
-                'title': title,
-                'source': a.get('source', a.get('provider', '')),
-                'url': url,
-                'time': _parse_rfc2822(pub) if isinstance(pub, str) else (int(pub) if isinstance(pub, (int, float)) and pub > 0 else 0),
-                'ts': pub if isinstance(pub, (int, float)) else 0,
-            })
-    except Exception as e:
-        print(f"[news] tradingview-scraper failed: {e}")
+        Sources are sequential inside the thread exactly as before, and the
+        source-2-then-source-3 ordering is load-bearing: source 3 is a fallback
+        gated on `if not items`, so it must still see the result of the two
+        above it. Only the thread this runs on changed.
+        """
+        items = []
+        seen_titles = set()
 
-    # Source 3: yfinance fallback — only if both above return nothing
-    if not items:
+        # Source 1: SeekingAlpha via FinNews — fastest (0.42s), ticker-specific, analyst quality
         try:
-            # normalize_ticker(): defensive. This fallback only runs when both
-            # earlier sources return nothing, so the dot-ticker fault was never
-            # observed here (BRK.B news resolves via tradingview-scraper), but
-            # the call site carried the same latent bug.
-            tk = yf.Ticker(normalize_ticker(t))
-            for n in (tk.news or [])[:12]:
-                c = n.get('content', {})
-                title = (c.get('title', '') or n.get('title', '')).strip()
+            import FinNews as fn
+            sa = fn.SeekingAlpha(topics=[f'${t}'])
+            sa_news = sa.get_news() or []
+            for a in sa_news[:15]:
+                title = a.get('title', '').strip()
                 if not title or title in seen_titles:
                     continue
                 seen_titles.add(title)
-                pub = c.get('pubDate', '') or n.get('providerPublishTime', 0)
+                pub = a.get('published', '')
                 items.append({
                     'title': title,
-                    'source': c.get('provider', {}).get('displayName', '') or n.get('publisher', ''),
-                    'url': c.get('canonicalUrl', {}).get('url', '') or n.get('link', ''),
+                    'source': 'Seeking Alpha',
+                    'url': a.get('link', '') or a.get('url', ''),
+                    'time': _parse_rfc2822(pub) if isinstance(pub, str) else (int(pub) if isinstance(pub, (int, float)) and pub > 0 else 0),
+                    'ts': _parse_rfc2822(pub),
+                })
+        except Exception as e:
+            print(f"[news] SeekingAlpha failed: {e}")
+
+        # Source 2: tradingview-scraper — ticker-specific, Dow Jones/Barron's/MarketWatch
+        # Resolves news-headlines.tradingview.com, which is the host the
+        # IPv4-only lookup at the top of this file is scoped to — see there for
+        # why that ~11s was DNS and not the request itself.
+        try:
+            from tradingview_scraper.symbols.news import NewsScraper
+            ns = NewsScraper()
+            articles = ns.scrape_headlines(symbol=t, exchange='NASDAQ', sort='latest')
+            if not isinstance(articles, list):
+                articles = articles.get('data', [])
+            for a in articles[:15]:
+                title = a.get('title', '').strip()
+                if not title or title in seen_titles:
+                    continue
+                seen_titles.add(title)
+                url = a.get('link', '')
+                if not url and a.get('storyPath'):
+                    url = 'https://www.tradingview.com' + a['storyPath']
+                pub = a.get('published', 0)
+                items.append({
+                    'title': title,
+                    'source': a.get('source', a.get('provider', '')),
+                    'url': url,
                     'time': _parse_rfc2822(pub) if isinstance(pub, str) else (int(pub) if isinstance(pub, (int, float)) and pub > 0 else 0),
                     'ts': pub if isinstance(pub, (int, float)) else 0,
                 })
         except Exception as e:
-            print(f"[news] yfinance fallback failed: {e}")
+            print(f"[news] tradingview-scraper failed: {e}")
 
-    # Sort all items newest first
-    items.sort(key=lambda x: x.get('ts', 0), reverse=True)
+        # Source 3: yfinance fallback — only if both above return nothing
+        if not items:
+            try:
+                # normalize_ticker(): defensive. This fallback only runs when both
+                # earlier sources return nothing, so the dot-ticker fault was never
+                # observed here (BRK.B news resolves via tradingview-scraper), but
+                # the call site carried the same latent bug.
+                tk = yf.Ticker(normalize_ticker(t))
+                for n in (tk.news or [])[:12]:
+                    c = n.get('content', {})
+                    title = (c.get('title', '') or n.get('title', '')).strip()
+                    if not title or title in seen_titles:
+                        continue
+                    seen_titles.add(title)
+                    pub = c.get('pubDate', '') or n.get('providerPublishTime', 0)
+                    items.append({
+                        'title': title,
+                        'source': c.get('provider', {}).get('displayName', '') or n.get('publisher', ''),
+                        'url': c.get('canonicalUrl', {}).get('url', '') or n.get('link', ''),
+                        'time': _parse_rfc2822(pub) if isinstance(pub, str) else (int(pub) if isinstance(pub, (int, float)) and pub > 0 else 0),
+                        'ts': pub if isinstance(pub, (int, float)) else 0,
+                    })
+            except Exception as e:
+                print(f"[news] yfinance fallback failed: {e}")
+
+        # Sort all items newest first
+        items.sort(key=lambda x: x.get('ts', 0), reverse=True)
+        return items
+
+    items = await run_in_threadpool(_gather)
 
     # Strip internal ts field before returning
     result = {
@@ -1276,13 +1414,24 @@ async def ownership(ticker: str):
         # Both frames empty is the signal: a real company has institutional
         # holders, insider transactions, or both.
         sym = normalize_ticker(ticker.upper())
-        (holders, insiders), _retried = _yf_quote_summary(
-            sym,
-            lambda tk: (tk.institutional_holders, tk.insider_transactions),
-            is_empty=lambda frames: all(
-                f is None or getattr(f, 'empty', True) for f in frames
-            ),
-        )
+
+        def _pull():
+            """Blocking: two crumb-authenticated quoteSummary requests, and up
+            to two more if the stale-crumb retry fires. Held the event loop
+            when it ran inline — measured at 17.4s on a cold NVDA load.
+
+            Wrapped in a local def rather than passed to run_in_threadpool as
+            args so the keyword argument survives regardless of starlette
+            version."""
+            return _yf_quote_summary(
+                sym,
+                lambda tk: (tk.institutional_holders, tk.insider_transactions),
+                is_empty=lambda frames: all(
+                    f is None or getattr(f, 'empty', True) for f in frames
+                ),
+            )
+
+        (holders, insiders), _retried = await run_in_threadpool(_pull)
 
         inst_list = []
         if holders is not None and not holders.empty:
@@ -1438,17 +1587,32 @@ async def peers(ticker: str):
             return JSONResponse(cached)
 
     try:
-        # normalize_ticker(): un-normalized, .info came back without a 'sector',
-        # so SECTOR_PEERS.get('') returned [] and dot tickers got an empty peer list.
-        _yf_sym = normalize_ticker(ticker.upper())
-        # .info is crumb-authenticated: when it came back empty there was no
-        # 'sector', SECTOR_PEERS.get('') returned [], and the peer list was
-        # empty for reasons that had nothing to do with the ticker.
-        info, _retried = _yf_quote_summary(
-            _yf_sym, lambda x: x.info or {}, is_empty=_info_is_empty)
-        # Get peers from recommendationKey or sector peers
-        # Use analyst recommendations to find peer tickers
-        recs = yf.Ticker(_yf_sym).recommendations
+        def _pull_info():
+            """The two yfinance calls this endpoint makes before it reaches the
+            already-offloaded peer pipeline. Both are blocking HTTP and both ran
+            inline in the async def, so /api/peers held the event loop before it
+            ever got to the part that was correctly threaded."""
+            # normalize_ticker(): un-normalized, .info came back without a 'sector',
+            # so SECTOR_PEERS.get('') returned [] and dot tickers got an empty peer list.
+            _yf_sym = normalize_ticker(ticker.upper())
+            # .info is crumb-authenticated: when it came back empty there was no
+            # 'sector', SECTOR_PEERS.get('') returned [], and the peer list was
+            # empty for reasons that had nothing to do with the ticker.
+            info, _retried = _yf_quote_summary(
+                _yf_sym, lambda x: x.info or {}, is_empty=_info_is_empty)
+            # Get peers from recommendationKey or sector peers
+            # Use analyst recommendations to find peer tickers
+            #
+            # NOTE: `recs` is fetched and never read — the peer list below comes
+            # entirely from the hardcoded SECTOR_PEERS table. That is a wasted
+            # HTTP round trip on every uncached /api/peers call. Deliberately
+            # left in place here: removing it is a dead-code cleanup, not a
+            # scheduling change, and this pass had to keep behaviour identical.
+            # Flagged for the follow-up quality pass.
+            recs = yf.Ticker(_yf_sym).recommendations
+            return info
+
+        info = await run_in_threadpool(_pull_info)
         # Get sector and find similar companies
         sector = info.get('sector', '')
         

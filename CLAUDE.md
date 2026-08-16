@@ -267,6 +267,14 @@ DELETE /api/news-scanner/watchlist/{ticker}   → {tickers: []}
   heavily, so the same NVDA/MSFT/GOOGL/META were recomputed on every tech search.
   **Exact-key only — a 12-quarter result is NOT reused for an 8-quarter request**
   (see the LAST UPDATED entry for why that is false).
+- **No endpoint blocks the event loop as of 2026-08-16** — every blocking call in
+  `/api/ticker`, `/api/chart`, `/api/financials`, `/api/news`, `/api/ownership` and
+  `/api/peers` runs behind `run_in_threadpool`, so the six requests the analysis page
+  fires concurrently now genuinely overlap and a static `GET /` stays responsive
+  (max 17.5s → 1.35s) while a cold load is in flight. `/api/news` additionally resolves
+  `news-headlines.tradingview.com` IPv4-only, removing a flat ~11s AAAA-timeout stall.
+  **The pipeline itself is unchanged and still strictly sequential** — see the
+  2026-08-16 entry under LAST UPDATED.
 - **Price poll is quote-only as of 2026-08-11** — `startPricePoll()` hits the new
   `GET /api/price/{ticker}` (price/change/change_pct off one yfinance `fast_info`
   call, no pipeline, no `TICKER_CACHE`), not `/api/ticker`. The initial page-load
@@ -420,6 +428,93 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-16 — **The six analysis-page endpoints no longer block the event loop, and
+`/api/news`'s ~11s was DNS, not the network.** `api/server.py` only — `code33/` and
+`utils/code33_adapter.py` untouched, confirmed by `git diff`. **Scheduling change only:
+no endpoint computes anything different.**
+  - **PART 1 — blocking I/O.** `/api/chart`, `/api/news`, `/api/ownership` and
+    `/api/financials` each made their network calls directly inside their `async def`,
+    so any one of them held the single event loop for its whole duration and the six
+    requests the frontend fires concurrently did not actually overlap. Each route's
+    blocking work now runs behind `run_in_threadpool`, the pattern already proven on
+    `get_code33_data` and `/api/price`.
+    - **`/api/financials` was the subtle one.** It already fanned its five yfinance
+      calls out across an inner `ThreadPoolExecutor` — but then called `.result()` on
+      them *inside the async def*, which blocks the loop for as long as the slowest
+      takes. Submitting to a second pool does not help if the caller then blocks
+      waiting on it. The whole gather (plus the stale-crumb `.info` retry) moved onto
+      one worker thread; the inner executor is unchanged and still parallel.
+    - **Two endpoints beyond the four named were fixed for the same reason**, because
+      leaving them would have left the fan-out serialized anyway: `/api/ticker`'s
+      `fast_info` + `.info` block (fast_info is lazy, so the first field read is a real
+      HTTP request), and `/api/peers`'s `.info` + `.recommendations` calls, which ran
+      inline *before* the peer pipeline call that was already correctly offloaded.
+    - **`data.update()` preserves `/api/ticker`'s key order** — the offloaded helper
+      returns the fields in their original assignment order, so the serialized payload
+      is byte-identical, not merely equivalent.
+  - **PART 2 — `news-headlines.tradingview.com` has no AAAA record.** This machine's
+    resolver ran the AAAA lookup to its full timeout before falling back to the A
+    lookup, on every call. Measured: `getaddrinfo(host, 443, AF_UNSPEC)` **11.119s**,
+    `AF_INET` **0.005s** — and **both return the same four addresses**, because there is
+    no AAAA record to find. So narrowing the family cannot change which endpoint is
+    connected to. Not OS-cached: a repeat AF_UNSPEC lookup pays it again.
+    - **Fixed with a host-scoped `socket.getaddrinfo` wrapper**, not a requests
+      HTTPAdapter, because `NewsScraper.scrape_headlines()` calls the module-level
+      `requests.get(...)` directly and exposes no Session or transport seam to mount one
+      on. The alternative was reimplementing the library's request in `server.py`, which
+      is real drift risk on a value this endpoint must return unchanged.
+    - **Scope is one hostname by exact match.** Every other host falls through
+      untouched (verified against Yahoo, SEC, Finnhub and `tradingview.com` itself — the
+      sibling host `scrape_news_content()` uses — all identical wrapped vs unwrapped).
+      An explicit family from any caller is respected; only AF_UNSPEC is narrowed.
+      Deliberately NOT urllib3's `allowed_gai_family()` or any global setting, and
+      deliberately not a temporary swap around the call site — `/api/news` now runs on
+      worker threads and can be in flight for several tickers at once, so anything that
+      toggles global state and restores it would race.
+    - **A bug the unit test caught before it shipped:** the first version captured the
+      original with a bare `_real_getaddrinfo = socket.getaddrinfo`. `importlib.reload()`
+      re-executes this module into the SAME module dict, so on the second pass that
+      captured the already-installed wrapper — which reads the same global — and it
+      called itself to `RecursionError`. The original is now read back off the installed
+      wrapper via `_qt_original`, so re-execution always resolves to the true function
+      and reinstalling unconditionally is safe.
+  - **Verified — output unchanged, which was the gating condition.** Byte-level
+    whole-payload comparison across **8 tickers × 7 endpoints, 13,226 keys, 0
+    differences** (AAPL/NVDA/UNP/XMTR/ST, then MU/KO/HELE on a separately controlled
+    run). Both rounds fell on a closed market, so live price fields were static and
+    genuinely comparable rather than excluded. Single listener confirmed before every
+    run with a full process-tree kill between them, never `--reload`; server log clean,
+    zero tracebacks, zero 500s.
+  - **Verified — the loop is actually free.** A static `GET /` hammered on a separate
+    connection every 250ms while a cold page load was in flight: **max 17.5s → 1.35s**,
+    and on KO/HELE the probe completed **1 sample** during the whole before-window
+    versus 23 and 18 after, i.e. the loop was pinned for essentially the entire load.
+    Client note: probing via `localhost` costs a flat ~2.05s per connection on this
+    machine *on an idle server* (127.0.0.1 does it in 0.008s) — that floor sat under the
+    round-1 numbers until the probe was switched to 127.0.0.1.
+  - **Page wall time, cold, 7 of 8 tickers:** NVDA **21.71 → 6.40s**, XMTR
+    **17.98 → 5.90s**, ST **20.73 → 6.63s**, HELE **17.16 → 5.92s**, KO
+    **17.50 → 7.72s**, UNP **32.42 → 18.07s**, AAPL **63.50 → 50.52s**.
+    Isolated cold `/api/news` **12.5s → 0.18s**.
+  - **MU is the one ticker whose wall went UP (56.58 → 66.58s) and it is variance, not a
+    regression** — a repeat on the same patched build came back at **56.36s**. MU's wall
+    is entirely `/api/peers`, which is four pipeline runs serialized behind the adapter's
+    global lock; that cost is engine plus live SEC/edgartools latency and this change does
+    not touch it. Every non-peers endpoint on MU improved in both patched runs (news
+    15.66 → 0.94/0.80s, price 18.87 → 2.82/2.49s, ownership 16.02 → 9.82/1.66s).
+  - **What this does NOT fix:** the pipeline is still strictly sequential behind
+    `_PIPELINE_LOCK`, so a cold load's floor is still the parent's own two pipeline runs
+    plus the peers' four. Offloading lets everything else overlap with them; it does not
+    make the engine concurrent, and it must not.
+  - **Flagged, deliberately not fixed:** `/api/peers` fetches
+    `yf.Ticker(sym).recommendations` into a local that is **never read** — the peer list
+    comes entirely from the hardcoded `SECTOR_PEERS` table. That is a wasted HTTP round
+    trip per uncached call. Removing it is a dead-code cleanup, not a scheduling change,
+    and this pass had to keep behaviour identical. Candidate for the `/simplify` pass.
+  - **Not verified:** not opened in a real browser — same limitation and same reason as
+    the 2026-08-04 and 2026-08-11 entries (`/qa` deliberately unregistered per GSTACK
+    POLICY). The proof is HTTP-level and timing-level, not visual.
+
 2026-08-11 (later) — **`/api/peers` now reuses peer pipeline results across parent
 tickers.** `api/server.py` only — `code33/` and `utils/code33_adapter.py` untouched,
 confirmed by `git diff`. One existing line changed (the call site); everything else added.
