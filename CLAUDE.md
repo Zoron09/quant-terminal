@@ -539,6 +539,29 @@ commit stayed scoped to the two code files.
       where it currently shows.
   - **Not verified:** not opened in a real browser (`/qa` unregistered per GSTACK POLICY).
 
+2026-08-16 (financials column order) — **The Financials table now reads oldest quarter on
+the left, newest on the right.** `frontend/index.html` only, via
+`tools/patch_frontend_financials_oldest_left.py` (one replacement, asserting exactly one
+match). **Display order only** — no computed value, no fetch, no backend change;
+`api/server.py`, `code33/` and `utils/code33_adapter.py` all untouched.
+  - **Reversed at render time on throwaway copies**, `.slice().reverse()` — seven of
+    them, one per array. `D` is deliberately NOT mutated: `_applyToD()` rebuilds from the
+    API's newest-first earnings list on every patch, and an in-place reverse would flip
+    the table back and forth on each repaint.
+  - **Reversing the already-formatted strings is correct, not lossy.** Each YoY cell's pp
+    delta is baked in by `_applyToD()` against that quarter's own predecessor, so
+    reversing moves the cell and not its contents. The oldest quarter is the one that
+    gets no delta (nothing older to compare to), and it now lands leftmost — where a
+    reader expects a series to start.
+  - **Verified:** column order checked against **real quarter end dates**, not labels —
+    for all 6 tickers the leftmost header equals the label of `min(date)` and the
+    rightmost equals `max(date)`. Cell-by-cell, **42 rows+headers across 6 tickers, 0
+    mismatches** against an exact reversal of the previous render. Quarter count 8 → 8,
+    rows 6 → 6, row labels identical, styling untouched. Staged-loading harness still
+    **21/21**. JS parses clean under `node --check`; server log clean.
+  - Example, DELL: `Q2 FY26 … Q3 FY24` becomes `Q3 FY24 … Q2 FY26`, with Revenue
+    `$43.8B … $25.0B` becoming `$25.0B … $43.8B` — same numbers, reversed positions.
+
 2026-08-16 (financials single view) — **The Financials card lost its three tabs and is
 now one Revenue / Net Margin / EPS table; `/api/financials` stopped fetching the balance
 sheet and cash flow entirely.** `api/server.py` + `frontend/index.html`. `code33/` and
