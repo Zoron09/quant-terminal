@@ -429,6 +429,116 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-17 — **The live-EDGAR path now derives a fiscal Q4 when the bulk mirror hasn't
+caught up.** Engine fix, **`code33/edgar_fill.py` + `code33/pipeline.py` only** —
+`utils/code33_adapter.py` untouched and needed no change. Shipped as `9c9046d`; this
+entry is the documentation follow-up (rule 12), committed separately so the engine
+commit stayed scoped to the two code files.
+  - **What was wrong.** Most filers never publish a discrete "three months ended" Q4
+    fact at all: the 10-K reports the full year and Q4 is arithmetic. `quarterly_engine`
+    has always known this and derives it as `FY - (Q1+Q2+Q3)`. The live gap-fill path did
+    not — `fetch_discrete_quarter` only ever asked for a *discrete* quarter, and reads
+    `_FACTS_CACHE`, which `_load_facts_df` has already filtered to 75-100 day rows. A
+    fiscal year end has no such row by definition, so `_fill_gaps` logged
+    `missing from both sources` and moved on.
+  - **The window is structural, not neglect.** `CompanyIndexReader` reads the LOCAL
+    parquet mirror, so the derivation could not run until DERA published the quarter
+    containing the 10-K. Checked directly on 2026-08-16: the mirror holds `2026q1`
+    (filings through 2026-03-31) and **that is the newest quarter SEC has published** —
+    `2026q2.zip` returns HTTP 404 and DERA's own index page lists `2026q1` as latest. So
+    a February-year-end filer's April 10-K is absent for months while its NEXT 10-Q is
+    already being filled from live EDGAR. HELE was the worked case: FY2026 10-K filed
+    **2026-04-23**, quarter still missing on 2026-08-16.
+  - **It corrupted scoring, not just display.** `_c33_status`'s `_window()` compacts
+    `None` away, so a missing quarter makes the engine compare **non-adjacent** quarters
+    as if consecutive. JRSH scored GREEN off exactly that — 2025-12-31 (+18.04%) compared
+    straight to 2026-06-30 (+26.75%), with the +46.65% peak between them invisible. With
+    the quarter restored the transition reads −19.90 and JRSH is correctly RED.
+  - **Fix: `fetch_derived_fy_quarter()`**, mirroring `quarterly_engine`'s derivation but
+    sourced from `_ANNUAL_CACHE` instead of a local 10-K report object. **No extra network
+    call** — the annual rows are already loaded in the same pass as the quarterly ones.
+    `_fill_gaps` calls it ONLY after `fetch_discrete_quarter` returns nothing, so a real
+    reported Q4 always wins — same ordering as the bulk path.
+  - **Four guards, each load-bearing:**
+    - **Completeness is STRUCTURAL, not a count.** Counting three rows cannot tell two
+      quarters plus a restatement from three real ones. The guard requires the three to
+      **tile** the fiscal year: first starts at FY start, each starts where the previous
+      ended, and the leftover stub is itself exactly one quarter (75-100 days). Anything
+      else leaves the quarter missing, which is always the safe answer.
+    - **Distinct provenance** — `derived_edgartools_fy_minus_quarters`, separate from both
+      `edgartools` and the bulk `derived_fy_minus_quarters`. Not only labelling: reusing
+      the bulk string would have silently opted these points into
+      `_RESTATEMENT_ELIGIBLE_SOURCES` and `_attach_plausibility`'s derived-only branch,
+      **neither of which has run** by the time `_fill_gaps` executes — claiming checks
+      that never happened. Surfaces in `rev_sources`/`ni_sources` with no adapter change,
+      because the adapter emits `p.source` verbatim.
+    - **`restated=False` set EXPLICITLY**, documented as *not computed* — the restatement
+      flagger runs inside `get_quarterly_series`, which has already returned. Same known
+      limitation as existing `edgartools` fills (2026-08-10), stated rather than left to
+      the dataclass default so it cannot be mistaken for a checked result.
+    - **Mis-tag guard is not circular.** It fires only when a quarter-length row shares
+      its `period_end` with an annual row; the three inputs here end strictly BEFORE the
+      fiscal year end, so they cannot collide with the FY row. The one row that could — a
+      quarter-length row AT the FY end — is `fetch_discrete_quarter`'s business, and if it
+      existed and passed, this function never runs. The guard is still applied to the
+      three inputs as defence and is expected to be a no-op.
+  - **Units sanity in BOTH directions.** An early version guarded only the derived value
+    and let the inverted case through (annual tagged in thousands while the quarters are
+    in dollars yields a quarter-sized wrong number). **Caught by its own adversarial test,
+    not in review.** Now also guarded on the inputs: a fiscal year cannot be under
+    1/100th of one of its own quarters.
+  - **Verified — universe deliberately NOT the 568-ticker screening CSV.** 1,116 tickers:
+    **all 816** structurally capable of triggering the new path (a completed fiscal year
+    whose 10-K is absent locally — decidable from the mirror without running the engine,
+    so a complete enumeration rather than a sample) **plus 300 random controls**, drawn
+    from all 5,171 ticker-mapped CIKs in the mirror. Candidate fiscal-year-ends span every
+    month.
+  - **Byte-level whole-payload comparison, BEFORE vs AFTER: 108,986 keys.** Derivation
+    fired **806 times on 475 tickers (43%)**. **24 status changes** — insufficient→red 13,
+    green→red 5, red→green 4, red→insufficient 2. Every changed ticker traces to a
+    derivation. The green→red ones are corrections: JRSH/OESX/POWW all had a hole
+    mid-series that `_window()` was compacting away.
+  - **SEC cross-check, recomputed straight from `data.sec.gov`** bypassing both
+    secfsdstools and edgartools, across five fiscal-year-end patterns — **8/8
+    dollar-exact**: HELE (Feb) 470,025,000 · RBC (Mar) 518,000,000 · POWW (Mar)
+    13,889,243 · OESX (Mar) 25,723,000 · NTAP (Apr) 1,948,000,000 · FDX (May)
+    25,007,000,000 · PAYX (May) 1,605,500,000 · STX (Jun/Jul) 3,629,000,000.
+    PAYX first read as a mismatch and was the cross-check script's fault, not the
+    engine's — it used a different tag order; the engine correctly took priority-1
+    `Revenues`.
+  - **14/14 adversarial guard tests** on synthetic frames: 2 quarters, 4 overlapping
+    quarters, NaN value, non-tiling gap, wrong FY start, 2-quarter stub, missing annual,
+    both units-mismatch directions, `reference_magnitude` mismatch, a quarter refiled
+    later, a mis-tagged annual inside the year, and negative net-income values still
+    deriving.
+  - **Independently hand-verified by Meet against TradingView** on 7 of the 24
+    verdict-changing tickers — **FDX, NTAP, RBC, STX, PAYX, JRSH, OESX — all exact.**
+  - **⚠️ SEPARATE PRE-EXISTING BUG SURFACED HERE, NOT FIXED — follow-up item.**
+    **Negative derived revenue from a mismatched-basis subtraction.** When a filer
+    divests a segment, the 10-K reports the year on a *continuing operations* basis while
+    the three quarters subtracted are the *as-originally-filed* figures that still include
+    the disposed business. The subtraction then returns a negative number that is not
+    revenue at all, and because that point is born wrong it carries `restated=False`, so
+    `_yoy_value()` passes it through as a legitimate YoY base — where `yoy_for`'s `abs()`
+    denominator turns it into a plausible-looking positive rate.
+    - **Worked case, POWW (AMMO Inc. → Outdoor Holding Co, GunBroker.com divested; SEC
+      name change 2025-04-24, 8-K 2025-04-18, restatements filed 2025-05-20).** FY2025
+      continuing-ops revenue **49,401,547** minus as-filed Q1..Q3 **91,560,637** =
+      **−42,159,090**, stored for 2025-03-31. That becomes the base for 2026-03-31 and
+      reports **+132.94%** where the like-for-like figure is **~+10.1%** (TradingView
+      +10.92%). Using the restated quarters instead gives a Q4 of 12,614,668.
+    - **PREDATES this fix and lives in the BULK `derived_fy_minus_quarters` path:
+      42 tickers in the test universe already carried it**, including STRZ
+      −1,384,200,000 and WOR −1,351,226,000.
+    - **This fix inherits the same flaw on the live path and adds ~15 more tickers**
+      (49 → 66 negative quarters, 42 → 57 tickers). No guard here catches it — a negative
+      result is not a units mismatch.
+    - Deliberately out of scope for `9c9046d`: it needs its own investigation and its own
+      sign-off. 122 of 1,116 tickers (11%) carry at least one restated revenue quarter, so
+      the population where a mixed-basis subtraction is *possible* is much larger than
+      where it currently shows.
+  - **Not verified:** not opened in a real browser (`/qa` unregistered per GSTACK POLICY).
+
 2026-08-16 (financials single view) — **The Financials card lost its three tabs and is
 now one Revenue / Net Margin / EPS table; `/api/financials` stopped fetching the balance
 sheet and cash flow entirely.** `api/server.py` + `frontend/index.html`. `code33/` and
