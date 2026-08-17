@@ -5,6 +5,7 @@ which some companies tag inconsistently between their 10-K and its own 10-Qs), a
 plausibility flagging. Domain modules (revenue.py, net_margin.py) supply their own
 tag priority list and plausibility rule; everything else here is tag-agnostic.
 """
+import logging
 import math
 import os
 from collections import defaultdict
@@ -24,6 +25,8 @@ from secfsdstools.e_filter.rawfiltering import (
 )
 
 from code33.models import QuarterPoint, QuarterlyRevenueSeries
+
+log = logging.getLogger(__name__)
 
 FORMS = ["10-Q", "10-K"]
 
@@ -219,6 +222,73 @@ def _is_annual_mistagged_as_quarter(row, num_q4: pd.DataFrame) -> bool:
     return bool((twin["value"] == row["value"]).any())
 
 
+def _basis_matched_quarter_value(
+    num_q1: pd.DataFrame,
+    num_q4: pd.DataFrame,
+    filed_by_adsh,
+    quarter_report: IndexReport,
+    discrete_value_cache: Dict[str, Tuple[Optional[float], Optional[str]]],
+    fy_filed: Optional[int],
+) -> Optional[float]:
+    """One quarter's value ON THE SAME BASIS AS THE FISCAL YEAR it is subtracted from.
+
+    FY_total - (Q1+Q2+Q3) is only arithmetic if all four figures describe the same
+    company. After a divestiture they do not: the 10-K reports the year on a
+    CONTINUING-OPERATIONS basis while the three 10-Qs, filed before the disposal,
+    still include the segment that has since gone. Subtracting the second from the
+    first produced a number that was not revenue at all — POWW's FY2025 came out at
+    49,401,547 - 91,560,637 = -42,159,090, which then became a YoY base and, through
+    yoy_for's abs() denominator, reported +132.94% where the like-for-like figure is
+    about +10%.
+
+    The fix is to read each quarter as of the 10-K's own vintage: among that quarter's
+    values in this company's pulled filings, take the one from the LATEST filing that
+    was itself filed on or before the 10-K. That is, by construction, the basis the
+    10-K's comparatives were prepared on. A company that never restated has only its
+    original filing in range and is unaffected — the value is identical to today's.
+
+    Deliberately mirrors _attach_restatement_flags' discipline, because it is asking
+    the same question one step earlier: EXACT tag match (relaxing it compares different
+    concepts, not revisions), unusable values dropped, and annual figures mis-tagged as
+    quarters dropped, all BEFORE picking the latest — a mis-tagged row is not a weaker
+    observation of the quarter, it is not an observation of it at all.
+
+    Falls back to the quarter's own as-filed figure whenever nothing qualifies, so this
+    can only ever move a value onto the annual's basis, never remove one.
+    """
+    own_value, own_tag = discrete_value_cache.get(quarter_report.adsh, (None, None))
+    if own_value is None or own_tag is None or filed_by_adsh is None:
+        return own_value
+
+    candidates = num_q1[
+        (num_q1["ddate"] == quarter_report.period)
+        & (num_q1["tag"] == own_tag)
+    ]
+    if candidates.empty:
+        return own_value
+
+    candidates = candidates.copy()
+    candidates["_filed"] = candidates["adsh"].map(filed_by_adsh)
+    candidates = candidates.dropna(subset=["_filed"])
+    # Only filings the 10-K could itself have been prepared alongside or after.
+    # fy_filed=None lifts that restriction: see the RECONCILIATION FALLBACK.
+    if fy_filed is not None:
+        candidates = candidates[candidates["_filed"] <= fy_filed]
+    if candidates.empty:
+        return own_value
+
+    candidates = candidates[~candidates["value"].map(_is_unusable_candidate_value)]
+    if candidates.empty:
+        return own_value
+    candidates = candidates[~candidates.apply(
+        lambda r: _is_annual_mistagged_as_quarter(r, num_q4), axis=1)]
+    if candidates.empty:
+        return own_value
+
+    latest = candidates.sort_values("_filed").iloc[-1]
+    return float(latest["value"])
+
+
 def _attach_restatement_flags(
     points: List[QuarterPoint], num_df: pd.DataFrame, sub_df: pd.DataFrame,
     num_q4: pd.DataFrame
@@ -291,6 +361,7 @@ def get_quarterly_series(
     tag_priority: List[str],
     plausibility_check: Callable[[float, List[float]], bool],
     quarters: int = 8,
+    non_negative: bool = False,
 ) -> QuarterlyRevenueSeries:
     """A company's own sequential discrete-quarter figures for the given tag priority
     list, most recent first, with period end dates and per-point data-quality flags.
@@ -377,6 +448,9 @@ def get_quarterly_series(
     num_q4 = num_df[num_df["qtrs"] == 4]  # full fiscal year
 
     sub_df = databag.sub_df.drop_duplicates(subset="adsh").set_index("adsh")
+    # adsh -> filing date, needed to read each quarter on the vintage the 10-K was
+    # prepared on. Same source _attach_restatement_flags uses.
+    filed_by_adsh = sub_df["filed"] if "filed" in sub_df.columns else None
 
     def fy_fp_of(report: IndexReport) -> Tuple[Optional[int], Optional[str]]:
         if report.adsh not in sub_df.index:
@@ -448,7 +522,13 @@ def get_quarterly_series(
             fy_value, fy_tag = _best_tag_value(fy_rows, tag_priority)
 
             matched_quarters = quarters_in_fiscal_year(report)
-            q_values = [discrete_value_cache[q.adsh][0] for q in matched_quarters]
+            # BASIS CONSISTENCY. Each quarter is taken as of the 10-K's own vintage,
+            # not as originally filed — see _basis_matched_quarter_value.
+            q_values = [
+                _basis_matched_quarter_value(
+                    num_q1, num_q4, filed_by_adsh, q, discrete_value_cache, report.filed)
+                for q in matched_quarters
+            ]
 
             if (
                 fy_value is not None
@@ -459,6 +539,46 @@ def get_quarterly_series(
                 tag = fy_tag
                 source = "derived_fy_minus_quarters"
                 derived_from_adsh = ",".join(q.adsh for q in matched_quarters)
+
+                # RECONCILIATION FALLBACK. For revenue a fiscal year can never be
+                # smaller than three of its own quarters, so FY < sum(Q1..Q3) is
+                # proof the two sides are on different bases — an arithmetic
+                # impossibility, not a tuned threshold.
+                #
+                # It happens when the divestiture lands BETWEEN the 10-K and the
+                # restatements: POWW's FY2025 10-K (filed 2025-06-16) already
+                # reported the year continuing-ops, but the three quarters were not
+                # restated until the 10-Qs of 2025-08-08, 2025-11-10 and 2026-02-09,
+                # all AFTER it. The vintage rule above therefore cannot see them.
+                # So retry once against the latest figures the filer has published
+                # for those quarters, which IS the continuing-ops basis the annual
+                # is already stated on, and keep it only if it actually reconciles.
+                if non_negative and value < 0:
+                    latest_q = [
+                        _basis_matched_quarter_value(
+                            num_q1, num_q4, filed_by_adsh, q, discrete_value_cache, None)
+                        for q in matched_quarters
+                    ]
+                    if all(v is not None for v in latest_q):
+                        retry = fy_value - sum(latest_q)
+                        if retry >= 0:
+                            log.info(
+                                "quarterly_engine: %s %s for %s reconciled on the restated "
+                                "quarter basis (%s -> %s)",
+                                report.adsh, fy_tag, report.period, value, retry)
+                            value = retry
+
+                # IMPOSSIBLE-VALUE GUARD. Revenue cannot be negative. If neither
+                # basis reconciles, the inputs genuinely do not agree and a quarter
+                # left missing is honest where an impossible figure is not — it
+                # would otherwise become a YoY base and, through yoy_for's abs()
+                # denominator, a fabricated growth rate.
+                if non_negative and value is not None and value < 0:
+                    log.warning(
+                        "quarterly_engine: %s derived %s for %s is negative (%s) on BOTH the "
+                        "as-of-10-K and latest-restated bases — leaving the quarter missing",
+                        report.adsh, fy_tag, report.period, value)
+                    value, tag, source, derived_from_adsh = None, None, "missing", None
             else:
                 source = "missing"
 

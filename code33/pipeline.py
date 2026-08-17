@@ -119,6 +119,7 @@ def _fill_gaps(
     series: QuarterlyRevenueSeries,
     tag_priority: List[str],
     quarters: int,
+    non_negative: bool = False,
 ) -> QuarterlyRevenueSeries:
     if series.series_flag is not None and not series.points:
         return _explain_local_dataset_miss(ticker, series)
@@ -156,7 +157,7 @@ def _fill_gaps(
             # as the bulk path, and this only ever runs on a quarter that would
             # otherwise have been logged as missing.
             derived = fetch_derived_fy_quarter(
-                ticker, target, tag_priority, reference_magnitude)
+                ticker, target, tag_priority, reference_magnitude, non_negative)
             if derived is None:
                 log.info("pipeline: %s quarter ~%s missing from both sources", ticker, target)
                 continue
@@ -237,8 +238,12 @@ def get_complete_revenue_series(ticker: str, quarters: int = 8) -> QuarterlyReve
     cik = resolve_ticker_to_cik(ticker)
     if cik is None:
         return QuarterlyRevenueSeries(cik=0, points=[], series_flag=f"{ticker}: could not resolve to a CIK")
-    base = get_quarterly_series(cik, REVENUE_TAGS, _is_implausible_revenue, quarters)
-    return _fill_gaps(ticker, base, REVENUE_TAGS, quarters)
+    # non_negative=True: revenue below zero is arithmetically impossible, so a
+    # derivation that produces one is suppressed rather than published. NOT set on
+    # the net-income leg below, where negative values are ordinary.
+    base = get_quarterly_series(
+        cik, REVENUE_TAGS, _is_implausible_revenue, quarters, non_negative=True)
+    return _fill_gaps(ticker, base, REVENUE_TAGS, quarters, non_negative=True)
 
 
 def get_complete_net_income_series(ticker: str, quarters: int = 8) -> QuarterlyRevenueSeries:

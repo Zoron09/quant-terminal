@@ -288,6 +288,7 @@ def fetch_derived_fy_quarter(
     target_end: date,
     tag_priority: List[str],
     reference_magnitude: Optional[float] = None,
+    non_negative: bool = False,
 ) -> Optional[Tuple[date, float, str, str, date, Optional[int], Optional[str], str]]:
     """A fiscal Q4 back-solved as FY_annual - (Q1 + Q2 + Q3), from live EDGAR facts.
 
@@ -389,10 +390,36 @@ def fetch_derived_fy_quarter(
         if inside.empty:
             continue
 
-        # One row per distinct quarter end, earliest filing (as-filed) winning.
+        # BASIS CONSISTENCY. One row per distinct quarter end, taken on the SAME
+        # VINTAGE as the annual total it is about to be subtracted from: among the
+        # rows filed on or before the 10-K, the LATEST one wins.
+        #
+        # This used to take the earliest (as-originally-filed) row, matching
+        # fetch_discrete_quarter's rule — and that is right for a value being
+        # REPORTED, but wrong for one being SUBTRACTED. After a divestiture the
+        # 10-K states the year on a continuing-operations basis while the original
+        # 10-Qs still include the disposed segment, so mixing them measures the
+        # corporate action rather than the quarter. POWW: 49,401,547 minus
+        # as-filed 91,560,637 = -42,159,090, an impossible figure that then became
+        # a YoY base and reported +132.94% against a real ~+10%.
+        #
+        # A company that never restated has only its original filing in range, so
+        # its value is unchanged by this.
+        # PER-QUARTER PREFERENCE, NOT A HARD CUT. Applying the vintage filter to
+        # the whole set silently destroyed coverage: ENDI's Q1/Q2 2022 facts only
+        # appear in filings made AFTER its 10-K, so filtering the set left one
+        # qualifying quarter, the tiling guard saw len != 3, and a quarter that
+        # derived correctly before stopped deriving at all. Same on NEGG and STCB.
+        # So each quarter independently prefers the latest row filed on or before
+        # the 10-K, and falls back to its earliest available row when the filer
+        # published nothing for it in time — matching basis where that is possible
+        # without trading away quarters where it is not.
+        fy_filed = fy_row["filing_date"]
         picked = {}
-        for _, r in inside.sort_values("filing_date").iterrows():
-            picked.setdefault(r["period_end"], r)
+        for pe, grp in inside.groupby("period_end"):
+            grp = grp.sort_values("filing_date")
+            in_vintage = grp[grp["filing_date"] <= fy_filed] if pd.notna(fy_filed) else grp
+            picked[pe] = in_vintage.iloc[-1] if not in_vintage.empty else grp.iloc[0]
         quarters = [picked[k] for k in sorted(picked)]
 
         if len(quarters) != 3:
@@ -413,6 +440,44 @@ def fetch_derived_fy_quarter(
 
         q_values = [float(q["numeric_value"]) for q in quarters]
         derived = fy_value - sum(q_values)
+
+        # RECONCILIATION FALLBACK, mirroring quarterly_engine's. For revenue a
+        # fiscal year can never be smaller than three of its own quarters, so
+        # FY < sum(Q1..Q3) proves the two sides sit on different bases. That
+        # happens when the divestiture lands BETWEEN the 10-K and the restatements
+        # (POWW: 10-K filed 2025-06-16, quarters not restated until the 10-Qs of
+        # 2025-08-08, 2025-11-10 and 2026-02-09), so the vintage rule above cannot
+        # see the restated figures. Retry once against the LATEST figures the filer
+        # has published for those quarters, and keep it only if it reconciles.
+        if non_negative and derived < 0:
+            latest = {}
+            for _, r in inside.sort_values("filing_date").iterrows():
+                latest[r["period_end"]] = r
+            lq = [latest[k] for k in sorted(latest)]
+            if len(lq) == 3 and not any(pd.isna(q["numeric_value"]) for q in lq):
+                lv = [float(q["numeric_value"]) for q in lq]
+                retry = fy_value - sum(lv)
+                if retry >= 0:
+                    log.info(
+                        "edgar_fill: %s %s Q4 reconciled on the restated quarter basis "
+                        "(%s -> %s)", ticker, tag, derived, retry)
+                    derived, q_values, quarters = retry, lv, lq
+
+        # IMPOSSIBLE-VALUE GUARD. Revenue cannot be negative. If the subtraction
+        # still lands below zero after the basis match above, the inputs do not
+        # reconcile and the honest answer is the one this function already gives
+        # for a structural failure: leave the quarter missing. Passing an
+        # impossible figure through is strictly worse than a gap, because it
+        # becomes a YoY base and yoy_for's abs() denominator turns it into a
+        # fabricated growth rate rather than an obvious error.
+        # Deliberately gated on the caller: net income is legitimately negative,
+        # so this must never be applied to the NI leg.
+        if non_negative and derived < 0:
+            log.warning(
+                "edgar_fill: %s derived %s Q4 %s is negative on BOTH the as-of-10-K and "
+                "latest-restated bases (FY %s minus %s) — leaving the quarter missing",
+                ticker, tag, derived, fy_value, sum(q_values))
+            continue
 
         # UNITS SANITY, BOTH DIRECTIONS. See _DERIVED_UNITS_SANITY_MULTIPLE.
         #
