@@ -16,6 +16,7 @@ from typing import Callable, List, Optional
 
 from code33.edgar_fill import (
     MATCH_TOLERANCE_DAYS,
+    fetch_derived_fy_quarter,
     fetch_discrete_quarter,
     has_xbrl_quarterly_facts,
 )
@@ -143,7 +144,61 @@ def _fill_gaps(
     for target in missing:
         hit = fetch_discrete_quarter(ticker, target, tag_priority, reference_magnitude)
         if hit is None:
-            log.info("pipeline: %s quarter ~%s missing from both sources", ticker, target)
+            # No discrete quarter exists for this target. Before giving up, try
+            # deriving it as FY - (Q1+Q2+Q3): most filers never publish a
+            # discrete Q4 at all, so for a fiscal year end this is not a missing
+            # figure, it is one that has to be back-solved. The bulk path already
+            # does exactly this; until now the live path did not, which left the
+            # year-end quarter absent for as long as the 10-K took to reach the
+            # bulk mirror — months, for a non-December filer.
+            #
+            # Deliberately SECOND: a real reported Q4 always wins, same ordering
+            # as the bulk path, and this only ever runs on a quarter that would
+            # otherwise have been logged as missing.
+            derived = fetch_derived_fy_quarter(
+                ticker, target, tag_priority, reference_magnitude)
+            if derived is None:
+                log.info("pipeline: %s quarter ~%s missing from both sources", ticker, target)
+                continue
+            (period_end, value, tag, accession, filing_date, fy, fp,
+             derived_from) = derived
+            filled.append(
+                QuarterPoint(
+                    period_end=period_end,
+                    filed=filing_date,
+                    adsh=accession,
+                    # The 10-K is genuinely where this figure comes from, and the
+                    # bulk path labels its own derived Q4s the same way.
+                    form="10-K",
+                    fy=fy,
+                    fp=fp,
+                    value=value,
+                    tag=tag,
+                    # Distinct from both 'edgartools' (a real discrete quarter
+                    # pulled live) and 'derived_fy_minus_quarters' (the bulk
+                    # path's own arithmetic). Naming it separately is not only
+                    # provenance: it also keeps this point OUT of
+                    # _RESTATEMENT_ELIGIBLE_SOURCES and out of
+                    # _attach_plausibility's derived-only branch, neither of
+                    # which has run by this point in the pipeline. Reusing the
+                    # bulk path's string would have silently claimed checks that
+                    # never happened.
+                    source="derived_edgartools_fy_minus_quarters",
+                    derived_from_adsh=derived_from,
+                    # EXPLICIT, and explicitly not computed. The restatement
+                    # flagger runs inside get_quarterly_series, which returned
+                    # before this function was called, so no filled point can
+                    # carry a computed flag. Same known limitation recorded for
+                    # `edgartools` fills on 2026-08-10; stated here rather than
+                    # left to the dataclass default so it cannot be mistaken for
+                    # a checked result.
+                    restated=False,
+                    restated_value=None,
+                )
+            )
+            log.info(
+                "pipeline: %s quarter %s DERIVED from 10-K %s minus quarters %s (%s)",
+                ticker, period_end, accession, derived_from, tag)
             continue
         period_end, value, tag, accession, filing_date, fy, fp = hit
         filled.append(

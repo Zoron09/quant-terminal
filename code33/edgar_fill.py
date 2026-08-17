@@ -267,6 +267,206 @@ def _is_annual_mistagged_as_quarter(row, annual: pd.DataFrame) -> bool:
     return bool((twin["numeric_value"] == value).any())
 
 
+# How far a period boundary may drift and still count as abutting its neighbour
+# when the three known quarters are checked for tiling their fiscal year. Covers
+# 52/53-week calendars and month-length wobble; far tighter than
+# MATCH_TOLERANCE_DAYS because these are exact EDGAR period_starts/period_ends
+# being compared against each other, not against a projected target date.
+_FY_EDGE_TOLERANCE_DAYS = 20
+
+# A derived Q4 may not exceed this multiple of the largest known quarter in its
+# own fiscal year. Purely a units-consistency tripwire, and deliberately as loose
+# as the existing SCALE GUARD's 1/100 bound is on the other side: it exists to
+# catch the PLXS-class error where a filer tags the annual figure in thousands
+# and the quarters in dollars (or vice versa), which lands ~1000x out. No real
+# seasonal Q4 is 100x its own siblings.
+_DERIVED_UNITS_SANITY_MULTIPLE = 100
+
+
+def fetch_derived_fy_quarter(
+    ticker: str,
+    target_end: date,
+    tag_priority: List[str],
+    reference_magnitude: Optional[float] = None,
+) -> Optional[Tuple[date, float, str, str, date, Optional[int], Optional[str], str]]:
+    """A fiscal Q4 back-solved as FY_annual - (Q1 + Q2 + Q3), from live EDGAR facts.
+
+    Returns (period_end, value, tag, accession, filing_date, fy, fp,
+    derived_from_accessions) or None.
+
+    WHY THIS EXISTS. Most filers never publish a discrete "three months ended"
+    Q4 fact at all — the 10-K reports the full year, and Q4 is arithmetic. The
+    bulk-dataset path already knows this and derives it (quarterly_engine's
+    `derived_fy_minus_quarters` branch). The live fill did not: it only ever
+    asked for a discrete quarter, so whenever the 10-K had been filed at SEC but
+    had not yet reached the bulk mirror, the fiscal year-end quarter was simply
+    left missing. That window is not small — DERA publishes the bulk data
+    quarterly, so a February-year-end filer's April 10-K can be absent for
+    months while its subsequent 10-Q is already being filled from live EDGAR,
+    leaving a hole in the middle of the series.
+
+    This mirrors quarterly_engine's derivation, sourced from _ANNUAL_CACHE
+    instead of a local 10-K report object. It is a FALLBACK BEHIND A FALLBACK:
+    _fill_gaps only calls it after fetch_discrete_quarter has already found
+    nothing, so a real reported Q4 always wins, exactly as it does locally.
+
+    COMPLETENESS IS STRUCTURAL, NOT COUNTED. The worst possible failure here is
+    a partial subtraction: FY minus two quarters produces a number that looks
+    entirely plausible and is badly wrong. Counting three rows is not enough to
+    prevent that — three rows could be two quarters plus a restatement of one of
+    them, or three quarters from overlapping periods. So the guard checks that
+    the three quarters actually TILE the fiscal year:
+      - the first quarter starts when the fiscal year starts;
+      - each subsequent quarter starts where the previous one ended;
+      - the leftover stub between the last known quarter and the fiscal year end
+        is itself exactly one quarter long.
+    Anything else and the quarter is left missing, which is what happens today
+    and is always the safe answer.
+
+    MIS-TAG GUARD INTERACTION — why this is not circular. `_ANNUAL_CACHE` is the
+    comparison set for `_is_annual_mistagged_as_quarter`, and it is now also the
+    source of the FY total. Those two uses never touch the same row:
+      - the guard only fires when a QUARTER-length row shares its period_end
+        with an annual row. By construction the three inputs here end strictly
+        BEFORE the fiscal year end, so they cannot collide with the FY row.
+      - the one row that could collide is a quarter-length row AT the fiscal year
+        end — precisely the mis-tagged-annual case. That row is
+        fetch_discrete_quarter's business, and if it existed and passed the guard
+        this function would never have been called. If it existed and FAILED the
+        guard, it was correctly rejected and deriving the quarter honestly from
+        the annual total is the right answer, not a second bite at the bad row.
+      - the annual row is never asked to validate itself: it is an input to
+        arithmetic, not a candidate being screened.
+    The guard is still applied to the three inputs below. It is expected to be a
+    no-op for the reason above; it costs three row comparisons and means a filer
+    doing something genuinely strange cannot slip a mis-tagged annual in as a Q1.
+
+    NOT ATTACHED: plausibility and restatement flags. Both are computed inside
+    get_quarterly_series, which has already returned by the time _fill_gaps runs,
+    so — exactly like the existing `edgartools` fills since 2026-08-10 — points
+    from this path carry `plausible=None` and an explicit `restated=False` that
+    nothing computed. That is a known and documented limitation, not an
+    assertion that the figure was checked and found un-restated.
+    """
+    df = _load_facts_df(ticker)
+    annual = _ANNUAL_CACHE.get(ticker)
+    if df is None or df.empty or annual is None or annual.empty:
+        return None
+
+    lo = pd.Timestamp(target_end - timedelta(days=MATCH_TOLERANCE_DAYS))
+    hi = pd.Timestamp(target_end + timedelta(days=MATCH_TOLERANCE_DAYS))
+    fy_window = annual[(annual["period_end"] >= lo) & (annual["period_end"] <= hi)]
+    if fy_window.empty:
+        return None
+
+    edge = pd.Timedelta(days=_FY_EDGE_TOLERANCE_DAYS)
+
+    for tag in tag_priority:
+        concept = f"us-gaap:{tag}"
+        fy_rows = fy_window[fy_window["concept"] == concept]
+        if fy_rows.empty:
+            continue
+        # ORIGINAL as-filed wins, same rule as fetch_discrete_quarter: a later
+        # filing's comparative column never replaces what the filing that owned
+        # the period reported for it.
+        fy_row = fy_rows.sort_values("filing_date").iloc[0]
+        if pd.isna(fy_row["numeric_value"]):
+            continue
+        fy_value = float(fy_row["numeric_value"])
+        fy_start, fy_end = fy_row["period_start"], fy_row["period_end"]
+
+        # Same concept, quarter-length, wholly inside THIS fiscal year.
+        inside = df[
+            (df["concept"] == concept)
+            & (df["period_start"] >= fy_start - edge)
+            & (df["period_end"] <= fy_end + edge)
+            & (df["period_end"] < fy_end - edge)
+        ]
+        if inside.empty:
+            continue
+        inside = inside[~inside.apply(
+            lambda r: _is_annual_mistagged_as_quarter(r, annual), axis=1)]
+        if inside.empty:
+            continue
+
+        # One row per distinct quarter end, earliest filing (as-filed) winning.
+        picked = {}
+        for _, r in inside.sort_values("filing_date").iterrows():
+            picked.setdefault(r["period_end"], r)
+        quarters = [picked[k] for k in sorted(picked)]
+
+        if len(quarters) != 3:
+            continue
+        if any(pd.isna(q["numeric_value"]) for q in quarters):
+            continue
+
+        # --- the tiling guard -------------------------------------------------
+        if abs((quarters[0]["period_start"] - fy_start).days) > _FY_EDGE_TOLERANCE_DAYS:
+            continue
+        if any(abs((b["period_start"] - a["period_end"]).days) > _FY_EDGE_TOLERANCE_DAYS
+               for a, b in zip(quarters, quarters[1:])):
+            continue
+        remainder_days = (fy_end - quarters[-1]["period_end"]).days
+        if not (_QUARTER_MIN_DAYS <= remainder_days <= _QUARTER_MAX_DAYS):
+            continue
+        # ----------------------------------------------------------------------
+
+        q_values = [float(q["numeric_value"]) for q in quarters]
+        derived = fy_value - sum(q_values)
+
+        # UNITS SANITY, BOTH DIRECTIONS. See _DERIVED_UNITS_SANITY_MULTIPLE.
+        #
+        # Two distinct failure shapes, and an early version of this guard caught
+        # only the first — found by its own adversarial test, not in review:
+        #   (a) the QUARTERS are the small ones. Then the annual dominates and the
+        #       derived figure comes out absurdly large: caught below.
+        #   (b) the ANNUAL is the small one (tagged in thousands while the
+        #       quarters are in dollars). Then `derived` is just -sum(quarters),
+        #       which is quarter-sized and sails straight through a check on the
+        #       derived value alone. It has to be caught on the INPUTS instead:
+        #       a real fiscal year cannot be a hundredth of one of its own
+        #       quarters.
+        #
+        # (b) deliberately errs toward refusing. A filer whose full-year figure is
+        # genuinely under 1% of a single quarter — possible for net income when
+        # large positive and negative quarters cancel — is left missing rather
+        # than derived. That is the documented safe answer: a quarter that stays
+        # absent costs coverage, a quarter derived from mismatched units puts a
+        # plausible-looking wrong number into the scoring window.
+        biggest = max(abs(v) for v in q_values) if any(q_values) else None
+        if biggest and abs(fy_value) * _DERIVED_UNITS_SANITY_MULTIPLE < biggest:
+            log.warning(
+                "edgar_fill: %s %s annual %s is <1/%dth of its own largest quarter "
+                "%s — suspected units mismatch, leaving missing",
+                ticker, tag, fy_value, _DERIVED_UNITS_SANITY_MULTIPLE, biggest)
+            continue
+        if biggest and abs(derived) > _DERIVED_UNITS_SANITY_MULTIPLE * biggest:
+            log.warning(
+                "edgar_fill: %s derived %s Q4 %s is >%dx its own year's largest "
+                "quarter %s — suspected units mismatch, leaving missing",
+                ticker, tag, derived, _DERIVED_UNITS_SANITY_MULTIPLE, biggest)
+            continue
+        if reference_magnitude and abs(derived) > _DERIVED_UNITS_SANITY_MULTIPLE * abs(reference_magnitude):
+            log.warning(
+                "edgar_fill: %s derived %s Q4 %s is >%dx the series magnitude %s "
+                "— suspected units mismatch, leaving missing",
+                ticker, tag, derived, _DERIVED_UNITS_SANITY_MULTIPLE, reference_magnitude)
+            continue
+
+        fy_raw, fp_raw = fy_row.get("fiscal_year"), fy_row.get("fiscal_period")
+        return (
+            fy_end.date(),
+            derived,
+            tag,
+            str(fy_row.get("accession") or ""),
+            fy_row["filing_date"].date() if pd.notna(fy_row["filing_date"]) else target_end,
+            int(fy_raw) if pd.notna(fy_raw) else None,
+            str(fp_raw) if pd.notna(fp_raw) else None,
+            ",".join(str(q.get("accession") or "") for q in quarters),
+        )
+    return None
+
+
 def fetch_discrete_quarter(
     ticker: str,
     target_end: date,
