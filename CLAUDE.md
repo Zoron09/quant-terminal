@@ -429,6 +429,87 @@ Commit before any new change. Commit message must describe what was validated.
 ---
 
 ## LAST UPDATED
+2026-08-17 (negative revenue) — **Q4 derivation no longer mixes accounting bases, and can
+no longer emit a negative revenue figure.** Engine fix, **`code33/quarterly_engine.py` +
+`code33/edgar_fill.py` + `code33/pipeline.py`** — `utils/code33_adapter.py` untouched and
+needed no change. Shipped as `ba8ffc2`; **closes the follow-up item flagged in the
+2026-08-17 (fiscal-Q4) entry below**, which is now marked struck-through there.
+  - **What was wrong.** `FY_total - (Q1+Q2+Q3)` is only arithmetic if all four figures
+    describe the same company. After a divestiture they do not: the 10-K reports the year
+    on a **continuing-operations** basis while the three 10-Qs, filed before the disposal,
+    still include the segment that has since gone.
+    - **POWW (AMMO Inc. → Outdoor Holding Co, GunBroker.com divested):**
+      FY2025 continuing-ops revenue **49,401,547** minus as-originally-filed Q1..Q3
+      **91,560,637** = **−42,159,090**, stored for 2025-03-31.
+    - **Why an impossible value is worse than a missing quarter.** The point is *born*
+      wrong, so it carries `restated=False` and `_yoy_value()` hands it on as a legitimate
+      YoY base — where `yoy_for`'s `abs()` denominator turned it into a plausible-looking
+      **+132.94%** for 2026-03-31 against a real **~+10%**. A gap is visibly a gap; a
+      fabricated growth rate is indistinguishable from a real one downstream, and this one
+      landed inside the scoring window.
+    - Present on BOTH paths: the bulk `derived_fy_minus_quarters` (42 tickers, incl. STRZ
+      −1,384,200,000 and WOR −1,351,226,000) and the live
+      `derived_edgartools_fy_minus_quarters` added in `9c9046d`, which inherited it.
+  - **Fix, three parts:**
+    - **Basis-matched quarter values** — `_basis_matched_quarter_value()` in
+      `quarterly_engine.py`, mirrored in `edgar_fill.py`. Each quarter is read on the
+      vintage the 10-K was prepared on: the latest row filed on or before it.
+      **Per-quarter preference with fallback** to that quarter's earliest available row —
+      see the mid-verification defect below for why the fallback is load-bearing. Mirrors
+      `_attach_restatement_flags`' discipline (exact tag match, unusable and mis-tagged
+      rows dropped BEFORE picking) because it asks the same question one step earlier. A
+      filer that never restated has only its original filing in range and is unaffected.
+    - **Reconciliation retry, triggered by an arithmetic impossibility, not a threshold.**
+      For revenue a fiscal year can never be smaller than three of its own quarters, so
+      `FY < sum(Q1..Q3)` *proves* the two sides sit on different bases. Basis matching
+      alone does not fix POWW — its restatements were filed AFTER the 10-K (10-Qs of
+      2025-08-08, 2025-11-10, 2026-02-09), so the vintage rule correctly cannot see them.
+      On that signal the derivation retries once against the latest published figures,
+      which IS the continuing-ops basis the annual already sits on, and keeps the result
+      only if it reconciles.
+    - **Impossible-value guard.** If neither basis reconciles, the quarter is left missing
+      — the same answer the tiling guard already gives for a structural failure. Gated on
+      a `non_negative` flag threaded `get_quarterly_series` → `_fill_gaps` →
+      `fetch_derived_fy_quarter`. **Revenue passes True; the NET INCOME leg deliberately
+      does not**, since negative net income is ordinary.
+  - **Verified on the same 1,116-ticker universe and to the same standard as `9c9046d`**
+    (816 structurally-capable candidates + 300 controls, from all 5,171 ticker-mapped CIKs
+    in the local mirror), full before/after byte-level comparison:
+    - **negative revenue quarters 66 → 8, tickers 57 → 4, and negatives produced by a
+      DERIVATION 66 → 0.** All 8 survivors are `reported` (BENF ×3, NGTF, NIHK) or
+      `edgartools` (UNG ×3) — values SEC itself publishes as negative. The guard
+      deliberately does not touch them: suppressing a filer's own figure would fabricate
+      data rather than correct it. (UNG is a natural-gas ETF whose revenue tag carries
+      investment losses — arguably not meaningful for Code 33 at all, left open.)
+    - **108,788 keys compared, 1,819 differing, 115 tickers changed.**
+    - **Only 2 status changes, both correct, both `red → insufficient`:** TAAG
+      (−14,501,271 suppressed → "no reported revenue in 6 of 12 quarters") and UMEW
+      (−107,175 suppressed → "only 2 of 3 YoY comparisons available"). Both had scored
+      `red` off a window containing an impossible value; "not enough data" is the honest
+      answer.
+    - **POWW: −42,159,090 → 12,614,668**, and 2026-03-31 YoY **+132.94% → +10.10%**
+      (TradingView +10.92%).
+    - **5/5 independent SEC cross-checks**, recomputed from `data.sec.gov` bypassing both
+      secfsdstools and edgartools: POWW 12,614,668 · ROIV 7,570,000 · APLD 20,260,000 ·
+      WDSP 195,379 — all dollar-exact — and STRZ 330,600,000, which is a **real discrete
+      10-Q quarter** (filed 2026-05-07) that the live fill supplied once the bad
+      derivation was suppressed. STRZ first read as a mismatch because the cross-check
+      script applied a derivation test to a value that is no longer derived.
+    - **19/19 adversarial guard tests.**
+  - **⚠️ A DEFECT IN THIS FIX WAS CAUGHT BY THE FULL-UNIVERSE RUN ITSELF, FIXED, AND THE
+    NUMBERS ABOVE RE-PRODUCED FROM SCRATCH AFTERWARDS.** The first version applied the
+    vintage filter to the WHOLE quarter set. ENDI's Q1/Q2 2022 facts only appear in
+    filings made AFTER its 10-K, so one quarter qualified, the tiling guard saw
+    `len != 3`, and **a quarter that derived correctly before stopped deriving entirely**
+    — same on NEGG and STCB — plus a **spurious `red → green` on TRUG**. That version
+    showed 8 status changes and looked entirely plausible; only the before/after
+    comparison exposed that three of them had no negative value to begin with. Making the
+    filter a per-quarter preference with fallback fixed all four, and the final run has
+    **2 status changes and 1,819 differing keys instead of 8 and 4,817**. Guard test 19 is
+    a regression test for exactly that shape. Recorded because a spot-check would not have
+    caught it.
+  - **Not verified:** not opened in a real browser (`/qa` unregistered per GSTACK POLICY).
+
 2026-08-17 — **The live-EDGAR path now derives a fiscal Q4 when the bulk mirror hasn't
 caught up.** Engine fix, **`code33/edgar_fill.py` + `code33/pipeline.py` only** —
 `utils/code33_adapter.py` untouched and needed no change. Shipped as `9c9046d`; this
@@ -513,7 +594,9 @@ commit stayed scoped to the two code files.
     deriving.
   - **Independently hand-verified by Meet against TradingView** on 7 of the 24
     verdict-changing tickers — **FDX, NTAP, RBC, STX, PAYX, JRSH, OESX — all exact.**
-  - **⚠️ SEPARATE PRE-EXISTING BUG SURFACED HERE, NOT FIXED — follow-up item.**
+  - **⚠️ SEPARATE PRE-EXISTING BUG SURFACED HERE — ~~NOT FIXED, follow-up item~~
+    FIXED 2026-08-17 in `ba8ffc2`, see the entry above. Everything below describes the
+    bug as it stood when this entry was written; the counts are the pre-fix ones.**
     **Negative derived revenue from a mismatched-basis subtraction.** When a filer
     divests a segment, the 10-K reports the year on a *continuing operations* basis while
     the three quarters subtracted are the *as-originally-filed* figures that still include
@@ -533,10 +616,10 @@ commit stayed scoped to the two code files.
     - **This fix inherits the same flaw on the live path and adds ~15 more tickers**
       (49 → 66 negative quarters, 42 → 57 tickers). No guard here catches it — a negative
       result is not a units mismatch.
-    - Deliberately out of scope for `9c9046d`: it needs its own investigation and its own
-      sign-off. 122 of 1,116 tickers (11%) carry at least one restated revenue quarter, so
-      the population where a mixed-basis subtraction is *possible* is much larger than
-      where it currently shows.
+    - Deliberately out of scope for `9c9046d`: it needed its own investigation and its own
+      sign-off, which it got — see the 2026-08-17 (negative revenue) entry. 122 of 1,116
+      tickers (11%) carry at least one restated revenue quarter, so the population where a
+      mixed-basis subtraction is *possible* is much larger than where it showed.
   - **Not verified:** not opened in a real browser (`/qa` unregistered per GSTACK POLICY).
 
 2026-08-16 (financials column order) — **The Financials table now reads oldest quarter on
